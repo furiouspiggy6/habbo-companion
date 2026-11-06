@@ -270,5 +270,32 @@ class ManagedEngineTests(unittest.TestCase):
         self.assertIn('messagebox.askyesno',src)
         self.assertIn('disable_active_local_proxy()',src)
 
+
+    def test_single_window_migration_does_not_enable_autostart(self):
+        from unittest.mock import patch
+        cfg=self.root/'settings.json'
+        settings=dict(gearth_auto_arm=False,gearth_minimize=False,
+                      gearth_startup_safety_v104=True,gearth_visible_debug_v106=True,
+                      gearth_startup_uia_v105=True,gearth_background_v108=True,
+                      gearth_network_safety_v114=True)
+        cfg.write_text(json.dumps(settings),encoding='utf-8')
+        with patch.object(app,'APP_DIR',self.root),patch.object(app,'CONFIG_PATH',cfg):
+            result=app.load_config()
+        self.assertFalse(result['gearth_auto_arm'])
+        self.assertTrue(result['gearth_minimize'])
+        self.assertTrue(result['gearth_single_window_v116'])
+
+    def test_unified_workspace_keeps_viewer_manual_and_advanced_controls(self):
+        import inspect
+        code=inspect.getsource(app.ChatOverlayApp._make_packet_panel)
+        self.assertIn('command=self._connect_gearth',code)
+        self.assertIn('command=self._launch_habbo_with_gearth',code)
+        self.assertIn('self._engine_advanced_panel',code)
+        toggle=inspect.getsource(app.ChatOverlayApp._toggle_engine_advanced)
+        self.assertIn('pack_forget()',toggle)
+        self.assertIn('before=self._packet_search_row',toggle)
+        launch=inspect.getsource(app.ChatOverlayApp._launch_habbo_with_gearth)
+        self.assertIn('_gearth_extension_port_responds(port)',launch)
+
 if __name__=='__main__':
     unittest.main()

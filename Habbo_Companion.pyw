@@ -63,6 +63,7 @@ DEFAULT = dict(
     gearth_minimize=True,
     gearth_auto_arm=False,
     gearth_network_safety_v114=False,
+    gearth_single_window_v116=False,
     gearth_background_v108=False,
     gearth_visible_debug_v106=False,
     gearth_startup_safety_v104=True,
@@ -213,6 +214,15 @@ def load_config():
         if not saved.get('gearth_network_safety_v114',False):
             saved['gearth_auto_arm']=False
             saved['gearth_network_safety_v114']=True
+            try:
+                APP_DIR.mkdir(parents=True,exist_ok=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:pass
+        # Single-user-facing-window upgrade. Only hide preference is changed;
+        # never re-enable network interception if it was disabled.
+        if not saved.get('gearth_single_window_v116',False):
+            saved['gearth_minimize']=True
+            saved['gearth_single_window_v116']=True
             try:
                 APP_DIR.mkdir(parents=True,exist_ok=True)
                 CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
@@ -686,7 +696,7 @@ def install_managed_gearth(selected_executable, notify):
 
 class ChatOverlayApp:
     def __init__(self,root):
-        self.root=root;self.root.title('Habbo Companion — Chat + Packets')
+        self.root=root;self.root.title('Habbo Companion')
         self.root.geometry('720x900')
         self.root.attributes('-topmost',False)  # behave like a normal app window
         self.root.minsize(540,560)
@@ -1089,52 +1099,84 @@ class ChatOverlayApp:
         self._install_update_package(p)
 
     def _make_packet_panel(self, parent):
-        """Read-only packet inspector powered by optional G-Earth G-Python extension."""
+        """Single-window front end for managed G-Earth and Habbo packets."""
         holder=ttk.Frame(parent,style='Panel.TFrame',padding=14)
         holder.pack(fill='both',expand=True)
-        tk.Label(holder,text='PACKET VIEWER',font=('Segoe UI Semibold',18),
+        tk.Label(holder,text='CONNECTION + PACKETS',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        tk.Label(holder,text='Companion manages the official G-Earth engine internally. It imports your selected beta or installs a SHA-256-verified official copy once, then launches the proxy. No separate G-Earth installation needed.',
-                 fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
+        tk.Label(holder,text='Use Companion for everything. The working G-Earth engine starts normally '
+                 'then hides after its backend is ready. Its original window is troubleshooting only.',
+                 fg='#8ea9c1',bg='#121a28',wraplength=630,justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(holder,textvariable=self.engine_status_var,bg='#121a28',fg='#76caab',
-                 font=('Segoe UI Semibold',10),wraplength=620,justify='left').pack(anchor='w',pady=(0,9))
-        net_row=ttk.Frame(holder,style='Panel.TFrame');net_row.pack(fill='x',pady=(0,7))
-        ttk.Button(net_row,text='Check Windows network',command=self._show_network_safety).pack(side='left',padx=(0,8))
-        ttk.Button(net_row,text='Repair G-Earth hosts',command=self._repair_gearth_hosts_ui).pack(side='left')
-        ttk.Button(net_row,text='Disable active local proxy',command=self._disable_local_proxy_ui).pack(side='left',padx=(8,0))
-        diag_row=ttk.Frame(holder,style='Panel.TFrame');diag_row.pack(fill='x',pady=(0,5))
-        ttk.Button(diag_row,text='Diagnose (may launch engine)',command=self._diagnose_and_repair).pack(side='left',padx=(0,8))
-        ttk.Button(diag_row,text='Copy diagnostic',command=self._copy_engine_diagnostic).pack(side='left')
-        gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
-        ttk.Button(gearth_row,text='Open engine (safe)',command=self._open_managed_safe).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Advanced G-Earth',command=self._show_gearth).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Install / repair',command=self._start_integrated_engine).pack(side='left',padx=(0,6))
-        tk.Label(holder,textvariable=self.gearth_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
-        auto_row=ttk.Frame(holder,style='Panel.TFrame');auto_row.pack(fill='x',pady=(0,5))
-        ttk.Checkbutton(auto_row,text='Automatically start the integrated engine with Companion',
-                        variable=self.gearth_auto_arm_var,command=self._save_gearth_auto_arm).pack(side='left')
-        launch_row=ttk.Frame(holder,style='Panel.TFrame');launch_row.pack(fill='x',pady=(0,5))
-        ttk.Button(launch_row,text='Launch Habbo after G-Earth is ready',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
-        ttk.Button(launch_row,text='Select Habbo launcher',command=self._select_habbo_launcher).pack(side='left')
-        tk.Label(holder,textvariable=self.habbo_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
-
-        hotel_opts=ttk.Frame(holder,style='Panel.TFrame');hotel_opts.pack(fill='x',pady=(0,8))
-        ttk.Label(hotel_opts,text='Hotel host:',style='Panel.TLabel').pack(side='left')
-        ttk.Entry(hotel_opts,textvariable=self.gearth_host_var,width=24).pack(side='left',padx=(6,9))
-        ttk.Label(hotel_opts,text='Game port:',style='Panel.TLabel').pack(side='left')
-        ttk.Entry(hotel_opts,textvariable=self.gearth_game_port_var,width=7).pack(side='left',padx=(6,9))
-        connection_opts=ttk.Frame(holder,style='Panel.TFrame');connection_opts.pack(fill='x',pady=(0,7))
-        ttk.Checkbutton(connection_opts,text='Hide engine window when ready',variable=self.gearth_minimize_var,
-                        command=self._save_gearth_minimize).pack(side='left',padx=(0,6))
-        ttk.Button(connection_opts,text='Hide now',command=self._hide_gearth_now).pack(side='left',padx=(0,10))
-        ttk.Label(connection_opts,text='Extension port:',style='Panel.TLabel').pack(side='left')
-        ttk.Entry(connection_opts,textvariable=self.gearth_port_var,width=7).pack(side='left',padx=(5,7))
-        ttk.Button(connection_opts,text='Connect viewer',command=self._connect_gearth).pack(side='left')
-        ttk.Label(holder,textvariable=self.packet_status,style='Panel.TLabel',wraplength=610).pack(anchor='w',fill='x',pady=(0,8))
-        opts=ttk.Frame(holder,style='Panel.TFrame');opts.pack(fill='x',pady=(0,7))
-        ttk.Label(opts,text='Find in packets',style='Panel.TLabel').pack(side='left',padx=(0,6))
-        ttk.Entry(opts,textvariable=self.packet_filter_var).pack(side='left',fill='x',expand=True,padx=(0,7))
+                 font=('Segoe UI Semibold',10),wraplength=630,justify='left').pack(anchor='w',pady=(0,9))
+        main=ttk.Frame(holder,style='Panel.TFrame')
+        main.pack(fill='x',pady=(0,9))
+        ttk.Button(main,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,7))
+        ttk.Button(main,text='Launch Habbo',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
+        ttk.Button(main,text='Connect packet viewer',command=self._connect_gearth).pack(side='left')
+        tk.Label(holder,text='After Habbo fully loads into a room, click Connect packet viewer. '
+                 'Do not attach during the AIR loading screen.',
+                 fg='#93a7bc',bg='#121a28',font=('Segoe UI',9),
+                 wraplength=625,justify='left').pack(anchor='w',pady=(0,8))
+        small=ttk.Frame(holder,style='Panel.TFrame')
+        small.pack(fill='x',pady=(0,8))
+        ttk.Checkbutton(small,text='Start engine automatically with Companion',
+                        variable=self.gearth_auto_arm_var,
+                        command=self._save_gearth_auto_arm).pack(side='left',padx=(0,12))
+        self._engine_advanced_button=ttk.Button(
+            small,text='Advanced settings ▾',command=self._toggle_engine_advanced)
+        self._engine_advanced_button.pack(side='left')
+        self._engine_advanced_visible=False
+        self._engine_advanced_panel=ttk.Frame(holder,style='Panel.TFrame',padding=(4,6))
+        adv=self._engine_advanced_panel
+        ttk.Label(adv,text='ENGINE AND WINDOW',style='Panel.TLabel').pack(anchor='w',pady=(0,4))
+        bar=ttk.Frame(adv,style='Panel.TFrame');bar.pack(fill='x',pady=(0,6))
+        ttk.Button(bar,text='Show original G-Earth (troubleshoot)',
+                   command=self._show_gearth).pack(side='left',padx=(0,6))
+        ttk.Button(bar,text='Return to one window',
+                   command=self._return_to_single_window).pack(side='left',padx=(0,6))
+        ttk.Button(bar,text='Install / repair',
+                   command=self._start_integrated_engine).pack(side='left')
+        ttk.Checkbutton(adv,text='Hide original engine window when ready',
+                        variable=self.gearth_minimize_var,
+                        command=self._save_gearth_minimize).pack(anchor='w',pady=(0,7))
+        tk.Label(adv,textvariable=self.gearth_path_display,bg='#121a28',fg='#8ea9c1',
+                 font=('Segoe UI',9),wraplength=610,justify='left').pack(anchor='w',pady=(0,7))
+        launcher=ttk.Frame(adv,style='Panel.TFrame');launcher.pack(fill='x',pady=(0,6))
+        ttk.Button(launcher,text='Select Habbo launcher',
+                   command=self._select_habbo_launcher).pack(side='left',padx=(0,7))
+        tk.Label(launcher,textvariable=self.habbo_path_display,bg='#121a28',fg='#8ea9c1',
+                 font=('Segoe UI',9),wraplength=390,justify='left').pack(side='left')
+        hotel=ttk.Frame(adv,style='Panel.TFrame');hotel.pack(fill='x',pady=(0,8))
+        ttk.Label(hotel,text='Host',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(hotel,textvariable=self.gearth_host_var,width=23).pack(side='left',padx=(5,9))
+        ttk.Label(hotel,text='Port',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(hotel,textvariable=self.gearth_game_port_var,width=7).pack(side='left',padx=(5,9))
+        ttk.Label(hotel,text='Extension',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(hotel,textvariable=self.gearth_port_var,width=7).pack(side='left',padx=(5,0))
+        ttk.Label(adv,text='NETWORK SAFETY',style='Panel.TLabel').pack(anchor='w',pady=(0,4))
+        net=ttk.Frame(adv,style='Panel.TFrame');net.pack(fill='x',pady=(0,7))
+        ttk.Button(net,text='Check Windows network',
+                   command=self._show_network_safety).pack(side='left',padx=(0,6))
+        ttk.Button(net,text='Repair G-Earth hosts',
+                   command=self._repair_gearth_hosts_ui).pack(side='left',padx=(0,6))
+        ttk.Button(net,text='Disable active local proxy',
+                   command=self._disable_local_proxy_ui).pack(side='left')
+        diag=ttk.Frame(adv,style='Panel.TFrame');diag.pack(fill='x',pady=(0,7))
+        ttk.Button(diag,text='Diagnose (may launch engine)',
+                   command=self._diagnose_and_repair).pack(side='left',padx=(0,6))
+        ttk.Button(diag,text='Copy diagnostic',
+                   command=self._copy_engine_diagnostic).pack(side='left',padx=(0,6))
+        ttk.Button(diag,text='Open engine without connecting',
+                   command=self._open_managed_safe).pack(side='left')
+        ttk.Label(holder,textvariable=self.packet_status,style='Panel.TLabel',
+                  wraplength=630).pack(anchor='w',fill='x',pady=(0,8))
+        opts=ttk.Frame(holder,style='Panel.TFrame')
+        self._packet_search_row=opts
+        opts.pack(fill='x',pady=(0,7))
+        ttk.Label(opts,text='Find packets',style='Panel.TLabel').pack(side='left',padx=(0,6))
+        ttk.Entry(opts,textvariable=self.packet_filter_var).pack(
+            side='left',fill='x',expand=True,padx=(0,7))
         ttk.Button(opts,text='Pause / Resume',command=self._toggle_capture).pack(side='left')
         region=ttk.Frame(holder,style='Panel.TFrame');region.pack(fill='both',expand=True)
         self.packet_tree=ttk.Treeview(region,columns=('time','direction','summary'),show='headings',height=15)
@@ -1694,7 +1736,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         if self._gearth_extension_port_responds(port):
             self._engine_last_error=''
             self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
-            self._schedule_gearth_hide(delay_ms=4500)
+            self._schedule_gearth_hide(delay_ms=1800)
         elif self._engine_last_error:
             self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
         elif not self._engine_installing:
@@ -1760,7 +1802,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # Let JavaFX finish opening normally before minimizing the window.
             # This uses the precise launch style that succeeded in PowerShell.
             if self.gearth_minimize_var.get():
-                self._schedule_gearth_hide(delay_ms=4500)
+                self._schedule_gearth_hide(delay_ms=1800)
             self.packet_status.set(f'G-Earth backend detected: port {port} is listening. Flash/AIR auto-connect was requested. The Habbo proxy WAITING state is not independently verified.')
             return
         if time.monotonic()<self._gearth_launch_watch_until:
@@ -1857,15 +1899,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         if not path.is_file():
             path=self._select_habbo_launcher()
             if path is None:return
-        if not self._find_gearth_window():
+        # The original G-Earth window may be hidden in single-window mode.
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if not self._gearth_extension_port_responds(port):
             self._start_integrated_engine()
-            self.packet_status.set('Starting the internal G-Earth engine. Wait until the proxy is ready, then launch Habbo again.')
+            self.packet_status.set('The integrated engine is starting. Retry Habbo launch when the backend is online.')
             return
-        if not messagebox.askyesno('G-Earth connection check',
-            'Does the G-Earth beta currently display "Waiting for connection"?\n\n'
-            'If not, click No and connect manually in G-Earth first.\n\n'
-            'Only click Yes when G-Earth is actually waiting for Habbo.'):
-            self.packet_status.set('Habbo not launched. Connect G-Earth first and verify its state.')
+        if not self._find_gearth_window():
+            self.packet_status.set('Engine backend online, but native window could not be located. Use Advanced settings to diagnose.')
+            return
+        if not messagebox.askyesno('Launch Habbo',
+            'The integrated G-Earth backend is online and Flash/AIR connection was requested.\\n\\n'
+            'Companion cannot independently confirm the proxy is Waiting for connection. '
+            'Launch Habbo now? If needed, open Advanced settings to inspect the original engine window.'):
+            self.packet_status.set('Habbo launch cancelled.')
             return
         self._finish_habbo_launch()
 
@@ -1887,6 +1935,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                    'If it freezes at 60%, use Advanced G-Earth and the known-working beta manual connection.')
         except OSError as exc:
             self.packet_status.set('Could not launch Habbo: '+str(exc)[:150])
+
+    def _toggle_engine_advanced(self):
+        """Use the same Companion window for all engine configuration."""
+        self._engine_advanced_visible=not self._engine_advanced_visible
+        if self._engine_advanced_visible:
+            self._engine_advanced_panel.pack(
+                fill='x',pady=(0,9),before=self._packet_search_row)
+            self._engine_advanced_button.configure(text='Advanced settings ▴')
+        else:
+            self._engine_advanced_panel.pack_forget()
+            self._engine_advanced_button.configure(text='Advanced settings ▾')
+
+    def _return_to_single_window(self):
+        self._hide_gearth_now()
+        if getattr(self,'_engine_advanced_visible',False):
+            self._toggle_engine_advanced()
 
     def _save_gearth_minimize(self):
         enabled=bool(self.gearth_minimize_var.get())
@@ -2133,7 +2197,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.5','author':'Habbo Companion'}
+                  'version':'1.1.6','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
