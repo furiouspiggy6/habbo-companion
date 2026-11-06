@@ -1,0 +1,32 @@
+Future Habbo Companion update ZIP specification (for maintainers)
+==============================================================
+
+A ZIP must contain these root-level files (no nested folders):
+- habbo-update.json
+- Habbo_Companion.pyw (required)
+- Habbo_Update_Helper.py (optional)
+- README.txt (optional)
+
+Manifest example:
+{
+  "app_id": "habbo-companion",
+  "format": 1,
+  "version": "1.1.0",
+  "files": {
+    "Habbo_Companion.pyw": "<64 lowercase SHA-256 hex characters>"
+  }
+}
+
+Only versions newer than the installed one will be applied. ZIP and file
+hashes are verified, and the installed app is backed up before replacement.
+
+Optional HTTPS release manifest JSON for Online Check:
+{
+  "app_id": "habbo-companion",
+  "version": "1.1.0",
+  "package_url": "https://YOUR-TRUSTED-HOST/example-update.zip",
+  "sha256": "<64 lowercase SHA-256 hex characters of the complete ZIP>"
+}
+
+A user must configure the trusted HTTPS URL and explicitly approve the update.
+There is NO currently preconfigured update feed.
