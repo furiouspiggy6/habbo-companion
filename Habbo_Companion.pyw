@@ -55,8 +55,9 @@ DEFAULT = dict(
     gearth_port=9092,
     gearth_host='game-us.habbo.com',
     gearth_game_port=30000,
-    gearth_minimize=False,
+    gearth_minimize=True,
     gearth_auto_arm=True,
+    gearth_background_v108=False,
     gearth_visible_debug_v106=False,
     gearth_startup_safety_v104=True,
     gearth_startup_uia_v105=False,
@@ -193,6 +194,16 @@ def load_config():
                 CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
             except OSError:
                 pass
+        # One-time preference migration: user explicitly wants background startup.
+        # Preserve every other setting and keep the manual OFF toggle available.
+        if not saved.get('gearth_background_v108',False):
+            saved['gearth_auto_arm']=True
+            saved['gearth_minimize']=True
+            saved['gearth_background_v108']=True
+            try:
+                APP_DIR.mkdir(exist_ok=True,parents=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:pass
         return {**DEFAULT,**{k:v for k,v in saved.items() if k in DEFAULT}}
     except (OSError, ValueError, TypeError):
         return DEFAULT.copy()
@@ -435,6 +446,7 @@ class ChatOverlayApp:
         self._gearth_launch_queued=False
         self._gearth_started_at=0.0
         self._gearth_launch_watch_until=0.0
+        self._gearth_launch_started=0.0
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
@@ -443,7 +455,7 @@ class ChatOverlayApp:
         self.gearth_host_var=tk.StringVar(value=str(self.config.get('gearth_host','game-us.habbo.com')))
         self.gearth_game_port_var=tk.StringVar(value=str(self.config.get('gearth_game_port',30000)))
         self.gearth_path_display=tk.StringVar(value='Selected G-Earth: '+str(self.config.get('gearth_path') or '(none)'))
-        self.packet_status=tk.StringVar(value=('Auto-launching G-Earth shortly; packets appear only after Habbo logs in.' if self.config.get('gearth_auto_arm') else 'Ready. G-Earth / G-Python is optional.'))
+        self.packet_status=tk.StringVar(value=('Starting G-Earth in background. Packet Viewer stays blank until Habbo connects.' if self.config.get('gearth_auto_arm') else 'G-Earth auto-start is OFF. Packet Viewer stays blank until Habbo connects.'))
         self.update_status=tk.StringVar(value='Ready to install a verified update ZIP.')
         self.update_manifest_var=tk.StringVar(value=str(self.config.get('update_manifest_url','')))
         self._online_update_busy=False
@@ -788,7 +800,7 @@ class ChatOverlayApp:
         holder.pack(fill='both',expand=True)
         tk.Label(holder,text='PACKET VIEWER',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        tk.Label(holder,text='Auto mode: launch the saved G-Earth beta using its native Flash/AIR connect arguments. Confirm Waiting for connection before launching Habbo. Viewer remains empty until the game is connected.',
+        tk.Label(holder,text='Background mode: Companion runs G-Earth minimized and requests Flash/AIR connection. Its extension port shows whether the backend is responding, not whether Habbo proxy is ready. Packet Viewer stays empty until Habbo loads.',
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
         ttk.Button(gearth_row,text='Open G-Earth (safe)',command=lambda:self._launch_gearth(auto_connect=False)).pack(side='left',padx=(0,6))
@@ -1026,52 +1038,123 @@ class ChatOverlayApp:
         return selected
 
 
+    @staticmethod
+    def _gearth_extension_port_responds(port):
+        """A positive probe proves only that the extension socket is listening."""
+        try:
+            import socket
+            with socket.create_connection(('127.0.0.1',int(port)),timeout=0.25):
+                return True
+        except (OSError,ValueError,TypeError):
+            return False
+
+    @staticmethod
+    def _discover_gearth_beta():
+        """Look only in conventional local install/extraction locations.
+
+        Never silently select an obsolete 1.5.3 copy when beta versions exist.
+        """
+        home=Path.home()
+        roots=[Path(__file__).resolve().parent,home/'Downloads',home/'Desktop',
+               home/'Documents',Path(os.environ.get('LOCALAPPDATA',str(home)))/'Programs',
+               Path(os.environ.get('PROGRAMFILES',r'C:\Program Files')),
+               Path(os.environ.get('PROGRAMFILES(X86)',r'C:\Program Files (x86)'))]
+        candidates={}
+        for root in roots:
+            try:
+                if not root.is_dir():continue
+                for pattern in ('G-Earth.exe','G-Earth*/G-Earth.exe',
+                                '*G-Earth*/*/G-Earth.exe','G-Earth*/*/*/G-Earth.exe'):
+                    for path in root.glob(pattern):
+                        if path.is_file() and '1.5.3' not in str(path).lower():
+                            candidates[str(path.resolve()).lower()]=path.resolve()
+            except (OSError,PermissionError):continue
+        if not candidates:return None
+        def score(path):
+            name=str(path).lower()
+            return (int('1.5.4' in name),int('beta' in name or 'b29' in name),
+                    int('g-earth' in name),-len(name))
+        ranked=sorted(candidates.values(),key=score,reverse=True)
+        # A top-ranked beta is safe to prefer over older or unversioned copies.
+        if len(ranked)>1 and score(ranked[0])[:2]==score(ranked[1])[:2]:
+            return None
+        return ranked[0]
+
     def _auto_prepare_gearth(self):
-        """Direct Windows launch rather than a hidden PowerShell or JavaFX helper."""
-        if not self.gearth_auto_arm_var.get() or self._gearth_auto_arm_attempted:return
+        """Launch G-Earth directly and wait for its backend, not a GUI window."""
+        if not self.gearth_auto_arm_var.get():
+            self.packet_status.set('Automatic G-Earth background launch is disabled.')
+            return
+        if self._gearth_auto_arm_attempted:return
         self._start_gearth_direct(select_if_missing=False)
 
     def _start_gearth_direct(self,select_if_missing=True):
-        """Launch with native Flash/AIR CLI; do not attach packet viewer early."""
         if os.name!='nt':
-            self.packet_status.set('Automatic G-Earth launch requires Windows.')
+            self.packet_status.set('G-Earth background launch requires Windows.')
             return False
         if self._gearth_launch_watch_until>time.monotonic():
-            self.packet_status.set('G-Earth is still starting. Check its window.')
+            self.packet_status.set('G-Earth startup is still being checked. Please do not start Habbo yet.')
             return False
         if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.packet_status.set('Habbo is already open; G-Earth must start before game login.')
+            self.packet_status.set('Habbo is already open. G-Earth must start before game login.')
             return False
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if not 1<=port<=65535:port=9092
+        if self._gearth_extension_port_responds(port):
+            self._gearth_auto_arm_attempted=True
+            self.packet_status.set(f'G-Earth extension port {port} already responds. Skipped duplicate launch. AIR proxy connection not verified.')
+            return True
         path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file() and select_if_missing:
-            self._select_gearth()
-            path=Path(str(self.config.get('gearth_path') or ''))
+        if not path.is_file():
+            discovered=self._discover_gearth_beta()
+            if discovered:
+                path=discovered
+                self.config['gearth_path']=str(path)
+                self.gearth_path_display.set('Selected G-Earth: '+str(path))
+                self.save()
+            elif select_if_missing:
+                self._select_gearth()
+                path=Path(str(self.config.get('gearth_path') or ''))
         if not path.is_file() or path.suffix.lower() not in ('.exe','.jar'):
-            self.packet_status.set('Saved G-Earth beta EXE not found. Click Find G-Earth and select the working beta.')
+            self.packet_status.set('Background launch needs the working G-Earth beta EXE. Click Find G-Earth to select it once.')
             return False
         if self._find_gearth_window():
             self._gearth_auto_arm_attempted=True
-            self.packet_status.set('G-Earth is already open. Native auto-connect only works on a fresh launch. Confirm Waiting for connection.')
+            self.packet_status.set('G-Earth window is running but extension port is not responding. Check the G-Earth connection before launching Habbo.')
             return True
         if not self._launch_gearth(auto_connect=True,select_if_missing=False):
             return False
-        self._gearth_launch_watch_until=time.monotonic()+45
-        self.root.after(1000,self._poll_gearth_direct_launch)
+        self._gearth_launch_watch_until=time.monotonic()+65
+        self._gearth_launch_started=time.monotonic()
+        self.root.after(850,self._poll_gearth_direct_launch)
         return True
 
     def _poll_gearth_direct_launch(self):
-        """A visible window is not proof of a ready proxy."""
+        """Do not require a visible GUI. The backend listening port is the probe."""
         if not self.root.winfo_exists():return
-        if self._find_gearth_window():
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if self._gearth_extension_port_responds(port):
             self._gearth_launch_watch_until=0.0
-            self.packet_status.set('G-Earth opened. Flash/AIR auto-connect was requested. Confirm Waiting for connection before starting Habbo; packets appear only after login.')
+            if self.gearth_minimize_var.get():
+                hwnd=self._find_gearth_window()
+                if hwnd:
+                    u=ctypes.WinDLL('user32',use_last_error=True)
+                    u.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+                    u.ShowWindowAsync.restype=wintypes.BOOL
+                    u.ShowWindowAsync(hwnd,6)
+            self.packet_status.set(f'G-Earth background detected: local extension port {port} is responding. Flash/AIR auto-connect was requested. Proxy readiness is NOT confirmed; start Habbo only once G-Earth is waiting.')
             return
         if time.monotonic()<self._gearth_launch_watch_until:
             self.root.after(900,self._poll_gearth_direct_launch)
         else:
             self._gearth_launch_watch_until=0.0
             self._gearth_auto_arm_attempted=False
-            self.packet_status.set('Windows accepted launch, but G-Earth did not show a window within 45 seconds. Check beta EXE path; press Launch + auto-connect to retry.')
+            if self._find_gearth_window():
+                self.packet_status.set(f'G-Earth window exists but extension port {port} is still closed. Check beta startup and selected port.')
+            else:
+                self.packet_status.set('Windows accepted the G-Earth start request but no backend was detected within 65 seconds. Check the saved beta EXE or admin prompt; click Launch + auto-connect to retry.')
 
     def _launch_habbo_with_gearth(self):
         """Start Habbo only after the user confirms G-Earth's WAITING state.
@@ -1225,7 +1308,7 @@ class ChatOverlayApp:
             self.packet_status.set('This launcher currently supports Windows only.')
             return False
         if self._find_gearth_window():
-            self.packet_status.set('G-Earth is already open. Close it first before starting auto-connect.')
+            self.packet_status.set('G-Earth is already running. No duplicate launch.')
             return False
         try:
             path=path.resolve()
@@ -1254,7 +1337,7 @@ class ChatOverlayApp:
                               wintypes.LPCWSTR,wintypes.LPCWSTR,ctypes.c_int)
             execute.restype=ctypes.c_void_p
             ctypes.set_last_error(0)
-            result=execute(None,'runas',program,parameters,str(path.parent),1)
+            result=execute(None,'runas',program,parameters,str(path.parent),7 if self.gearth_minimize_var.get() else 1)
             if int(result or 0)<=32:
                 error=ctypes.get_last_error()
                 if error==1223 or int(result or 0)==5:
@@ -1269,9 +1352,7 @@ class ChatOverlayApp:
                 # Do not attach the G-Python extension or minimize during the
                 # AIR handshake. A listening extension port is not proof that
                 # G-Earth's game proxy has reached WAITING_FOR_CLIENT.
-                self.packet_status.set(f'Experimental automatic connection requested for {host}:{game_port}. '
-                                       'Keep the G-Earth window visible to check its status. '
-                                       'Use Connect viewer only AFTER Habbo has fully entered the room.')
+                self.packet_status.set(f'Started the G-Earth beta in background with native Flash/AIR connect request for {host}:{game_port}. Waiting for extension backend response; no early packet viewer.')
             else:
                 self.packet_status.set(f'Opened {path.name} without auto-connect flags. In G-Earth, select Flash/AIR, '
                                        'check game-us.habbo.com:30000 and click Connect before starting Habbo.')
@@ -1333,7 +1414,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.0.7','author':'Habbo Companion'}
+                  'version':'1.0.8','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
