@@ -53,6 +53,8 @@ DEFAULT = dict(
     bubbles=True,
     respect_chat_styles=True,
     original_bubble_images=True,
+    single_line_bubbles=True,
+    whispers_right=True,
     theme='Midnight',
     topmost=False,
     keep_log=False,
@@ -281,6 +283,28 @@ def save_config(cfg):
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
+
+
+def is_whisper_chat(chat_type):
+    """Habbo ChatItem type 2 is a whisper."""
+    try:return int(chat_type)==2
+    except (ValueError,TypeError):return False
+
+
+def chat_one_line(text):
+    return ' '.join(str(text or '').split())
+
+
+def fit_line_ellipsis(text,font_obj,available_px):
+    available_px=max(0,int(available_px))
+    if font_obj.measure(text)<=available_px:return text
+    if font_obj.measure('…')>available_px:return ''
+    lo,hi=0,len(text)
+    while lo<hi:
+        mid=(lo+hi+1)//2
+        if font_obj.measure(text[:mid]+'…')<=available_px:lo=mid
+        else:hi=mid-1
+    return text[:lo].rstrip()+'…'
 
 
 def wrap_message(text, max_px, fnt):
@@ -752,6 +776,8 @@ class ChatOverlayApp:
         self.packet_active=False
         self.packet_started=False
         self.packet_extension=None
+        self._packet_auto_retry_after=0.0
+        self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
         self.packet_rules=[]
         for rule in self.config.get('packet_rules',[]):
             try:self.packet_rules.append(validate_manipulation_rule(rule))
@@ -789,6 +815,9 @@ class ChatOverlayApp:
         self._coffee_completed=0
         self._coffee_generation=0
         self._coffee_after_id=None
+        self._coffee_start_queued=False
+        self._coffee_queue_after_id=None
+        self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
         self.gearth_process=None
         self._gearth_minimize_tries=0
@@ -921,6 +950,13 @@ class ChatOverlayApp:
         self._check(f,'Hide room (ambient background)','show_room',invert=True)
         self._check(f,'Show bubble backgrounds','bubbles')
         self._check(f,'Original Habbo bubble artwork (native PNG)','original_bubble_images')
+        self._check(f,'Single-line chat bubbles (auto width)','single_line_bubbles')
+        self._check(f,'Whispers on the right','whispers_right')
+        tk.Label(f,text='Single-line bubbles expand across the room. Wrapped native '
+                     'PNGs are redrawn as compact one-line bubbles. Text shrinks '
+                     'to fit before shortening at the window edge.',
+                 wraplength=352,justify='left',font=('Segoe UI',9),
+                 bg='#121a28',fg='#88a2bc').pack(anchor='w',pady=(2,4))
         self._check(f,'Fallback bubble colours if original unavailable','respect_chat_styles')
         self._check(f,'Keep a local chat log after exit','keep_log')
         self._check(f,'Auto-fill available screen with chat bubbles','auto_fill_screen')
@@ -931,7 +967,7 @@ class ChatOverlayApp:
         for label,key,low,high,desc in [
             ('Vertical starting point','anchor',45,95,'% of screen height'),
             ('Left margin','x',0,200,'pixels from window edge'),
-            ('Bubble width','width',250,800,'pixels'),
+            ('Bubble width (wrapped mode)','width',250,800,'pixels'),
             ('Font size','font_size',11,23,'points'),
             ('Bubbles visible (manual mode)','visible_messages',3,100,'messages'),
             ('Messages kept for scrollback','history_limit',30,500,'in memory'),
@@ -1179,9 +1215,9 @@ class ChatOverlayApp:
         main.pack(fill='x',pady=(0,9))
         ttk.Button(main,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,7))
         ttk.Button(main,text='Launch Habbo',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
-        ttk.Button(main,text='Connect packet viewer',command=self._connect_gearth).pack(side='left')
-        tk.Label(holder,text='After Habbo fully loads into a room, click Connect packet viewer. '
-                 'Do not attach during the AIR loading screen.',
+        ttk.Button(main,text='Connect packet tools (manual)',command=self._connect_gearth).pack(side='left')
+        tk.Label(holder,text='Packet tools attach automatically when safe. Coffee Pass Loop can '
+                 'also connect directly; this manual button is only for troubleshooting.',
                  fg='#93a7bc',bg='#121a28',font=('Segoe UI',9),
                  wraplength=625,justify='left').pack(anchor='w',pady=(0,8))
         small=ttk.Frame(holder,style='Panel.TFrame')
@@ -1360,6 +1396,8 @@ class ChatOverlayApp:
         entry('Recipient target ID',self.coffee_recipient_var,'PassCarryItem')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,11))
         ttk.Label(holder,
                   text='Each cycle sends 4 packets: Cup 1 → pass → Cup 2 → pass. '
                        'Recipient IDs come from your captured PassCarryItem action; re-check the ID after rejoining a room.',
@@ -1383,7 +1421,24 @@ class ChatOverlayApp:
             self.coffee_status_var.set('Stop the single-packet repeater before starting this loop.')
             return
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
-            self.coffee_status_var.set('Enter a Habbo room and connect Packet Viewer to G-Earth first.')
+            if self._coffee_start_queued:
+                self.coffee_status_var.set('Preparing the G-Earth connection; the loop has not started yet.')
+                return
+            try:port=int(self.gearth_port_var.get())
+            except (TypeError,ValueError):port=0
+            if not self._gearth_extension_port_responds(port):
+                self.coffee_status_var.set('G-Earth backend is offline. Start the engine first.')
+                return
+            if not self.packet_started:
+                self._connect_gearth(capture=False)
+            if not self.packet_started:
+                self.coffee_status_var.set('Could not attach packet tools. See connection status above.')
+                return
+            self._coffee_start_queued=True
+            self._coffee_queue_deadline=time.monotonic()+20
+            self.coffee_status_var.set('Waiting for G-Earth and the Habbo room connection. No coffee packets sent yet.')
+            self._coffee_queue_after_id=self.root.after(
+                350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
         try:
             sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
@@ -1429,6 +1484,23 @@ class ChatOverlayApp:
         self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
                                                  self._coffee_loop_tick(generation))
 
+    def _check_queued_coffee_start(self,generation):
+        self._coffee_queue_after_id=None
+        if not self._coffee_start_queued or generation!=self._coffee_generation:
+            return
+        if self.packet_started and self.packet_extension is not None and self._habbo_session_connected:
+            self._coffee_start_queued=False
+            # Still asks permission before sending. Nothing runs in the background
+            # simply because Habbo or G-Earth connects later.
+            self._start_coffee_loop()
+            return
+        if time.monotonic()>self._coffee_queue_deadline or not self.packet_started:
+            self._coffee_start_queued=False
+            self.coffee_status_var.set('Connection was not ready. Join a Habbo room and press Start again.')
+            return
+        self._coffee_queue_after_id=self.root.after(
+            350,lambda gen=generation:self._check_queued_coffee_start(gen))
+
     def _coffee_loop_tick(self,generation):
         self._coffee_after_id=None
         if not self._coffee_running or generation!=self._coffee_generation:
@@ -1463,7 +1535,13 @@ class ChatOverlayApp:
 
     def _stop_coffee_loop(self,reason=None):
         self._coffee_running=False
+        self._coffee_start_queued=False
         self._coffee_generation+=1
+        queued=self._coffee_queue_after_id
+        self._coffee_queue_after_id=None
+        if queued is not None:
+            try:self.root.after_cancel(queued)
+            except (tk.TclError,AttributeError):pass
         timer=self._coffee_after_id
         self._coffee_after_id=None
         if timer is not None:
@@ -1578,7 +1656,7 @@ class ChatOverlayApp:
         Never infer a packet ID or silently repeat an arbitrary incoming packet.
         Never start before Habbo and the G-Python extension are connected.
         """
-        if self._coffee_running:
+        if getattr(self,'_coffee_running',False):
             self.replay_status_var.set('Stop the coffee pass loop before starting the packet repeater.')
             return
         if self._replay_running:
@@ -2041,6 +2119,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self._engine_last_error=''
             self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
             self._schedule_gearth_hide(delay_ms=1800)
+            self._maybe_auto_connect_packet_tools()
         elif self._engine_last_error:
             self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
         elif not self._engine_installing:
@@ -2054,6 +2133,27 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             else:
                 self.engine_status_var.set('Engine: not installed. Click Install / repair to retry setup.')
         self.root.after(2500,self._engine_heartbeat)
+
+    def _maybe_auto_connect_packet_tools(self):
+        """Attach the local G-Python extension without activating Packet Viewer.
+
+        Before Habbo launches, connecting to G-Earth's local extension port
+        cannot interrupt an in-progress AIR loading screen. If Habbo is already
+        open, wait for chat/room evidence. The Coffee Pass Loop Start button is
+        also an explicit room-ready signal and can attach directly.
+        """
+        if self.packet_started or time.monotonic()<self._packet_auto_retry_after:
+            return
+        try:
+            game_window=self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()])
+        except (OSError,ValueError,AttributeError):
+            game_window=None
+        if game_window and self.room_id is None:
+            self.packet_connection_status.set(
+                'G-Earth online; waiting for Habbo room readiness. '
+                'The Coffee Pass Loop Start button can connect directly.')
+            return
+        self._connect_gearth(capture=False)
 
     def _start_gearth_direct(self,select_if_missing=True):
         if os.name!='nt':
@@ -2472,28 +2572,36 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_status.set('G-Earth started, but extension port was not reachable. '
                                    'Use Advanced G-Earth window to check the connection and port.')
 
-    def _connect_gearth(self):
+    def _connect_gearth(self,capture=True):
+        # The same G-Earth extension serves all packet tools. Capturing is
+        # optional; auto-connect never enables the packet log or rules.
         if self.packet_started:
-            self.packet_active=True
-            self.packet_status.set('Viewer already started. Capture resumed.')
-            return
+            if capture:
+                self.packet_active=True
+                self.packet_status.set('Packet tools already attached. Viewer capture resumed.')
+            return True
         try:
             port=int(self.gearth_port_var.get())
             if not 1<=port<=65535:raise ValueError()
         except ValueError:
             self.packet_status.set('Enter a valid G-Earth extension port (usually 9092).')
-            return
+            self.packet_connection_status.set('Invalid G-Earth extension port (usually 9092).')
+            return False
         self.config['gearth_port']=port
         self.save()
         try:
             import g_python.gextension  # noqa: F401
         except ImportError:
             self.packet_status.set('Install G-Python once with: py -m pip install g-python')
-            return
-        self.packet_active=True
+            self.packet_connection_status.set('G-Python missing. Install once with: py -m pip install g-python')
+            self._packet_auto_retry_after=time.monotonic()+15
+            return False
+        self.packet_active=bool(capture)
         self.packet_started=True
+        self.packet_connection_status.set(f'Connecting packet tools to G-Earth on port {port}...')
         self.packet_status.set(f'Connecting extension on local port {port}...')
         threading.Thread(target=self._packet_worker,args=(port,),daemon=True).start()
+        return True
 
     def _packet_worker(self,port):
         try:
@@ -2501,7 +2609,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.9','author':'Habbo Companion'}
+                  'version':'1.1.10','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -2543,7 +2651,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_started=False
             self._habbo_session_connected=False
             self.packet_extension=None
+            self._packet_auto_retry_after=time.monotonic()+10
             self._packet_put(('session_connection',False))
+            self._packet_put(('packet_connect_error',f'{type(exc).__name__}: {str(exc)[:160]}'))
             self._packet_put(('status',f'G-Earth connection failed: {type(exc).__name__}: {str(exc)[:190]}'))
 
     def _packet_put(self,item):
@@ -2581,7 +2691,13 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='status':
                 self.packet_status.set(item[1]);continue
+            if item[0]=='packet_connect_error':
+                self.packet_connection_status.set('Packet tools failed: '+item[1])
+                continue
             if item[0]=='session_connection':
+                self.packet_connection_status.set(
+                    'Packet tools READY — Habbo and G-Earth connected.' if item[1]
+                    else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
@@ -2917,7 +3033,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.canvas_font=font.Font(family='Segoe UI',size=size)
         self.canvas_bold=font.Font(family='Segoe UI Semibold',size=size,weight='bold')
         pad=12
-        maxw=min(int(self.config['width']), max(150,sw-int(self.config['x'])-10))
+        single_line=bool(self.config.get('single_line_bubbles',True))
+        align_whispers=bool(self.config.get('whispers_right',True))
+        maxw=(max(80,sw-2*int(self.config['x'])-10) if single_line
+              else min(int(self.config['width']),max(150,sw-int(self.config['x'])-10)))
         fline=max(self.canvas_font.metrics('linespace'),self.canvas_bold.metrics('linespace'))+2
         clear=int(self.config.get('bottom_clearance',110)) if not self.config['show_room'] else 0
         cursor=min(int(sh*int(self.config['anchor'])/100), sh-clear-18)
@@ -2934,7 +3053,77 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             start=max(0,end-int(self.config.get('visible_messages',14)))
         rendered_count=0
         active_images=set()
+        # Message ordering uses one shared vertical cursor, preventing an
+        # incoming whisper and a normal message from obscuring each other.
+        font_cache={size:(self.canvas_font,self.canvas_bold)}
         for msg in reversed(self.messages[start:end]):
+            right=align_whispers and is_whisper_chat(msg.chat_type)
+            if single_line:
+                username=msg.name+':'
+                body=chat_one_line(msg.body)
+                inset=pad+22
+                available=max(30,maxw-inset-pad)
+                fnt,bold=self.canvas_font,self.canvas_bold
+                for pt in range(size-1,8,-1):
+                    if bold.measure(username)+7+fnt.measure(body)<=available:break
+                    if pt not in font_cache:
+                        font_cache[pt]=(font.Font(family='Segoe UI',size=pt),
+                                        font.Font(family='Segoe UI Semibold',size=pt,weight='bold'))
+                    fnt,bold=font_cache[pt]
+                name_w=bold.measure(username)
+                visible_body=fit_line_ellipsis(body,fnt,max(0,available-name_w-7))
+                content_w=name_w+(7+fnt.measure(visible_body) if visible_body else 0)
+                boxw=min(maxw,max(60,content_w+inset+pad))
+                height=max(fline,fnt.metrics('linespace')+2)+12
+                native=None
+                if show_bubbles and self.config.get('original_bubble_images',True) and msg.bubble_image is not None:
+                    key=str(msg.bubble_image)
+                    try:
+                        native=self.native_images.get(key)
+                        if native is None:
+                            native=tk.PhotoImage(master=self.root,file=key,format='png')
+                            self.native_images[key]=native
+                        w,h=native.width(),native.height()
+                        if not (w>0 and h>0 and h<=max(35,fline+14) and w<=maxw):
+                            native=None
+                    except (OSError,tk.TclError,ValueError):
+                        native=None
+                if native is not None:
+                    w,h=native.width(),native.height()
+                    top=cursor-h
+                    if top<24:break
+                    bx=max(x,sw-x-w) if right else x
+                    cv.create_image(bx,top,image=native,anchor='nw')
+                    cursor=top-gap
+                    rendered_count+=1
+                    active_images.add(key)
+                    continue
+                top=cursor-height
+                if top<24:break
+                bx=max(x,sw-x-boxw) if right else x
+                if show_bubbles:
+                    bg,fg,emblem,edge=(get_message_colors(msg,theme)
+                        if self.config.get('respect_chat_styles',True) else
+                        (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
+                    cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
+                    self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
+                    self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
+                    name_fg=fg
+                else:
+                    fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
+                ix=bx+pad+7;iy=top+height/2
+                cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
+                cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
+                               font=('Segoe UI Semibold',9),fill='#f8fbff')
+                tx=bx+inset;ty=top+6
+                cv.create_text(tx,ty,text=username,anchor='nw',font=bold,fill=name_fg)
+                if visible_body:
+                    cv.create_text(tx+name_w+7,ty,text=visible_body,anchor='nw',
+                                   font=fnt,fill=fg)
+                cursor=top-gap
+                rendered_count+=1
+                continue
+            # Legacy wrapped-mode artwork and layout follows.
             # Original: render the actual image produced by Habbo's own
             # PooledChatBubble/ChatStyle renderer. Keeps fonts, background,
             # borders, avatar artwork, and pointers pixel-for-pixel.
@@ -2950,7 +3139,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     if w>0 and h>0:
                         top=cursor-h
                         if top<24:break
-                        cv.create_image(x,top,image=original,anchor='nw')
+                        bx=max(x,sw-x-w) if right else x
+                        cv.create_image(bx,top,image=original,anchor='nw')
                         cursor=top-gap
                         rendered_count+=1
                         active_images.add(key)
@@ -2979,22 +3169,23 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             boxw=min(maxw,max(160,content_w+inset+pad))
             top=cursor-height
             if top<24:break
+            bx=max(x,sw-x-boxw) if right else x
             if show_bubbles:
                 bg,fg,emblem,edge=(get_message_colors(msg,theme)
                     if self.config.get('respect_chat_styles',True) else
                     (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                cv.create_rectangle(x+3,top+4,x+boxw+3,cursor+4,fill='#070e19',outline='')
-                self._rounded(cv,x,top,x+boxw,cursor,9,edge)
-                self._rounded(cv,x+2,top+2,x+boxw-2,cursor-2,7,bg)
+                cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
+                self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
+                self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
                 name_fg=fg
             else:
                 fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
             # Small avatar-like initial. No third-party game art is required.
-            ix=x+pad+7;iy=top+pad+fline/2
+            ix=bx+pad+7;iy=top+pad+fline/2
             cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
             cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
                            font=('Segoe UI Semibold',9),fill='#f8fbff')
-            tx=x+inset;ty=top+pad
+            tx=bx+inset;ty=top+pad
             cv.create_text(tx,ty,text=username,anchor='nw',font=self.canvas_bold,fill=name_fg)
             if first_line:
                 cv.create_text(tx+name_w+7,ty,text=first_line,anchor='nw',font=self.canvas_font,fill=fg)
@@ -3076,12 +3267,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # instead, so other apps naturally cover it without erasing chat.
             if geom:
                 sx,sy,sw,sh,*_=geom
-                # When the room is visible, only cover the left chat column.
-                # This also limits click obstruction if a Windows theme interferes
-                # with the click-through style. The room-hidden option uses the
-                # full client width for its background.
-                overlay_w=sw if not self.config['show_room'] else min(sw,max(260,
-                    int(self.config['x'])+int(self.config['width'])+28))
+                # Wide, click-through overlay: full-width chat and right-side whispers.
+                wide_chat=bool(self.config.get('single_line_bubbles',True)
+                               or self.config.get('whispers_right',True))
+                overlay_w=(sw if wide_chat or not self.config['show_room']
+                           else min(sw,max(260,int(self.config['x'])+int(self.config['width'])+28)))
                 overlay_geom=(sx,sy,overlay_w,sh)
                 changed=geom!=self.last_rect or overlay_geom!=self.last_overlay_geometry
                 self.last_rect=geom
