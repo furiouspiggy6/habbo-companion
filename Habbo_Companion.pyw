@@ -22,6 +22,7 @@ import urllib.request
 import urllib.parse
 import hashlib
 import importlib.util
+import base64
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
@@ -55,9 +56,10 @@ DEFAULT = dict(
     gearth_port=9092,
     gearth_host='game-us.habbo.com',
     gearth_game_port=30000,
-    gearth_minimize=False,
-    gearth_auto_arm=False,
+    gearth_minimize=True,
+    gearth_auto_arm=True,
     gearth_startup_safety_v104=True,
+    gearth_startup_uia_v105=False,
     packet_rules=[],
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
@@ -166,6 +168,17 @@ def load_config():
             saved['gearth_auto_arm']=False
             saved['gearth_minimize']=False
             saved['gearth_startup_safety_v104']=True
+            try:
+                APP_DIR.mkdir(exist_ok=True,parents=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:
+                pass
+        # One-time migration: the user requested hands-free beta preparation.
+        # This replaces the previous unreliable --connect command startup.
+        if not saved.get('gearth_startup_uia_v105', False):
+            saved['gearth_auto_arm']=True
+            saved['gearth_minimize']=True
+            saved['gearth_startup_uia_v105']=True
             try:
                 APP_DIR.mkdir(exist_ok=True,parents=True)
                 CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
@@ -376,6 +389,115 @@ class WinTracker:
             return False
 
 
+def _ps_quote(value):
+    """PowerShell single-quoted string for a trusted local filename."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def build_gearth_uia_command(executable, status_file):
+    """Build an elevated, in-memory Windows UI Automation helper.
+
+    This starts G-Earth normally, then uses its own Connect button instead
+    of the early --connect flash path that froze Habbo at 60%.
+    """
+    code=r"""
+$ErrorActionPreference='Stop'
+$gearth=__GEARTH__
+$report=__REPORT__
+function Status([string]$phase,[string]$message) {
+    try {
+        $data=@{phase=$phase;message=$message;timestamp=(Get-Date).ToUniversalTime().ToString('o')}
+        $json=$data | ConvertTo-Json -Compress
+        [System.IO.File]::WriteAllText($report,$json,(New-Object System.Text.UTF8Encoding($false)))
+    } catch {}
+}
+function Find-GEarth {
+    $windows=[System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+        [System.Windows.Automation.TreeScope]::Children,
+        [System.Windows.Automation.Condition]::TrueCondition)
+    for($i=0;$i -lt $windows.Count;$i++) {
+        try {
+            $w=$windows.Item($i)
+            if($w.Current.Name -match '^G-Earth(?:\s+\d|$)') {return $w}
+        } catch {}
+    }
+    return $null
+}
+function Children($window) {
+    return $window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                           [System.Windows.Automation.Condition]::TrueCondition)
+}
+function Ready($items) {
+    for($i=0;$i -lt $items.Count;$i++) {
+        try {
+            $name=$items.Item($i).Current.Name
+            if($name -eq 'Waiting for connection' -or $name -eq 'Connected') {return $true}
+        } catch {}
+    }
+    return $false
+}
+try {
+    Add-Type -AssemblyName UIAutomationClient
+    Add-Type -AssemblyName UIAutomationTypes
+    Status 'starting' 'Opening the working G-Earth beta...'
+    $w=Find-GEarth
+    if($null -eq $w) {
+        if(-not (Test-Path -LiteralPath $gearth -PathType Leaf)) {
+            Status 'error' 'The saved G-Earth beta executable was not found.'
+            exit 2
+        }
+        Start-Process -FilePath $gearth -WorkingDirectory (Split-Path -Parent $gearth) | Out-Null
+    }
+    $deadline=(Get-Date).AddSeconds(65)
+    $clicked=$false
+    $seen=$false
+    while((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 650
+        $w=Find-GEarth
+        if($null -eq $w) {continue}
+        $seen=$true
+        try {$items=Children $w} catch {continue}
+        if(Ready $items) {
+            Status 'ready' 'G-Earth is waiting for Habbo. Launch Habbo normally.'
+            exit 0
+        }
+        if($clicked) {continue}
+        for($i=0;$i -lt $items.Count;$i++) {
+            try {
+                $el=$items.Item($i)
+                if($el.Current.Name -ne 'Connect' -or -not $el.Current.IsEnabled) {continue}
+                try {
+                    $p=$el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+                    $p.Invoke()
+                } catch {
+                    Add-Type -AssemblyName System.Windows.Forms
+                    $el.SetFocus()
+                    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+                }
+                $clicked=$true
+                Status 'connecting' 'Activated G-Earth Connect; verifying the waiting state...'
+                break
+            } catch {}
+        }
+    }
+    if(-not $seen) {
+        Status 'manual_needed' 'G-Earth did not show a window. Check the saved beta path.'
+    } elseif($clicked) {
+        Status 'manual_needed' 'G-Earth Connect was activated but the waiting state could not be verified. Check the G-Earth window.'
+    } else {
+        Status 'manual_needed' 'G-Earth opened, but Windows did not expose its Connect control. Click Connect in G-Earth once.'
+    }
+} catch {
+    Status 'error' ('G-Earth auto setup failed: ' + $_.Exception.Message)
+}
+"""
+    code=code.replace('__GEARTH__',_ps_quote(executable))
+    code=code.replace('__REPORT__',_ps_quote(status_file))
+    encoded=base64.b64encode(code.encode('utf-16-le')).decode('ascii')
+    return ['-NoProfile','-NonInteractive','-WindowStyle','Hidden',
+            '-EncodedCommand',encoded]
+
+
 class ChatOverlayApp:
     def __init__(self,root):
         self.root=root;self.root.title('Habbo Companion — Chat + Packets')
@@ -412,6 +534,10 @@ class ChatOverlayApp:
         self._gearth_auto_arm_attempted=False
         self._gearth_launch_queued=False
         self._gearth_started_at=0.0
+        self._gearth_ui_ready=False
+        self._gearth_ui_last=None
+        self._gearth_ui_watch_until=0.0
+        self._gearth_ui_status=APP_DIR/'gearth_auto_start_status.json'
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
@@ -765,16 +891,16 @@ class ChatOverlayApp:
         holder.pack(fill='both',expand=True)
         tk.Label(holder,text='PACKET VIEWER',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        tk.Label(holder,text='Safe mode: open G-Earth, click Connect in G-Earth, launch Habbo, THEN connect the packet viewer.',
+        tk.Label(holder,text='Auto mode: Companion starts the working G-Earth beta and activates Connect. Launch Habbo after G-Earth is ready. Viewer waits until Habbo loads.',
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
         ttk.Button(gearth_row,text='Open G-Earth (safe)',command=lambda:self._launch_gearth(auto_connect=False)).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Auto-connect (experimental)',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Prepare G-Earth now',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
         ttk.Button(gearth_row,text='Advanced G-Earth',command=self._show_gearth).pack(side='left',padx=(0,6))
         ttk.Button(gearth_row,text='Find G-Earth',command=self._select_gearth).pack(side='left',padx=(0,6))
         tk.Label(holder,textvariable=self.gearth_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
         auto_row=ttk.Frame(holder,style='Panel.TFrame');auto_row.pack(fill='x',pady=(0,5))
-        ttk.Checkbutton(auto_row,text='Auto-connect on startup (experimental; may freeze Habbo at 60%)',
+        ttk.Checkbutton(auto_row,text='Automatically prepare G-Earth when Companion opens',
                         variable=self.gearth_auto_arm_var,command=self._save_gearth_auto_arm).pack(side='left')
         launch_row=ttk.Frame(holder,style='Panel.TFrame');launch_row.pack(fill='x',pady=(0,5))
         ttk.Button(launch_row,text='Launch Habbo after G-Earth is ready',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
@@ -817,7 +943,7 @@ class ChatOverlayApp:
         tk.Label(holder,text='Packets are stored only in memory (maximum 500). Nothing is sent anywhere.\n'
                  'G-Earth must prepare BEFORE Habbo begins connecting. On Companion startup, approve the\n'
                  'Windows administrator prompt. Launch Habbo only after G-Earth is waiting.\n'
-                 'If experimental auto-connect freezes at 60%, turn it OFF and use Open G-Earth (safe).',
+                 'If Windows accessibility cannot press Connect, G-Earth stays open for manual connection.',
                  bg='#121a28',fg='#8ea9c1',justify='left',font=('Segoe UI',9),
                  wraplength=620).pack(anchor='w',pady=(12,0))
 
@@ -1003,28 +1129,90 @@ class ChatOverlayApp:
         return selected
 
     def _auto_prepare_gearth(self):
-        """One non-repeating pre-arm attempt per Companion session.
-
-        A running AIR window means its network handshake may already be underway.
-        Do not inject or restart G-Earth while the game is active.
-        """
+        """Prepare G-Earth using its normal UI, with no early packet attachment."""
         if self._gearth_auto_arm_attempted or not self.gearth_auto_arm_var.get():return
-        self._gearth_auto_arm_attempted=True
-        if os.name!='nt':return
+        self._start_gearth_ui_automation(select_if_missing=False)
+
+    def _start_gearth_ui_automation(self,select_if_missing=True):
+        if os.name!='nt':return False
+        if self._gearth_ui_watch_until>time.monotonic():
+            self.packet_status.set('G-Earth preparation is already running.')
+            return False
         if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.packet_status.set('Habbo is already open. G-Earth must be prepared before opening Habbo; '                                   'close Habbo and start it again after G-Earth is waiting.')
-            return
-        if self._find_gearth_window():
-            self.packet_status.set('G-Earth is already running. Check that it says Waiting for connection '
-                                   'or Connected before opening Habbo. Attaching packet viewer…')
-            self._await_gearth_viewer(time.monotonic()+40)
-            return
+            self.packet_status.set('Habbo is already running. Close Habbo first; G-Earth must be ready before game login.')
+            return False
         path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file():
-            self.packet_status.set('Auto-connect is enabled. First choose the WORKING G-Earth beta '
-                                   'using Find G-Earth, then restart Companion.')
-            return
-        self._launch_gearth(auto_connect=True,select_if_missing=False)
+        if not path.is_file() and select_if_missing:
+            self._select_gearth()
+            path=Path(str(self.config.get('gearth_path') or ''))
+        if not path.is_file() or path.suffix.lower()!='.exe':
+            self.packet_status.set('Choose the working G-Earth beta EXE with Find G-Earth first.')
+            return False
+        self._gearth_auto_arm_attempted=True
+        self._gearth_ui_ready=False
+        try:
+            import shutil
+            shell=shutil.which('powershell.exe')
+            if not shell:
+                self.packet_status.set('Windows PowerShell was not found; launch G-Earth manually.')
+                return False
+            APP_DIR.mkdir(parents=True,exist_ok=True)
+            self._gearth_ui_status.unlink(missing_ok=True)
+            args=subprocess.list2cmdline(build_gearth_uia_command(path.resolve(),self._gearth_ui_status))
+            shell32=ctypes.WinDLL('shell32',use_last_error=True)
+            execute=shell32.ShellExecuteW
+            execute.argtypes=(wintypes.HWND,wintypes.LPCWSTR,wintypes.LPCWSTR,
+                              wintypes.LPCWSTR,wintypes.LPCWSTR,ctypes.c_int)
+            execute.restype=ctypes.c_void_p
+            ctypes.set_last_error(0)
+            result=int(execute(None,'runas',shell,args,str(path.parent),0) or 0)
+            if result<=32:
+                error=ctypes.get_last_error()
+                self.packet_status.set('Administrator prompt declined; G-Earth not started.' if error==1223 or result==5
+                                       else f'G-Earth helper failed to start (Windows {error or result}).')
+                return False
+            self._gearth_ui_last=None
+            self._gearth_ui_watch_until=time.monotonic()+85
+            self.packet_status.set('Preparing G-Earth beta. Approve the Windows administrator prompt if prompted.')
+            self.root.after(650,self._poll_gearth_ui_state)
+            return True
+        except (OSError,ValueError,AttributeError) as exc:
+            self.packet_status.set('G-Earth automatic setup failed: '+str(exc)[:150])
+            return False
+
+    def _poll_gearth_ui_state(self):
+        if not self.root.winfo_exists():return
+        try:
+            report=json.loads(self._gearth_ui_status.read_text(encoding='utf-8-sig'))
+        except (OSError,ValueError,TypeError):
+            report=None
+        if isinstance(report,dict):
+            phase=str(report.get('phase',''))
+            msg=str(report.get('message',''))[:220]
+            state=(phase,msg)
+            if state!=self._gearth_ui_last:
+                self.packet_status.set(msg)
+                self._gearth_ui_last=state
+            if phase=='ready':
+                self._gearth_ui_ready=True
+                self._gearth_ui_watch_until=0.0
+                if self.gearth_minimize_var.get():
+                    hwnd=self._find_gearth_window()
+                    if hwnd:
+                        user32=ctypes.WinDLL('user32',use_last_error=True)
+                        user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+                        user32.ShowWindowAsync.restype=wintypes.BOOL
+                        user32.ShowWindowAsync(hwnd,6)
+                        self.packet_status.set('G-Earth is ready and minimized. You can open Habbo.')
+                return
+            if phase in ('error','manual_needed'):
+                self._gearth_ui_watch_until=0.0
+                return
+        if time.monotonic()<self._gearth_ui_watch_until:
+            self.root.after(700,self._poll_gearth_ui_state)
+        else:
+            self._gearth_ui_watch_until=0.0
+            self.packet_status.set('G-Earth readiness could not be verified. Check the G-Earth window before starting Habbo.')
 
     def _launch_habbo_with_gearth(self):
         """Start Habbo only after the user confirms G-Earth's WAITING state.
@@ -1045,6 +1233,9 @@ class ChatOverlayApp:
             if self._launch_gearth(auto_connect=False,select_if_missing=True):
                 self.packet_status.set('G-Earth opened in safe mode. Select Flash/AIR and click Connect '
                                        'inside G-Earth. When it says Waiting for connection, click Launch Habbo again.')
+            return
+        if self._gearth_ui_ready:
+            self._finish_habbo_launch()
             return
         if not messagebox.askyesno('G-Earth connection check',
             'Does the G-Earth beta currently display "Waiting for connection"?\n\n'
@@ -1139,12 +1330,8 @@ class ChatOverlayApp:
             self.root.after(900,self._minimize_gearth_if_ready)
 
     def _connect_habbo_air(self):
-        """Launch G-Earth's documented --connect flash mode, then attach viewer."""
-        if self._find_gearth_window():
-            self.packet_status.set('G-Earth is already running. Close its window safely before automatic connection, '
-                                   'or open Advanced G-Earth window and use its Connect button.')
-            return
-        self._launch_gearth(auto_connect=True)
+        """Use the beta's normal Connect UI instead of early CLI auto-connect."""
+        self._start_gearth_ui_automation(select_if_missing=True)
 
     def _gearth_connection_target(self):
         host=self.gearth_host_var.get().strip().lower()
@@ -1292,7 +1479,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.0.4','author':'Habbo Companion'}
+                  'version':'1.0.5','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
