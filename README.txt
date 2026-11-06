@@ -19,6 +19,26 @@ New connection behaviour:
 - STOP cancels both a pending coffee-loop start and a running loop.
 - Connection loss stops running loops; it never silently resumes them.
 
+
+WIDE CHAT / WHISPERS
+--------------------
+In View Chat the new settings are enabled by default:
+- "Single-line chat bubbles (auto width)": messages stay on a single row
+  and expand across the Habbo window rather than wrapping in the old
+  narrow bubble column.
+- "Whispers on the right": Habbo ChatItem type 2 chat is right-aligned
+  while regular speech remains left-aligned.
+- Native Habbo PNG artwork is kept for short, already single-line
+  bubbles. PNGs that contain multiple rows are replaced with a one-line
+  rendering (style colours retained, avatar represented with an initial).
+- Long text may shrink to a 9-point font; if still wider than the
+  actual Habbo window, it displays an ellipsis. No content is drawn
+  beyond the window boundary.
+- One shared vertical chat stack preserves chronological order and avoids
+  collisions between normal chat and whispers.
+- Both settings can be disabled to restore the previous wrapped layout.
+- The overlay grows to the game width in this mode, remaining click-through.
+
 Existing features preserved:
 - Packet Viewer remains available for optional troubleshooting.
 - Rules & Replay, manual injection, coffee IDs, target ID, and interval.
