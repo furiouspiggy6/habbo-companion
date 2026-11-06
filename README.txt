@@ -1,33 +1,17 @@
-HABBO COMPANION v1.0.5 — AUTOMATIC G-EARTH PREPARATION
-=====================================================
-Open Habbo Companion. It will start your previously selected, working G-Earth
-beta and attempt to activate the native Connect control automatically.
+HABBO COMPANION v1.0.6 — VISIBLE G-EARTH STARTUP
+================================================
 
-WHAT CHANGED
-- Defaults to automatic G-Earth preparation on Companion startup.
-- Opens the beta normally and uses Windows UI Automation to activate its own
-  Connect control. Does NOT use the unreliable early --connect flash CLI mode.
-- Checks for "Waiting for connection" or "Connected" before reporting ready.
-- Minimizes the G-Earth window ONLY after readiness is confirmed.
-- Leaves G-Earth visible with a status message if Windows cannot activate or
-  verify Connect. The manual Connect method remains available.
-- Never attaches the G-Python packet viewer during the AIR loading handshake.
-  Open Habbo, enter a room, then attach the packet viewer.
-- All saved chat settings, native bubble support, scrollback and packet rules
-  are retained. Packet manipulation still starts OFF every session.
+When Companion opens, it attempts to prepare the saved G-Earth beta before Habbo starts.
 
-SETUP
-- You must have selected the working G-Earth beta EXE in Companion previously.
-- On Companion startup, approve the standard Windows administrator prompt.
-- Wait for Companion's "G-Earth is ready" status before launching Habbo.
-- Once G-Earth is waiting, launch Habbo normally and it will connect through it.
-- If Windows accessibility doesn't expose the JavaFX Connect button, G-Earth
-  stays visible so you can click Connect manually. This is still experimental.
+- Fix: request a NORMAL visible G-Earth window from the elevated PowerShell helper.
+- Fix: disable auto-minimize once, so the G-Earth window is visible for troubleshooting.
+- Safe fallback: if the helper never creates a G-Earth window, use the known-working
+  direct Windows launch without automatic connection flags. This may request UAC again.
+- The helper still attempts the usual G-Earth Connect control when available.
+- Keep Habbo closed until G-Earth says Waiting for connection.
+- Only attach the packet viewer after entering Habbo; packet rules remain OFF.
+- Saved chat settings, G-Earth beta path and packet rules are preserved.
 
-LIMITS
-- This was checked statically; it has not been verified running on your PC.
-- Starting Habbo before G-Earth is ready can still lead to the 60% hang.
-- Repeated UAC prompts are not bypassed; no permanently elevated scheduled
-  task is installed or UAC disabled.
-- Use Packet Viewer > Start and prepare G-Earth when Companion opens to turn
-  auto-preparation off or back on after installing the update.
+If automatic Connect is not available through Windows UI Automation, G-Earth remains
+visible for one manual Connect click. This version cannot guarantee that native
+JavaFX controls are exposed to automation and has not been tested on the user's PC.

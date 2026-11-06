@@ -56,8 +56,9 @@ DEFAULT = dict(
     gearth_port=9092,
     gearth_host='game-us.habbo.com',
     gearth_game_port=30000,
-    gearth_minimize=True,
+    gearth_minimize=False,
     gearth_auto_arm=True,
+    gearth_visible_debug_v106=False,
     gearth_startup_safety_v104=True,
     gearth_startup_uia_v105=False,
     packet_rules=[],
@@ -173,11 +174,20 @@ def load_config():
                 CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
             except OSError:
                 pass
+        # v1.0.6: leave G-Earth visible while diagnosing startup failures.
+        if not saved.get('gearth_visible_debug_v106',False):
+            saved['gearth_minimize']=False
+            saved['gearth_visible_debug_v106']=True
+            try:
+                APP_DIR.mkdir(exist_ok=True,parents=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:
+                pass
         # One-time migration: the user requested hands-free beta preparation.
         # This replaces the previous unreliable --connect command startup.
         if not saved.get('gearth_startup_uia_v105', False):
             saved['gearth_auto_arm']=True
-            saved['gearth_minimize']=True
+            saved['gearth_minimize']=False
             saved['gearth_startup_uia_v105']=True
             try:
                 APP_DIR.mkdir(exist_ok=True,parents=True)
@@ -446,7 +456,7 @@ try {
             Status 'error' 'The saved G-Earth beta executable was not found.'
             exit 2
         }
-        Start-Process -FilePath $gearth -WorkingDirectory (Split-Path -Parent $gearth) | Out-Null
+        Start-Process -FilePath $gearth -WorkingDirectory (Split-Path -Parent $gearth) -WindowStyle Normal | Out-Null
     }
     $deadline=(Get-Date).AddSeconds(65)
     $clicked=$false
@@ -538,6 +548,8 @@ class ChatOverlayApp:
         self._gearth_ui_last=None
         self._gearth_ui_watch_until=0.0
         self._gearth_ui_status=APP_DIR/'gearth_auto_start_status.json'
+        self._gearth_ui_started_at=0.0
+        self._gearth_ui_fallback_attempted=False
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
@@ -1150,6 +1162,7 @@ class ChatOverlayApp:
             return False
         self._gearth_auto_arm_attempted=True
         self._gearth_ui_ready=False
+        self._gearth_ui_fallback_attempted=False
         try:
             import shutil
             shell=shutil.which('powershell.exe')
@@ -1172,7 +1185,8 @@ class ChatOverlayApp:
                                        else f'G-Earth helper failed to start (Windows {error or result}).')
                 return False
             self._gearth_ui_last=None
-            self._gearth_ui_watch_until=time.monotonic()+85
+            self._gearth_ui_started_at=time.monotonic()
+            self._gearth_ui_watch_until=self._gearth_ui_started_at+85
             self.packet_status.set('Preparing G-Earth beta. Approve the Windows administrator prompt if prompted.')
             self.root.after(650,self._poll_gearth_ui_state)
             return True
@@ -1208,6 +1222,22 @@ class ChatOverlayApp:
             if phase in ('error','manual_needed'):
                 self._gearth_ui_watch_until=0.0
                 return
+        # If the elevated helper starts but never shows a G-Earth window,
+        # retry once with the known-working direct (no auto-connect) launcher.
+        # This does not inject or change packets during Habbo login.
+        if (not self._gearth_ui_fallback_attempted and self._gearth_ui_started_at
+                and time.monotonic()-self._gearth_ui_started_at > 18
+                and not self._find_gearth_window()):
+            self._gearth_ui_fallback_attempted=True
+            self._gearth_ui_watch_until=0.0
+            if self._launch_gearth(auto_connect=False,select_if_missing=False):
+                self.packet_status.set('The automatic setup helper did not show G-Earth. '
+                                       'Opened G-Earth using safe fallback. '
+                                       'Use its Connect button before starting Habbo.')
+            else:
+                self.packet_status.set('Automatic G-Earth startup failed. '
+                                       'Check the saved beta EXE path and Windows administrator prompt.')
+            return
         if time.monotonic()<self._gearth_ui_watch_until:
             self.root.after(700,self._poll_gearth_ui_state)
         else:
