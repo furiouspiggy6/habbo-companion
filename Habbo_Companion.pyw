@@ -1137,14 +1137,11 @@ class ChatOverlayApp:
         except (TypeError,ValueError):port=9092
         if self._gearth_extension_port_responds(port):
             self._gearth_launch_watch_until=0.0
+            # Let JavaFX finish opening normally before minimizing the window.
+            # This uses the precise launch style that succeeded in PowerShell.
             if self.gearth_minimize_var.get():
-                hwnd=self._find_gearth_window()
-                if hwnd:
-                    u=ctypes.WinDLL('user32',use_last_error=True)
-                    u.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
-                    u.ShowWindowAsync.restype=wintypes.BOOL
-                    u.ShowWindowAsync(hwnd,6)
-            self.packet_status.set(f'G-Earth background detected: local extension port {port} is responding. Flash/AIR auto-connect was requested. Proxy readiness is NOT confirmed; start Habbo only once G-Earth is waiting.')
+                self.root.after(3500,self._minimize_gearth_after_backend)
+            self.packet_status.set(f'G-Earth backend detected: port {port} is listening. Flash/AIR auto-connect was requested. The Habbo proxy WAITING state is not independently verified.')
             return
         if time.monotonic()<self._gearth_launch_watch_until:
             self.root.after(900,self._poll_gearth_direct_launch)
@@ -1155,6 +1152,21 @@ class ChatOverlayApp:
                 self.packet_status.set(f'G-Earth window exists but extension port {port} is still closed. Check beta startup and selected port.')
             else:
                 self.packet_status.set('Windows accepted the G-Earth start request but no backend was detected within 65 seconds. Check the saved beta EXE or admin prompt; click Launch + auto-connect to retry.')
+
+    def _minimize_gearth_after_backend(self):
+        """Minimize the working GUI only after startup; keep G-Earth running."""
+        if not self.root.winfo_exists() or not self.gearth_minimize_var.get():
+            return
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if not self._gearth_extension_port_responds(port):
+            return
+        hwnd=self._find_gearth_window()
+        if hwnd:
+            user32=ctypes.WinDLL('user32',use_last_error=True)
+            user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+            user32.ShowWindowAsync.restype=wintypes.BOOL
+            user32.ShowWindowAsync(hwnd,6)
 
     def _launch_habbo_with_gearth(self):
         """Start Habbo only after the user confirms G-Earth's WAITING state.
@@ -1337,7 +1349,11 @@ class ChatOverlayApp:
                               wintypes.LPCWSTR,wintypes.LPCWSTR,ctypes.c_int)
             execute.restype=ctypes.c_void_p
             ctypes.set_last_error(0)
-            result=execute(None,'runas',program,parameters,str(path.parent),7 if self.gearth_minimize_var.get() else 1)
+            # The same normal-window launch behavior as the successful
+            # PowerShell Start-Process -Verb RunAs test. JavaFX can initialize
+            # incorrectly when asked to start minimized (SW_SHOWMINNOACTIVE=7).
+            # Minimize only after the extension backend has started responding.
+            result=execute(None,'runas',program,parameters,str(path.parent),1)
             if int(result or 0)<=32:
                 error=ctypes.get_last_error()
                 if error==1223 or int(result or 0)==5:
@@ -1349,10 +1365,10 @@ class ChatOverlayApp:
             self._gearth_auto_arm_attempted=True  # prevent racing a queued startup probe
             self._gearth_started_at=time.monotonic()
             if auto_connect:
-                # Do not attach the G-Python extension or minimize during the
-                # AIR handshake. A listening extension port is not proof that
-                # G-Earth's game proxy has reached WAITING_FOR_CLIENT.
-                self.packet_status.set(f'Started the G-Earth beta in background with native Flash/AIR connect request for {host}:{game_port}. Waiting for extension backend response; no early packet viewer.')
+                # Never attach G-Python during Habbo's initial AIR handshake.
+                # A successful ShellExecuteW request does not prove that JavaFX
+                # or the G-Earth proxy actually started.
+                self.packet_status.set(f'Windows accepted the G-Earth start request for {host}:{game_port}. Checking whether the extension backend starts; no packet viewer attached.')
             else:
                 self.packet_status.set(f'Opened {path.name} without auto-connect flags. In G-Earth, select Flash/AIR, '
                                        'check game-us.habbo.com:30000 and click Connect before starting Habbo.')
@@ -1414,7 +1430,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.0.8','author':'Habbo Companion'}
+                  'version':'1.0.9','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
