@@ -199,5 +199,34 @@ class ManagedEngineTests(unittest.TestCase):
         startup=inspect.getsource(app.ChatOverlayApp._launch_gearth)
         self.assertIn("result=execute(None,'runas',program,parameters,str(path.parent),1)",startup)
 
+
+    def test_auto_start_default_off_after_outage(self):
+        self.assertFalse(app.DEFAULT['gearth_auto_arm'])
+
+    def test_scoped_hosts_repair_and_backup(self):
+        from unittest.mock import patch
+        hosts=self.root/'hosts'
+        original=(b'127.0.0.1 localhost\r\n'
+                  b'127.0.0.2 game-us.habbo.com # G-Earth replacement\r\n'
+                  b'127.0.0.3 private.example # G-Earth replacement\r\n')
+        hosts.write_bytes(original)
+        with patch.object(app,'gearth_hosts_path',return_value=hosts), \
+             patch.object(app,'APP_DIR',self.root/'AppData'):
+            msg=app.repair_gearth_hosts()
+        self.assertIn('Removed 1',msg)
+        self.assertIn(b'private.example',hosts.read_bytes())
+        self.assertNotIn(b'game-us.habbo.com',hosts.read_bytes())
+        backup=list((self.root/'AppData'/'network-backups').glob('*.bak'))
+        self.assertEqual(len(backup),1)
+        self.assertEqual(backup[0].read_bytes(),original)
+
+    def test_scoped_hosts_noop(self):
+        from unittest.mock import patch
+        hosts=self.root/'hosts'
+        hosts.write_bytes(b'127.0.0.1 localhost\n')
+        with patch.object(app,'gearth_hosts_path',return_value=hosts), \
+             patch.object(app,'APP_DIR',self.root/'AppData'):
+            self.assertIn('No tagged',app.repair_gearth_hosts())
+
 if __name__=='__main__':
     unittest.main()

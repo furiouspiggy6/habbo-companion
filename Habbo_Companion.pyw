@@ -61,7 +61,8 @@ DEFAULT = dict(
     gearth_host='game-us.habbo.com',
     gearth_game_port=30000,
     gearth_minimize=True,
-    gearth_auto_arm=True,
+    gearth_auto_arm=False,
+    gearth_network_safety_v114=False,
     gearth_background_v108=False,
     gearth_visible_debug_v106=False,
     gearth_startup_safety_v104=True,
@@ -207,6 +208,13 @@ def load_config():
             saved['gearth_background_v108']=True
             try:
                 APP_DIR.mkdir(exist_ok=True,parents=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:pass
+        if not saved.get('gearth_network_safety_v114',False):
+            saved['gearth_auto_arm']=False
+            saved['gearth_network_safety_v114']=True
+            try:
+                APP_DIR.mkdir(parents=True,exist_ok=True)
                 CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
             except OSError:pass
         return {**DEFAULT,**{k:v for k,v in saved.items() if k in DEFAULT}}
@@ -427,6 +435,67 @@ GEARTH_ENGINE_MARKER='companion-engine.json'
 GEARTH_ENGINE_LICENSE="MIT License\n\nCopyright (c) 2018 sirjonasxx\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
 
 
+
+# Windows networking is never modified without explicit administrator approval.
+_GEARTH_HOST=re.compile(rb'^[ \t]*127(?:\.[0-9]{1,3}){3}[ \t]+game-[a-z0-9-]+\.habbo\.com[ \t]+# G-Earth replacement[ \t]*$',re.I)
+
+def gearth_hosts_path():
+    return Path(os.environ.get('WINDIR',r'C:\Windows'))/'System32'/'drivers'/'etc'/'hosts'
+
+def filter_gearth_hosts(data):
+    kept=[];removed=[]
+    for line in data.splitlines(keepends=True):
+        (removed if _GEARTH_HOST.fullmatch(line.rstrip(b'\r\n')) else kept).append(line)
+    return b''.join(kept),removed
+
+def gearth_network_state():
+    state={'redirects':0,'proxy':False,'proxy_server':'','local_proxy':False,'error':''}
+    try:
+        state['redirects']=len(filter_gearth_hosts(gearth_hosts_path().read_bytes())[1])
+        if os.name=='nt':
+            import winreg
+            key=r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER,key,0,winreg.KEY_READ) as h:
+                def read(name,default):
+                    try:return winreg.QueryValueEx(h,name)[0]
+                    except FileNotFoundError:return default
+                state['proxy']=bool(int(read('ProxyEnable',0)))
+                state['proxy_server']=str(read('ProxyServer',''))
+        value=state['proxy_server'].lower()
+        state['local_proxy']=bool(re.search(r'(^|[;= ])(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]):\d+(?:$|[; ])',value))
+    except (OSError,ValueError,TypeError) as exc:
+        state['error']=str(exc)
+    state['unsafe']=bool(state['error'] or state['redirects'] or
+                         (state['proxy'] and state['local_proxy']))
+    return state
+
+def repair_gearth_hosts():
+    """Targeted removal only; exact G-Earth-tagged Habbo redirects."""
+    path=gearth_hosts_path()
+    before=path.read_bytes()
+    after,removed=filter_gearth_hosts(before)
+    if not removed:return 'No tagged G-Earth Habbo redirects to repair.'
+    folder=APP_DIR/'network-backups'
+    folder.mkdir(parents=True,exist_ok=True)
+    backup=folder/('hosts-'+uuid.uuid4().hex+'.bak')
+    with backup.open('xb') as fp:fp.write(before)
+    with path.open('r+b') as fp:
+        if fp.read()!=before:
+            raise RuntimeError('Hosts changed after backup; no edit performed.')
+        fp.seek(0);fp.write(after);fp.truncate();fp.flush();os.fsync(fp.fileno())
+    return 'Removed '+str(len(removed))+' tagged Habbo redirect(s). Original hosts backed up at: '+str(backup)
+
+def elevated_gearth_repair(token):
+    if not re.fullmatch('[0-9a-f]{32}',str(token)):return 2
+    APP_DIR.mkdir(parents=True,exist_ok=True)
+    out=APP_DIR/('gearth_repair_'+token+'.json')
+    try:result={'ok':True,'msg':repair_gearth_hosts()}
+    except Exception as exc:result={'ok':False,'msg':type(exc).__name__+': '+str(exc)[:500]}
+    try:out.write_text(json.dumps(result),encoding='utf-8')
+    except OSError:return 3
+    return 0 if result['ok'] else 1
+
+
 def managed_gearth_executable():
     """Return only a complete, previously registered managed runtime."""
     try:
@@ -618,8 +687,10 @@ class ChatOverlayApp:
         self._engine_start_attempted=False
         self._diagnostic_running=False
         self._diagnostic_text='No diagnostic has run.'
+        self._network_repair_report=None
+        self._network_repair_deadline=0.0
         self.engine_status_var=tk.StringVar(value='Engine: scheduled to start automatically...')
-        self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
+        self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',False)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
         self.packet_filter_var=tk.StringVar(value='')
@@ -980,8 +1051,11 @@ class ChatOverlayApp:
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(holder,textvariable=self.engine_status_var,bg='#121a28',fg='#76caab',
                  font=('Segoe UI Semibold',10),wraplength=620,justify='left').pack(anchor='w',pady=(0,9))
+        net_row=ttk.Frame(holder,style='Panel.TFrame');net_row.pack(fill='x',pady=(0,7))
+        ttk.Button(net_row,text='Check Windows network',command=self._show_network_safety).pack(side='left',padx=(0,8))
+        ttk.Button(net_row,text='Repair G-Earth hosts',command=self._repair_gearth_hosts_ui).pack(side='left')
         diag_row=ttk.Frame(holder,style='Panel.TFrame');diag_row.pack(fill='x',pady=(0,5))
-        ttk.Button(diag_row,text='Diagnose & repair',command=self._diagnose_and_repair).pack(side='left',padx=(0,8))
+        ttk.Button(diag_row,text='Diagnose (may launch engine)',command=self._diagnose_and_repair).pack(side='left',padx=(0,8))
         ttk.Button(diag_row,text='Copy diagnostic',command=self._copy_engine_diagnostic).pack(side='left')
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
         ttk.Button(gearth_row,text='Open engine (safe)',command=self._open_managed_safe).pack(side='left',padx=(0,6))
@@ -1201,6 +1275,12 @@ class ChatOverlayApp:
             self.packet_status.set('G-Earth location saved. Check this is the working beta executable, not version 1.5.3.')
 
     def _save_gearth_auto_arm(self):
+        if self.gearth_auto_arm_var.get():
+            if not self._network_launch_safe() or not messagebox.askyesno(
+                'Enable automatic G-Earth network interception?',
+                'A previous engine session coincided with loss of Brave internet access. '
+                'This can happen again. Enable automatic startup anyway?'):
+                self.gearth_auto_arm_var.set(False)
         self.config['gearth_auto_arm']=bool(self.gearth_auto_arm_var.get())
         self.save()
         if self.config['gearth_auto_arm'] and not self._gearth_auto_arm_attempted:
@@ -1314,6 +1394,82 @@ class ChatOverlayApp:
         except Exception as exc:
             self._packet_put(('engine_error',f'{type(exc).__name__}: {str(exc)[:200]}'))
 
+
+    def _network_launch_safe(self):
+        state=gearth_network_state()
+        if not state['unsafe']:return True
+        self.packet_status.set('G-Earth launch BLOCKED by network safety. Click Check Windows network.')
+        self.engine_status_var.set('Network safety: inspect existing host redirects or proxy')
+        return False
+
+    def _show_network_safety(self):
+        state=gearth_network_state()
+        lines=['G-Earth-tagged Habbo redirects: '+str(state['redirects']),
+               'Windows manual proxy enabled: '+str(state['proxy']),
+               'Manual proxy server: '+(state['proxy_server'] or '(none)'),
+               'Local proxy: '+str(state['local_proxy'])]
+        if state['error']:lines.append('Inspection error: '+state['error'])
+        if state['proxy']:lines.append('Proxy is read-only here; check Windows Settings > Network & internet > Proxy.')
+        lines.append('Companion does not reset Windows proxy, DNS, firewall or VPN.')
+        messagebox.showinfo('Windows network safety','\n'.join(lines))
+
+    def _repair_gearth_hosts_ui(self):
+        if os.name!='nt':return
+        try:port=int(self.gearth_port_var.get())
+        except (ValueError,TypeError):port=9092
+        if self._gearth_extension_port_responds(port):
+            messagebox.showwarning('Close G-Earth','Close G-Earth before removing host redirects.')
+            return
+        state=gearth_network_state()
+        if state['error']:
+            messagebox.showerror('Network inspection failed',state['error']);return
+        if not state['redirects']:
+            messagebox.showinfo('Nothing to repair','No G-Earth-tagged Habbo redirects found. System proxy untouched.')
+            return
+        if not messagebox.askyesno('Confirm targeted hosts repair',
+            f'Remove {state["redirects"]} exact G-Earth-tagged Habbo redirect(s) and back up the full hosts file? '
+            'No other network settings will change. Windows administrator permission is required.'):
+            return
+        try:
+            APP_DIR.mkdir(parents=True,exist_ok=True)
+            token=uuid.uuid4().hex
+            self._network_repair_report=APP_DIR/('gearth_repair_'+token+'.json')
+            shell=ctypes.WinDLL('shell32',use_last_error=True).ShellExecuteW
+            shell.argtypes=(wintypes.HWND,wintypes.LPCWSTR,wintypes.LPCWSTR,
+                            wintypes.LPCWSTR,wintypes.LPCWSTR,ctypes.c_int)
+            shell.restype=ctypes.c_void_p
+            args=subprocess.list2cmdline([str(Path(__file__).resolve()),'--repair-gearth-hosts',token])
+            code=int(shell(None,'runas',sys.executable,args,str(APP_DIR),1) or 0)
+            if code<=32:
+                self._network_repair_report=None
+                messagebox.showerror('Repair not started','Administrator permission was declined or launch failed.')
+                return
+            self._network_repair_deadline=time.monotonic()+60
+            self.packet_status.set('Waiting for administrator repair result...')
+            self.root.after(700,self._poll_network_repair)
+        except (OSError,AttributeError,ValueError) as exc:
+            self._network_repair_report=None
+            self.packet_status.set('Repair could not start: '+str(exc)[:140])
+
+    def _poll_network_repair(self):
+        report=self._network_repair_report
+        if report is None or not self.root.winfo_exists():return
+        if report.is_file():
+            try:
+                info=json.loads(report.read_text(encoding='utf-8'))
+                report.unlink(missing_ok=True)
+                ok=bool(info.get('ok'));msg=str(info.get('msg','No details'))[:900]
+            except (OSError,ValueError,TypeError) as exc:
+                ok=False;msg='Repair result could not be read: '+str(exc)
+            self._network_repair_report=None
+            self.packet_status.set(('Network repair complete: ' if ok else 'Repair failed: ')+msg)
+            (messagebox.showinfo if ok else messagebox.showerror)('Network repair',msg)
+        elif time.monotonic()<self._network_repair_deadline:
+            self.root.after(700,self._poll_network_repair)
+        else:
+            self._network_repair_report=None
+            self.packet_status.set('No network repair result was returned. Do not assume repair succeeded.')
+
     def _open_managed_safe(self):
         """Troubleshooting only; normal integrated startup uses auto-connect."""
         exe=managed_gearth_executable()
@@ -1335,6 +1491,10 @@ class ChatOverlayApp:
             self.packet_status.set('Copy failed: '+str(exc)[:100])
 
     def _diagnose_and_repair(self):
+        if not self._network_launch_safe():return
+        if not messagebox.askyesno('Network-sensitive engine diagnostic',
+            'This diagnostic can start G-Earth with administrator rights and alter Habbo routing. '
+            'Brave previously lost internet after an engine startup. Continue?'):return
         if self._diagnostic_running or self._engine_installing:
             self.packet_status.set('A diagnostic or installation is already running.')
             return
@@ -1747,6 +1907,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         G-Earth's own ConnectionController supports --connect flash (AIR).
         No extension flag is passed as a proxy port; the extension port is separate.
         """
+        if not self._network_launch_safe():return False
         path=Path(str(self.config.get('gearth_path') or ''))
         if not path.is_file() and select_if_missing:
             self._select_gearth()
@@ -1875,7 +2036,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.3','author':'Habbo Companion'}
+                  'version':'1.1.4','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -2517,4 +2678,6 @@ def main():
 
 
 if __name__=='__main__':
+    if len(sys.argv)==3 and sys.argv[1]=='--repair-gearth-hosts':
+        raise SystemExit(elevated_gearth_repair(sys.argv[2]))
     main()
