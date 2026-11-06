@@ -179,5 +179,25 @@ class ManagedEngineTests(unittest.TestCase):
         self.assertIn('uuid.uuid4().hex',code)
         self.assertIn("Cache-Control",code)
 
+
+    def test_auto_hide_restores_explicit_advanced_control(self):
+        import inspect
+        code=inspect.getsource(app.ChatOverlayApp._try_hide_gearth)
+        self.assertIn('user32.ShowWindowAsync(hwnd,0)',code)
+        self.assertIn('IsWindowVisible',code)
+        self.assertIn('self.root.after(1000,self._try_hide_gearth)',code)
+        show=inspect.getsource(app.ChatOverlayApp._show_gearth)
+        self.assertIn('self._gearth_manual_window=True',show)
+        self.assertIn('user32.ShowWindowAsync(hwnd,5)',show)
+
+    def test_hide_uses_verified_backend_not_early_launch(self):
+        import inspect
+        code=inspect.getsource(app.ChatOverlayApp._schedule_gearth_hide)
+        self.assertIn('_gearth_extension_port_responds(port)',code)
+        self.assertIn('_gearth_hide_pending',code)
+        self.assertIn('_gearth_manual_window',code)
+        startup=inspect.getsource(app.ChatOverlayApp._launch_gearth)
+        self.assertIn("result=execute(None,'runas',program,parameters,str(path.parent),1)",startup)
+
 if __name__=='__main__':
     unittest.main()

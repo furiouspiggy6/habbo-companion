@@ -1,24 +1,30 @@
-HABBO COMPANION v1.1.2 — ONE-CLICK DIAGNOSIS AND REPAIR
-=====================================================
-This update directly addresses "Engine installed · backend OFFLINE."
+HABBO COMPANION v1.1.3 — AUTO-HIDE INTEGRATED ENGINE WINDOW
+==============================================================
+The user's screenshot confirmed the integrated G-Earth 1.5.4 beta 29 engine
+is automatically launching and says "Waiting for connection" in G-Earth.
+This update retains that successful startup and changes only window handling.
 
-- Removes false Habbo-window detection from blocking G-Earth startup.
-- Adds Diagnose & repair in Packet Viewer. It checks whether G-Earth/Java
-  runs, whether port 9092 responds, and then safely tries the *known working*
-  Windows PowerShell Start-Process -Verb RunAs launch sequence if the engine
-  is not running. Windows UAC consent is still required.
-- Avoids starting duplicate G-Earth processes if one is already detected.
-- Adds Copy diagnostic, for a local report with engine status and PIDs but
-  no packet contents, messages, or account data. Also saves
-  %APPDATA%\HabboViewChat\gearth-diagnostic-last.txt
-- Checks network setup off the UI thread so Companion remains responsive.
-- Fixes the online updater's stale-manifest problem by requesting a fresh
-  cache-busted URL and displaying the feed version.
-- The managed G-Earth 1.5.4 beta engine remains installed and is not
-  downloaded again. User settings and packet rules are preserved.
+- Companion launches the engine normally; NEVER start JavaFX minimized.
+- After the backend responds on extension port 9092, automatically request
+  SW_HIDE for the G-Earth window (not just minimize-to-taskbar).
+- Check IsWindowVisible to verify Windows actually hid the window. Retry
+  for up to 10 attempts; report when window hiding was not confirmed.
+- Add "Hide now" to Packet Viewer for manual hiding without PowerShell.
+- Advanced G-Earth restores the same running engine window without relaunch.
+- After manually opening the window, automatic hiding is paused so it stays
+  accessible until "Hide now" or the next startup.
+- Checkbox now says "Hide engine window when ready." Unchecking it shows
+  the advanced window; checking it requests hiding.
+- Keep the existing G-Earth auto-connect args, packet viewer, manipulator,
+  user settings and current managed runtime unchanged.
+- Additional tests check that hide is after backend readiness, window hide
+  is verified, and advanced restore is supported.
 
-IMPORTANT
-The extension port responding does not prove the Habbo proxy is WAITING.
-Keep Habbo closed until G-Earth is ready; do not attach packet viewer until
-Habbo has loaded, to avoid the previous 60% freeze.
-These Windows behaviors need live verification on the user's PC.
+G-Earth remains an internal Java process; hiding its window does not stop
+its proxy or change game packets. On Windows systems that prevent external
+applications from controlling elevated windows, the window may stay visible;
+Companion reports that rather than pretending hide succeeded.
+
+As before, the extension port being online is not proof that the game proxy
+has reached Waiting for connection. The user confirmed that state manually
+in the screenshot for their current startup.

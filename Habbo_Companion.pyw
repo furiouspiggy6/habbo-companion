@@ -602,6 +602,11 @@ class ChatOverlayApp:
         self.inject_direction_var=tk.StringVar(value='Outgoing')
         self.gearth_process=None
         self._gearth_minimize_tries=0
+        self._gearth_hide_pending=False
+        self._gearth_hide_tries=0
+        self._gearth_hide_failed=False
+        self._gearth_manual_window=False
+        self._gearth_hidden_confirmed=False
         self._gearth_autostart_active=False
         self._gearth_auto_arm_attempted=False
         self._gearth_launch_queued=False
@@ -998,8 +1003,9 @@ class ChatOverlayApp:
         ttk.Label(hotel_opts,text='Game port:',style='Panel.TLabel').pack(side='left')
         ttk.Entry(hotel_opts,textvariable=self.gearth_game_port_var,width=7).pack(side='left',padx=(6,9))
         connection_opts=ttk.Frame(holder,style='Panel.TFrame');connection_opts.pack(fill='x',pady=(0,7))
-        ttk.Checkbutton(connection_opts,text='Keep engine window minimized',variable=self.gearth_minimize_var,
-                        command=self._save_gearth_minimize).pack(side='left',padx=(0,10))
+        ttk.Checkbutton(connection_opts,text='Hide engine window when ready',variable=self.gearth_minimize_var,
+                        command=self._save_gearth_minimize).pack(side='left',padx=(0,6))
+        ttk.Button(connection_opts,text='Hide now',command=self._hide_gearth_now).pack(side='left',padx=(0,10))
         ttk.Label(connection_opts,text='Extension port:',style='Panel.TLabel').pack(side='left')
         ttk.Entry(connection_opts,textvariable=self.gearth_port_var,width=7).pack(side='left',padx=(5,7))
         ttk.Button(connection_opts,text='Connect viewer',command=self._connect_gearth).pack(side='left')
@@ -1282,6 +1288,7 @@ class ChatOverlayApp:
         if self._gearth_extension_port_responds(port):
             self.engine_status_var.set(f'Engine backend: ONLINE (127.0.0.1:{port}); proxy WAITING state not verified')
             self.packet_status.set('G-Earth backend already running; no second engine launched.')
+            self._schedule_gearth_hide(delay_ms=3000)
             return
         exe=managed_gearth_executable()
         if exe:
@@ -1432,6 +1439,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         if self._gearth_extension_port_responds(port):
             self._engine_last_error=''
             self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
+            self._schedule_gearth_hide(delay_ms=4500)
         elif self._engine_last_error:
             self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
         elif not self._engine_installing:
@@ -1497,7 +1505,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # Let JavaFX finish opening normally before minimizing the window.
             # This uses the precise launch style that succeeded in PowerShell.
             if self.gearth_minimize_var.get():
-                self.root.after(3500,self._minimize_gearth_after_backend)
+                self._schedule_gearth_hide(delay_ms=4500)
             self.packet_status.set(f'G-Earth backend detected: port {port} is listening. Flash/AIR auto-connect was requested. The Habbo proxy WAITING state is not independently verified.')
             return
         if time.monotonic()<self._gearth_launch_watch_until:
@@ -1510,20 +1518,74 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             else:
                 self.packet_status.set('Windows accepted the G-Earth start request but no backend was detected within 65 seconds. Check the saved beta EXE or admin prompt; click Launch + auto-connect to retry.')
 
-    def _minimize_gearth_after_backend(self):
-        """Minimize the working GUI only after startup; keep G-Earth running."""
-        if not self.root.winfo_exists() or not self.gearth_minimize_var.get():
-            return
+    def _hide_gearth_now(self):
+        """Explicitly hide the elevated engine GUI, keeping the proxy running."""
+        self.gearth_minimize_var.set(True)
+        self.config['gearth_minimize']=True
+        self.save()
+        self._gearth_manual_window=False
+        self._gearth_hide_failed=False
+        self._gearth_hidden_confirmed=False
+        self._gearth_hide_pending=False
+        self._gearth_hide_tries=0
+        self._schedule_gearth_hide(delay_ms=0)
+
+    def _schedule_gearth_hide(self,delay_ms=3000):
+        """Delay GUI hiding until the already-tested normal startup has finished."""
+        if os.name!='nt' or not self.root.winfo_exists():return
+        if self._gearth_hide_pending or not self.gearth_minimize_var.get():return
+        if self._gearth_manual_window or self._gearth_hide_failed or self._gearth_hidden_confirmed:return
         try:port=int(self.gearth_port_var.get())
-        except (TypeError,ValueError):port=9092
+        except (ValueError,TypeError):port=9092
         if not self._gearth_extension_port_responds(port):
             return
+        self._gearth_hide_pending=True
+        self._gearth_hide_tries=0
+        self.root.after(max(0,int(delay_ms)),self._try_hide_gearth)
+
+    def _try_hide_gearth(self):
+        """Retry G-Earth SW_HIDE and verify that its window is no longer visible."""
+        if not self.root.winfo_exists() or not self._gearth_hide_pending:return
+        if self._gearth_manual_window or not self.gearth_minimize_var.get():
+            self._gearth_hide_pending=False
+            return
+        try:port=int(self.gearth_port_var.get())
+        except (ValueError,TypeError):port=9092
+        if not self._gearth_extension_port_responds(port):
+            self._gearth_hide_pending=False
+            return
         hwnd=self._find_gearth_window()
-        if hwnd:
-            user32=ctypes.WinDLL('user32',use_last_error=True)
-            user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
-            user32.ShowWindowAsync.restype=wintypes.BOOL
-            user32.ShowWindowAsync(hwnd,6)
+        if not hwnd:
+            self._gearth_hide_tries+=1
+            if self._gearth_hide_tries<12:
+                self.root.after(1000,self._try_hide_gearth)
+            else:
+                self._gearth_hide_pending=False
+                self._gearth_hide_failed=True
+                self.packet_status.set('G-Earth backend is online, but its window could not be located to hide.')
+            return
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        user32.IsWindowVisible.argtypes=[wintypes.HWND]
+        user32.IsWindowVisible.restype=wintypes.BOOL
+        user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+        user32.ShowWindowAsync.restype=wintypes.BOOL
+        if not user32.IsWindowVisible(hwnd):
+            self._gearth_hidden_confirmed=True
+            self._gearth_hide_pending=False
+            self.packet_status.set('Engine window hidden. G-Earth keeps running; Advanced G-Earth will show it again.')
+            return
+        user32.ShowWindowAsync(hwnd,0)  # SW_HIDE, not SW_MINIMIZE
+        self._gearth_hide_tries+=1
+        if self._gearth_hide_tries<=10:
+            self.root.after(1000,self._try_hide_gearth)
+        else:
+            self._gearth_hide_pending=False
+            self._gearth_hide_failed=True
+            self.packet_status.set('Windows did not confirm hiding the G-Earth window. The engine remains running. Use Advanced G-Earth if needed.')
+
+    def _minimize_gearth_after_backend(self):
+        """Compatibility with pending callbacks from older startup flows."""
+        self._schedule_gearth_hide(delay_ms=0)
 
     def _launch_habbo_with_gearth(self):
         """Start Habbo only after the user confirms G-Earth's WAITING state.
@@ -1572,8 +1634,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_status.set('Could not launch Habbo: '+str(exc)[:150])
 
     def _save_gearth_minimize(self):
-        self.config['gearth_minimize']=bool(self.gearth_minimize_var.get())
+        enabled=bool(self.gearth_minimize_var.get())
+        self.config['gearth_minimize']=enabled
         self.save()
+        if enabled:
+            self._gearth_manual_window=False
+            self._gearth_hide_failed=False
+            self._gearth_hidden_confirmed=False
+            self._schedule_gearth_hide(delay_ms=0)
+        else:
+            self._gearth_manual_window=True
+            self._gearth_hide_pending=False
+            self._show_gearth()
 
     @staticmethod
     def _find_gearth_window():
@@ -1607,20 +1679,33 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         return found[0] if found else 0
 
     def _show_gearth(self):
+        """Restore G-Earth without relaunching it or reconnecting the AIR proxy."""
         if os.name!='nt':return
+        self._gearth_manual_window=True
+        self._gearth_hide_pending=False
+        self._gearth_hide_failed=False
+        self._gearth_hidden_confirmed=False
         hwnd=self._find_gearth_window()
         if not hwnd:
-            self.packet_status.set('G-Earth window not found. Use Connect Habbo AIR to start it.')
+            self.packet_status.set('G-Earth window not found. Use Start engine if the backend is offline.')
             return
         user32=ctypes.WinDLL('user32',use_last_error=True)
         user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
         user32.ShowWindowAsync.restype=wintypes.BOOL
-        user32.ShowWindowAsync(hwnd,9)  # SW_RESTORE; user can use the native advanced controls
+        user32.ShowWindowAsync(hwnd,5)  # SW_SHOW for a previously hidden window
+        self.root.after(250,lambda h=hwnd:self._restore_gearth_window(h))
+        self.packet_status.set('Advanced G-Earth shown. Auto-hide is paused until you click Hide now or restart Companion.')
+
+    @staticmethod
+    def _restore_gearth_window(hwnd):
+        if os.name!='nt':return
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
+        user32.ShowWindowAsync.restype=wintypes.BOOL
+        user32.ShowWindowAsync(hwnd,9)  # SW_RESTORE
         user32.SetForegroundWindow.argtypes=[wintypes.HWND]
         user32.SetForegroundWindow.restype=wintypes.BOOL
         user32.SetForegroundWindow(hwnd)
-        self._gearth_autostart_active=False
-        self.packet_status.set('Advanced G-Earth window opened. Changes here remain in G-Earth.')
 
     def _minimize_gearth_if_ready(self):
         """Best-effort only: do not use unsupported cross-process window parenting."""
@@ -1718,6 +1803,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self.packet_status.set(f'Could not launch G-Earth (Windows error {error or int(result or 0)}).')
                 return False
             self._gearth_autostart_active=bool(auto_connect)
+            self._gearth_manual_window=False
+            self._gearth_hide_pending=False
+            self._gearth_hide_failed=False
+            self._gearth_hidden_confirmed=False
             self._gearth_auto_arm_attempted=True  # prevent racing a queued startup probe
             self._gearth_started_at=time.monotonic()
             if auto_connect:
@@ -1786,7 +1875,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.2','author':'Habbo Companion'}
+                  'version':'1.1.3','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
