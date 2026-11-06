@@ -1,15 +1,36 @@
 # Habbo Companion
 
-Windows Habbo AIR companion application featuring a configurable screen-fixed chat overlay and a G-Earth-based packet viewer.
+Windows companion panel for Habbo AIR: viewport-filtered, screen-fixed chat overlay, scrollback, original chat-bubble image support, and an optional read-only G-Earth packet viewer.
 
-## Release status
+## Version 1.0.1 — published
 
-v1.0.0 is being prepared for distribution. This public repository contains only application code and release metadata, **not** your personal settings, chat logs, credentials, or game account information.
+**[Download the Windows installer ZIP](https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/Habbo_Companion_Installer_v1.0.1.zip)**
 
-The first installer and subsequent update packages should preserve user settings in `%APPDATA%\HabboViewChat\settings.json`. Client-side Habbo mods are not bundled into standard Companion updates.
+Extract the ZIP and double-click `INSTALL_Habbo_Companion.cmd`. This is a per-user script-based installer, **not** a signed EXE/MSI. Windows needs Python 3 with Tkinter. The installer makes a desktop shortcut and leaves existing settings untouched.
 
-## Notes
+### Updating from an installed v1.0.0
 
-- G-Earth is a separate third-party backend; the Companion does not include G-Earth itself.
-- The application is experimental and has not been fully tested on the user's Windows installation.
-- Only download updates from releases published to this repository.
+In **Habbo Companion > Updates**, enter this HTTPS feed once:
+
+```
+https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json
+```
+
+Click **Save source**, then **Check online** and approve the update. Version 1.0.1 includes that feed as the default for new installations.
+
+The update package is hosted at `Habbo_Companion_Update_v1.0.1.zip`. The feed supplies its SHA-256 checksum. The application backs up its prior version, preserves `%APPDATA%\HabboViewChat\settings.json` and offers rollback. An update never silently installs: you approve each release. Public GitHub hosting does not by itself authenticate a future package, so use only this repository as the source.
+
+### Files and boundaries
+
+- `Habbo_Companion.pyw`: Companion interface and chat overlay
+- `Habbo_Update_Helper.py`: local ZIP verification, updating and rollback
+- `Install_Habbo_Companion.py`, `INSTALL_Habbo_Companion.cmd`: first-time installer
+- `latest.json`: version and SHA-256 feed for online updates
+- `Habbo_Companion_Update_v1.0.1.zip`: update package
+- `Habbo_Companion_Installer_v1.0.1.zip`: first-time install bundle
+
+**Not included:** private settings, chat logs, credentials, the Habbo AIR game client or G-Earth binaries. The G-Earth connection is experimental, runs using your separately installed compatible G-Earth backend and is not a replacement for the G-Earth GUI. Gameplay and Windows interaction were not tested in this environment.
+
+### Publishing future updates
+
+New builds require incrementing the version, generating a verified update ZIP, and publishing it alongside an updated `latest.json` containing its exact SHA-256 and URL. Changing code without updating the release feed will **not** cause Companion to update.
