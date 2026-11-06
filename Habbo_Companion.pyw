@@ -3267,13 +3267,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # instead, so other apps naturally cover it without erasing chat.
             if geom:
                 sx,sy,sw,sh,*_=geom
-                # The wider overlay allows single-line chat and right-aligned whispers.
-            # The existing click-through safeguard still protects the game UI.
-            wide_chat=bool(self.config.get('single_line_bubbles',True)
-                           or self.config.get('whispers_right',True))
-            overlay_w=(sw if wide_chat or not self.config['show_room']
-                       else min(sw,max(260,int(self.config['x'])+int(self.config['width'])+28)))
-            overlay_geom=(sx,sy,overlay_w,sh)
+                # Wide, click-through overlay: full-width chat and right-side whispers.
+                wide_chat=bool(self.config.get('single_line_bubbles',True)
+                               or self.config.get('whispers_right',True))
+                overlay_w=(sw if wide_chat or not self.config['show_room']
+                           else min(sw,max(260,int(self.config['x'])+int(self.config['width'])+28)))
+                overlay_geom=(sx,sy,overlay_w,sh)
                 changed=geom!=self.last_rect or overlay_geom!=self.last_overlay_geometry
                 self.last_rect=geom
                 if changed and not self.clickthrough_failed:
