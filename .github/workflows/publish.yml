@@ -1,0 +1,34 @@
+name: Publish Companion update
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'VERSION'
+      - 'Habbo_Companion.pyw'
+      - 'Habbo_Update_Helper.py'
+      - 'README.txt'
+      - 'scripts/build_release.py'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate code and build release
+        run: |
+          python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py
+          python scripts/build_release.py
+          python Habbo_Update_Helper.py inspect --package "Habbo_Companion_Update_v$(cat VERSION).zip"
+      - name: Commit checked release
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add latest.json app_manifest.json "Habbo_Companion_Update_v$(cat VERSION).zip"
+          git diff --cached --quiet || (git commit -m "Publish Habbo Companion v$(cat VERSION)" && git push)
