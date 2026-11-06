@@ -55,8 +55,9 @@ DEFAULT = dict(
     gearth_port=9092,
     gearth_host='game-us.habbo.com',
     gearth_game_port=30000,
-    gearth_minimize=True,
-    gearth_auto_arm=True,
+    gearth_minimize=False,
+    gearth_auto_arm=False,
+    gearth_startup_safety_v104=True,
     packet_rules=[],
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
@@ -156,6 +157,20 @@ def apply_manipulation_rule(message,direction,packet_text,rules,extension):
 def load_config():
     try:
         saved = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
+        if not isinstance(saved,dict):
+            return DEFAULT.copy()
+        # One-time safety migration: prior releases automatically started AIR
+        # interception and attached extensions before the connection was ready.
+        # Do not keep re-enabling a mode that has frozen Habbo at 60%.
+        if not saved.get('gearth_startup_safety_v104',False):
+            saved['gearth_auto_arm']=False
+            saved['gearth_minimize']=False
+            saved['gearth_startup_safety_v104']=True
+            try:
+                APP_DIR.mkdir(exist_ok=True,parents=True)
+                CONFIG_PATH.write_text(json.dumps(saved,indent=2),encoding='utf-8')
+            except OSError:
+                pass
         return {**DEFAULT,**{k:v for k,v in saved.items() if k in DEFAULT}}
     except (OSError, ValueError, TypeError):
         return DEFAULT.copy()
@@ -750,19 +765,19 @@ class ChatOverlayApp:
         holder.pack(fill='both',expand=True)
         tk.Label(holder,text='PACKET VIEWER',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        tk.Label(holder,text='Connect Habbo AIR here. G-Earth runs as a backend; the packet viewer stays in this app.',
+        tk.Label(holder,text='Safe mode: open G-Earth, click Connect in G-Earth, launch Habbo, THEN connect the packet viewer.',
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
-        ttk.Button(gearth_row,text='Connect Habbo AIR',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Launch manually',command=lambda:self._launch_gearth(auto_connect=False)).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Open G-Earth (safe)',command=lambda:self._launch_gearth(auto_connect=False)).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Auto-connect (experimental)',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
         ttk.Button(gearth_row,text='Advanced G-Earth',command=self._show_gearth).pack(side='left',padx=(0,6))
         ttk.Button(gearth_row,text='Find G-Earth',command=self._select_gearth).pack(side='left',padx=(0,6))
         tk.Label(holder,textvariable=self.gearth_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
         auto_row=ttk.Frame(holder,style='Panel.TFrame');auto_row.pack(fill='x',pady=(0,5))
-        ttk.Checkbutton(auto_row,text='Automatically prepare G-Earth when Companion opens',
+        ttk.Checkbutton(auto_row,text='Auto-connect on startup (experimental; may freeze Habbo at 60%)',
                         variable=self.gearth_auto_arm_var,command=self._save_gearth_auto_arm).pack(side='left')
         launch_row=ttk.Frame(holder,style='Panel.TFrame');launch_row.pack(fill='x',pady=(0,5))
-        ttk.Button(launch_row,text='Launch Habbo (with G-Earth)',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
+        ttk.Button(launch_row,text='Launch Habbo after G-Earth is ready',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
         ttk.Button(launch_row,text='Select Habbo launcher',command=self._select_habbo_launcher).pack(side='left')
         tk.Label(holder,textvariable=self.habbo_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
 
@@ -802,7 +817,7 @@ class ChatOverlayApp:
         tk.Label(holder,text='Packets are stored only in memory (maximum 500). Nothing is sent anywhere.\n'
                  'G-Earth must prepare BEFORE Habbo begins connecting. On Companion startup, approve the\n'
                  'Windows administrator prompt. Launch Habbo only after G-Earth is waiting.\n'
-                 'If auto-connect freezes at 60%, use Launch manually and the beta connection method that worked.',
+                 'If experimental auto-connect freezes at 60%, turn it OFF and use Open G-Earth (safe).',
                  bg='#121a28',fg='#8ea9c1',justify='left',font=('Segoe UI',9),
                  wraplength=620).pack(anchor='w',pady=(12,0))
 
@@ -1012,14 +1027,12 @@ class ChatOverlayApp:
         self._launch_gearth(auto_connect=True,select_if_missing=False)
 
     def _launch_habbo_with_gearth(self):
-        """Launch the selected client only after giving G-Earth time to prepare.
+        """Start Habbo only after the user confirms G-Earth's WAITING state.
 
-        G-Earth has no documented cross-process 'proxy ready' query; a warm-up
-        delay plus running-window check is best effort, not a guarantee.
+        A timer or an open TCP extension port cannot prove that G-Earth has
+        successfully prepared its AIR proxy. Don't auto-connect as a side effect
+        of clicking the Habbo launcher button.
         """
-        if self._gearth_launch_queued:
-            self.packet_status.set('Habbo launch is already queued; please avoid opening it twice.')
-            return
         if os.name!='nt':return
         if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
             self.packet_status.set('Habbo is already running. Close it before starting a new intercepted session.')
@@ -1029,20 +1042,17 @@ class ChatOverlayApp:
             path=self._select_habbo_launcher()
             if path is None:return
         if not self._find_gearth_window():
-            if not self._launch_gearth(auto_connect=True,select_if_missing=True):
-                self.packet_status.set('Could not prepare G-Earth; Habbo was not started.')
-                return
-            delay_ms=8000
-        elif self._gearth_autostart_active:
-            elapsed=time.monotonic()-self._gearth_started_at
-            delay_ms=max(1200,round((8-elapsed)*1000))
-        else:
-            self.packet_status.set('G-Earth is already open, but Companion cannot verify its connection state. '
-                                   'Use Advanced G-Earth to confirm Waiting for connection, then start Habbo normally.')
+            if self._launch_gearth(auto_connect=False,select_if_missing=True):
+                self.packet_status.set('G-Earth opened in safe mode. Select Flash/AIR and click Connect '
+                                       'inside G-Earth. When it says Waiting for connection, click Launch Habbo again.')
             return
-        self._gearth_launch_queued=True
-        self.packet_status.set('Preparing G-Earth before launching Habbo. Windows may request administrator permission.')
-        self.root.after(delay_ms,self._finish_habbo_launch)
+        if not messagebox.askyesno('G-Earth connection check',
+            'Does the G-Earth beta currently display "Waiting for connection"?\n\n'
+            'If not, click No and connect manually in G-Earth first.\n\n'
+            'Only click Yes when G-Earth is actually waiting for Habbo.'):
+            self.packet_status.set('Habbo not launched. Connect G-Earth first and verify its state.')
+            return
+        self._finish_habbo_launch()
 
     def _finish_habbo_launch(self):
         self._gearth_launch_queued=False
@@ -1215,10 +1225,12 @@ class ChatOverlayApp:
             if auto_connect:
                 self.packet_status.set(f'Auto-connect requested for {host}:{game_port} using {path.name}. '
                                        'Start Habbo after G-Earth is ready. Attaching packet viewer...')
-                self._gearth_minimize_tries=0
-                if self.gearth_minimize_var.get():
-                    self.root.after(3000,self._minimize_gearth_if_ready)
-                self._await_gearth_viewer(time.monotonic()+45)
+                # Do not attach the G-Python extension or minimize during the
+                # AIR handshake. A listening extension port is not proof that
+                # G-Earth's game proxy has reached WAITING_FOR_CLIENT.
+                self.packet_status.set(f'Experimental automatic connection requested for {host}:{game_port}. '
+                                       'Keep the G-Earth window visible to check its status. '
+                                       'Use Connect viewer only AFTER Habbo has fully entered the room.')
             else:
                 self.packet_status.set(f'Opened {path.name} without auto-connect flags. In G-Earth, select Flash/AIR, '
                                        'check game-us.habbo.com:30000 and click Connect before starting Habbo.')
@@ -1280,7 +1292,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.0.3','author':'Habbo Companion'}
+                  'version':'1.0.4','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
