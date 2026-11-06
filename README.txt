@@ -1,29 +1,46 @@
-HABBO COMPANION v1.0.9 — VERIFIED STARTUP-LAUNCH FIX
-=====================================================
+HABBO COMPANION v1.1.0 — MANAGED G-EARTH ENGINE
+============================================
 
-PowerShell testing confirmed the user's G-Earth beta starts and reaches
-Waiting for connection with:
-Start-Process -Verb RunAs -ArgumentList
-'--connect flash --host game-us.habbo.com --port 30000'
+One application to open and control: Habbo Companion owns the engine setup,
+launcher, packet viewer, and packet manipulation user interface.
 
-Companion previously sent Windows SW_SHOWMINNOACTIVE (7) at process creation,
-which differs from that successful normal-window launch behavior.
+WHAT HAPPENS WHEN YOU OPEN COMPANION
+- Companion checks whether the G-Earth engine is installed under:
+  %APPDATA%\HabboViewChat\engine\1.5.4-beta-29
+- First run: it imports the previously selected, working G-Earth beta folder
+  into its managed engine directory (no new download), if available.
+- Otherwise: it downloads G-Earth 1.5.4-beta-29, Windows x64, from the
+  official G-Realm/G-Earth GitHub release (about 103 MB) ONCE.
+- The official archive is checked for its SHA-256 digest before extraction:
+  c2bffcf8ef8e9df6b2355fe6c5f45690bc24b7211f9848728209e0a9b2b4a6e6
+- The engine's original MIT license is retained in the install directory.
+- The managed engine is started with the already verified Windows normal
+  launch behavior and G-Earth's native Flash/AIR automatic connect flags.
+- After its extension backend responds on port 9092, Companion can minimize
+  the engine window while it runs in the background.
+- The companion updater remains small; it doesn't redownload 103 MB each time.
 
-FIX
-- Use the same normal-window startup mode (SW_SHOWNORMAL=1) as the successful
-  PowerShell test, with G-Earth's native --connect flash flags.
-- Do NOT start G-Earth minimized. Minimize its GUI 3.5 seconds AFTER local
-  extension port 9092 starts responding, while leaving the Java process running.
-- Explicitly distinguish Windows launch acceptance from backend availability.
-- Never attach the G-Python packet viewer before Habbo completes login.
-- All packet manipulation rules start disabled. Save previous user settings.
-- No change to the working G-Earth path or existing chat functionality.
+BUILT-IN FUNCTIONS
+- Packet Viewer, with capture and packet inspection
+- Packet Manipulator, with opt-in block/replace rules and manual send
+- Chat overlay and chat display settings
+- Engine status directly above Packet Viewer
+- Install/repair engine and advanced troubleshooting controls
 
-IMPORTANT
-The extension port responding does NOT independently prove that the game proxy
-has reached Waiting for connection. Before launching Habbo for the first test,
-check G-Earth's connection state. If Habbo gets stuck at 60% again, disable
-automatic preparation and use the previously working manual Connect sequence.
+LIMITATIONS
+- This is an integrated, self-managed copy of the G-Earth Java engine, NOT an
+  independent Python reimplementation of the underlying G-Earth proxy.
+- The official engine still runs as a separate Java process internally.
+- Windows administrator consent may still be requested by G-Earth.
+- A responsive extension port is NOT proof the Habbo proxy has reached
+  Waiting for connection. Check the proxy state during the first launch.
+- DO NOT attach the packet viewer until Habbo has fully loaded into a room,
+  to avoid repeating the earlier 60% load freeze.
+- Packet manipulation starts OFF, even when rules were saved previously.
+- Test on your PC is still required; the release build validates Python
+  syntax and the update package, not the live Habbo AIR connection.
 
-This changes the launch behavior observed to differ from successful PowerShell
-test. The Windows behavior cannot be verified until tested on the user's PC.
+G-Earth upstream: https://github.com/G-Realm/G-Earth
+G-Earth release: https://github.com/G-Realm/G-Earth/releases/tag/1.5.4-beta-29
+License: MIT, Copyright (c) 2018 sirjonasxx.
+The full license is copied into the local managed engine installation.

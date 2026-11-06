@@ -20,6 +20,11 @@ import subprocess
 import sys
 import urllib.request
 import urllib.parse
+import shutil
+import tempfile
+import zipfile
+import uuid
+from pathlib import PurePosixPath
 import hashlib
 import importlib.util
 from datetime import datetime
@@ -409,6 +414,162 @@ class WinTracker:
             return False
 
 
+# Embedded-engine management: the official G-Earth runtime is installed once
+# under APPDATA, and controlled from the Companion window. It is not repacked
+# into the small auto-update ZIP or rewritten as an incomplete Python proxy.
+GEARTH_ENGINE_VERSION='1.5.4-beta-29'
+GEARTH_ENGINE_URL='https://github.com/G-Realm/G-Earth/releases/download/1.5.4-beta-29/G-Earth-windows-x64.zip'
+GEARTH_ENGINE_SHA256='c2bffcf8ef8e9df6b2355fe6c5f45690bc24b7211f9848728209e0a9b2b4a6e6'
+GEARTH_ENGINE_ARCHIVE_BYTES=103387681
+GEARTH_ENGINE_DIR=APP_DIR/'engine'/GEARTH_ENGINE_VERSION
+GEARTH_ENGINE_MARKER='companion-engine.json'
+
+GEARTH_ENGINE_LICENSE="MIT License\n\nCopyright (c) 2018 sirjonasxx\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+
+
+def managed_gearth_executable():
+    """Return only a complete, previously registered managed runtime."""
+    try:
+        marker=json.loads((GEARTH_ENGINE_DIR/GEARTH_ENGINE_MARKER).read_text(encoding='utf-8'))
+        if marker.get('version')!=GEARTH_ENGINE_VERSION:
+            return None
+        name=marker.get('executable')
+        if not isinstance(name,str) or not name:
+            return None
+        rel=PurePosixPath(name)
+        if rel.is_absolute() or '..' in rel.parts or rel.suffix.lower()!='.exe':
+            return None
+        exe=GEARTH_ENGINE_DIR.joinpath(*rel.parts)
+        return exe if exe.is_file() else None
+    except (OSError,ValueError,TypeError,AttributeError):
+        return None
+
+
+def install_managed_gearth(selected_executable, notify):
+    """Copy the user's chosen working beta, or fetch verified official bytes.
+
+    This function runs in a worker thread. It never accesses Tk widgets.
+    The persistent installation is made visible only after a complete copy,
+    hash check (for official downloads), and an executable-file check.
+    """
+    existing=managed_gearth_executable()
+    if existing:
+        return existing, 'already installed'
+    root=GEARTH_ENGINE_DIR.parent
+    root.mkdir(parents=True,exist_ok=True)
+    staging=root/('staging-'+uuid.uuid4().hex)
+    archive=root/('download-'+uuid.uuid4().hex+'.zip')
+    runtime=staging/'runtime'
+    origin='official verified release'
+    try:
+        candidate=Path(str(selected_executable or ''))
+        use_local=(candidate.is_file() and candidate.suffix.lower()=='.exe'
+                   and candidate.name.lower()=='g-earth.exe'
+                   and '1.5.3' not in str(candidate).lower()
+                   and root.resolve() not in candidate.resolve().parents)
+        if use_local:
+            # The user already selected this executable in Companion, so
+            # reusing the adjacent runtime avoids another ~103 MB download.
+            source_dir=candidate.resolve().parent
+            if not source_dir.is_dir():
+                raise ValueError('Saved G-Earth directory does not exist.')
+            total_size=0
+            count=0
+            for item in source_dir.rglob('*'):
+                if item.is_symlink():
+                    raise ValueError('Cannot import a G-Earth folder containing symbolic links.')
+                if item.is_file():
+                    count+=1
+                    total_size+=item.stat().st_size
+                if count>5000 or total_size>800*1024*1024:
+                    raise ValueError('Existing G-Earth folder is unexpectedly large.')
+            notify('Importing the selected working G-Earth beta into Companion...')
+            shutil.copytree(source_dir,runtime,symlinks=False)
+            exe=runtime/candidate.name
+            origin='existing user-selected executable (not SHA-verified)'
+        else:
+            notify('Downloading the official G-Earth beta engine (~103 MB)...')
+            digest=hashlib.sha256()
+            got=0
+            last_bucket=-1
+            req=urllib.request.Request(GEARTH_ENGINE_URL,headers={'User-Agent':'HabboCompanion/1.1'})
+            with urllib.request.urlopen(req,timeout=30) as response,archive.open('wb') as output:
+                while True:
+                    block=response.read(1024*1024)
+                    if not block:break
+                    got+=len(block)
+                    if got>115*1024*1024:raise ValueError('Engine download exceeds expected size.')
+                    digest.update(block)
+                    output.write(block)
+                    bucket=got//(10*1024*1024)
+                    if bucket!=last_bucket:
+                        notify('Downloading engine: '+str(min(100,got*100//GEARTH_ENGINE_ARCHIVE_BYTES))+'%')
+                        last_bucket=bucket
+            if got!=GEARTH_ENGINE_ARCHIVE_BYTES or digest.hexdigest()!=GEARTH_ENGINE_SHA256:
+                raise ValueError('Official engine download checksum or length does not match.')
+            notify('Engine verified. Installing its runtime...')
+            runtime.mkdir(parents=True,exist_ok=True)
+            total_unpacked=0
+            with zipfile.ZipFile(archive) as package:
+                members=package.infolist()
+                if len(members)>6000:
+                    raise ValueError('Engine archive contains too many files.')
+                for item in members:
+                    name=item.filename
+                    rel=PurePosixPath(name)
+                    if (not name or name.startswith('/') or '\\' in name or
+                            ':' in name or any(part in ('..','') for part in rel.parts)):
+                        raise ValueError('Unsafe file path in engine archive.')
+                    if ((item.external_attr>>16)&0o170000)==0o120000:
+                        raise ValueError('Engine archive contains a symbolic link.')
+                    total_unpacked+=item.file_size
+                    if item.file_size>200*1024*1024 or total_unpacked>850*1024*1024:
+                        raise ValueError('Engine archive exceeds extraction limits.')
+                    dest=runtime.joinpath(*rel.parts)
+                    if item.is_dir():
+                        dest.mkdir(parents=True,exist_ok=True)
+                    else:
+                        dest.parent.mkdir(parents=True,exist_ok=True)
+                        with package.open(item) as inp, dest.open('wb') as out:
+                            shutil.copyfileobj(inp,out,1024*1024)
+            executables=[f for f in runtime.rglob('G-Earth.exe') if f.is_file()]
+            if len(executables)!=1:
+                raise ValueError('Official engine archive has no unique G-Earth.exe.')
+            exe=executables[0]
+        if not exe.is_file():
+            raise ValueError('Managed engine executable could not be located.')
+        # Preserve the upstream MIT license for every locally installed copy.
+        (staging/'THIRD_PARTY_G_EARTH_LICENSE.txt').write_text(
+            GEARTH_ENGINE_LICENSE,encoding='utf-8')
+        marker={
+            'version':GEARTH_ENGINE_VERSION,
+            'executable':exe.relative_to(staging).as_posix(),
+            'origin':origin,
+            'official_download':GEARTH_ENGINE_URL,
+            'official_archive_sha256':GEARTH_ENGINE_SHA256
+        }
+        (staging/GEARTH_ENGINE_MARKER).write_text(
+            json.dumps(marker,indent=2)+'\n',encoding='utf-8')
+        if GEARTH_ENGINE_DIR.exists():
+            # An incomplete older attempt may remain, but don't remove it if
+            # it contains an executable that might still be in use.
+            if any(GEARTH_ENGINE_DIR.rglob('G-Earth.exe')):
+                raise ValueError('Existing managed engine needs manual inspection before replacing.')
+            shutil.rmtree(GEARTH_ENGINE_DIR)
+        staging.rename(GEARTH_ENGINE_DIR)
+        path=managed_gearth_executable()
+        if not path:
+            raise ValueError('Engine installation did not pass final validation.')
+        return path, origin
+    finally:
+        try:archive.unlink(missing_ok=True)
+        except OSError:pass
+        if staging.exists():
+            try:shutil.rmtree(staging)
+            except OSError:pass
+
+
+
 class ChatOverlayApp:
     def __init__(self,root):
         self.root=root;self.root.title('Habbo Companion — Chat + Packets')
@@ -447,6 +608,8 @@ class ChatOverlayApp:
         self._gearth_started_at=0.0
         self._gearth_launch_watch_until=0.0
         self._gearth_launch_started=0.0
+        self._engine_installing=False
+        self.engine_status_var=tk.StringVar(value='Engine: checking installation...')
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
@@ -454,7 +617,7 @@ class ChatOverlayApp:
         self.gearth_port_var=tk.StringVar(value=str(self.config.get('gearth_port',9092)))
         self.gearth_host_var=tk.StringVar(value=str(self.config.get('gearth_host','game-us.habbo.com')))
         self.gearth_game_port_var=tk.StringVar(value=str(self.config.get('gearth_game_port',30000)))
-        self.gearth_path_display=tk.StringVar(value='Selected G-Earth: '+str(self.config.get('gearth_path') or '(none)'))
+        self.gearth_path_display=tk.StringVar(value='Managed engine: '+str(managed_gearth_executable() or '(initial setup pending)'))
         self.packet_status=tk.StringVar(value=('Starting G-Earth in background. Packet Viewer stays blank until Habbo connects.' if self.config.get('gearth_auto_arm') else 'G-Earth auto-start is OFF. Packet Viewer stays blank until Habbo connects.'))
         self.update_status=tk.StringVar(value='Ready to install a verified update ZIP.')
         self.update_manifest_var=tk.StringVar(value=str(self.config.get('update_manifest_url','')))
@@ -495,6 +658,7 @@ class ChatOverlayApp:
         # Pre-arm before the AIR client connects. Starting only after a Habbo
         # window is visible may be too late for its initial network handshake.
         self.root.after(1800,self._auto_prepare_gearth)
+        self.root.after(2800,self._engine_heartbeat)
 
     def _make_overlay(self):
         self.overlay=tk.Toplevel(self.root)
@@ -800,16 +964,18 @@ class ChatOverlayApp:
         holder.pack(fill='both',expand=True)
         tk.Label(holder,text='PACKET VIEWER',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        tk.Label(holder,text='Background mode: Companion runs G-Earth minimized and requests Flash/AIR connection. Its extension port shows whether the backend is responding, not whether Habbo proxy is ready. Packet Viewer stays empty until Habbo loads.',
+        tk.Label(holder,text='Companion manages the official G-Earth engine internally. It imports your selected beta or installs a SHA-256-verified official copy once, then launches the proxy. No separate G-Earth installation needed.',
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
+        tk.Label(holder,textvariable=self.engine_status_var,bg='#121a28',fg='#76caab',
+                 font=('Segoe UI Semibold',10),wraplength=620,justify='left').pack(anchor='w',pady=(0,9))
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
-        ttk.Button(gearth_row,text='Open G-Earth (safe)',command=lambda:self._launch_gearth(auto_connect=False)).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Launch + auto-connect',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Open engine (safe)',command=self._open_managed_safe).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,6))
         ttk.Button(gearth_row,text='Advanced G-Earth',command=self._show_gearth).pack(side='left',padx=(0,6))
-        ttk.Button(gearth_row,text='Find G-Earth',command=self._select_gearth).pack(side='left',padx=(0,6))
+        ttk.Button(gearth_row,text='Install / repair',command=self._start_integrated_engine).pack(side='left',padx=(0,6))
         tk.Label(holder,textvariable=self.gearth_path_display,bg='#121a28',fg='#8ea9c1',font=('Segoe UI',9),wraplength=620,justify='left').pack(anchor='w',fill='x',pady=(0,6))
         auto_row=ttk.Frame(holder,style='Panel.TFrame');auto_row.pack(fill='x',pady=(0,5))
-        ttk.Checkbutton(auto_row,text='Automatically prepare G-Earth when Companion opens',
+        ttk.Checkbutton(auto_row,text='Automatically start the integrated engine with Companion',
                         variable=self.gearth_auto_arm_var,command=self._save_gearth_auto_arm).pack(side='left')
         launch_row=ttk.Frame(holder,style='Panel.TFrame');launch_row.pack(fill='x',pady=(0,5))
         ttk.Button(launch_row,text='Launch Habbo after G-Earth is ready',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
@@ -822,7 +988,7 @@ class ChatOverlayApp:
         ttk.Label(hotel_opts,text='Game port:',style='Panel.TLabel').pack(side='left')
         ttk.Entry(hotel_opts,textvariable=self.gearth_game_port_var,width=7).pack(side='left',padx=(6,9))
         connection_opts=ttk.Frame(holder,style='Panel.TFrame');connection_opts.pack(fill='x',pady=(0,7))
-        ttk.Checkbutton(connection_opts,text='Minimize G-Earth after connecting',variable=self.gearth_minimize_var,
+        ttk.Checkbutton(connection_opts,text='Keep engine window minimized',variable=self.gearth_minimize_var,
                         command=self._save_gearth_minimize).pack(side='left',padx=(0,10))
         ttk.Label(connection_opts,text='Extension port:',style='Panel.TLabel').pack(side='left')
         ttk.Entry(connection_opts,textvariable=self.gearth_port_var,width=7).pack(side='left',padx=(5,7))
@@ -1081,12 +1247,77 @@ class ChatOverlayApp:
         return ranked[0]
 
     def _auto_prepare_gearth(self):
-        """Launch G-Earth directly and wait for its backend, not a GUI window."""
+        """Prepare the internal engine, then request G-Earth's own AIR proxy."""
         if not self.gearth_auto_arm_var.get():
-            self.packet_status.set('Automatic G-Earth background launch is disabled.')
+            self.engine_status_var.set('Engine: automatic startup disabled')
             return
-        if self._gearth_auto_arm_attempted:return
-        self._start_gearth_direct(select_if_missing=False)
+        self._start_integrated_engine()
+
+    def _start_integrated_engine(self):
+        """A single Companion action installs (once), starts, and monitors."""
+        if self._engine_installing:
+            self.engine_status_var.set('Engine: installation already in progress')
+            return
+        if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
+            self.engine_status_var.set('Engine: Habbo already open; start the engine before login')
+            return
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if self._gearth_extension_port_responds(port):
+            self.engine_status_var.set(f'Engine backend: ONLINE (127.0.0.1:{port}); proxy WAITING state not verified')
+            self.packet_status.set('G-Earth backend already running; no second engine launched.')
+            return
+        exe=managed_gearth_executable()
+        if exe:
+            self.config['gearth_path']=str(exe)
+            self.gearth_path_display.set('Managed engine: '+str(exe))
+            self.save()
+            self.engine_status_var.set('Engine: installed; starting proxy...')
+            self._start_gearth_direct(select_if_missing=False)
+            return
+        self._engine_installing=True
+        self.engine_status_var.set('Engine: installing the managed runtime...')
+        self.packet_status.set('Setting up G-Earth inside Companion. Keep Habbo closed.')
+        seed=str(self.config.get('gearth_path') or '')
+        threading.Thread(target=self._engine_install_worker,
+                         args=(seed,),daemon=True).start()
+
+    def _engine_install_worker(self,seed):
+        def status(message):
+            self._packet_put(('engine_status',message))
+        try:
+            exe,origin=install_managed_gearth(seed,status)
+            self._packet_put(('engine_installed',str(exe),origin))
+        except Exception as exc:
+            self._packet_put(('engine_error',f'{type(exc).__name__}: {str(exc)[:200]}'))
+
+    def _open_managed_safe(self):
+        """Troubleshooting only; normal integrated startup uses auto-connect."""
+        exe=managed_gearth_executable()
+        if not exe:
+            self._start_integrated_engine()
+            self.packet_status.set('Setting up the managed engine. Try advanced mode after setup if needed.')
+            return
+        self.config['gearth_path']=str(exe)
+        self.save()
+        self._launch_gearth(auto_connect=False,select_if_missing=False)
+
+    def _engine_heartbeat(self):
+        """Expose backend and installation state without trusting a GUI title."""
+        if not self.root.winfo_exists():return
+        try:port=int(self.gearth_port_var.get())
+        except (TypeError,ValueError):port=9092
+        if self._gearth_extension_port_responds(port):
+            self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
+        elif not self._engine_installing:
+            exe=managed_gearth_executable()
+            if self._gearth_launch_watch_until>time.monotonic():
+                self.engine_status_var.set('Engine: starting; waiting for backend...')
+            elif exe:
+                self.engine_status_var.set('Engine: installed · backend OFFLINE')
+            else:
+                self.engine_status_var.set('Engine: not yet installed')
+        self.root.after(2500,self._engine_heartbeat)
 
     def _start_gearth_direct(self,select_if_missing=True):
         if os.name!='nt':
@@ -1184,9 +1415,8 @@ class ChatOverlayApp:
             path=self._select_habbo_launcher()
             if path is None:return
         if not self._find_gearth_window():
-            if self._launch_gearth(auto_connect=False,select_if_missing=True):
-                self.packet_status.set('G-Earth opened in safe mode. Select Flash/AIR and click Connect '
-                                       'inside G-Earth. When it says Waiting for connection, click Launch Habbo again.')
+            self._start_integrated_engine()
+            self.packet_status.set('Starting the internal G-Earth engine. Wait until the proxy is ready, then launch Habbo again.')
             return
         if not messagebox.askyesno('G-Earth connection check',
             'Does the G-Earth beta currently display "Waiting for connection"?\n\n'
@@ -1281,8 +1511,8 @@ class ChatOverlayApp:
             self.root.after(900,self._minimize_gearth_if_ready)
 
     def _connect_habbo_air(self):
-        """Launch directly, requesting the beta's native Flash/AIR auto-connect."""
-        self._start_gearth_direct(select_if_missing=True)
+        """Start the managed engine instead of requiring a separately selected EXE."""
+        self._start_integrated_engine()
 
     def _gearth_connection_target(self):
         host=self.gearth_host_var.get().strip().lower()
@@ -1430,7 +1660,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.0.9','author':'Habbo Companion'}
+                  'version':'1.1.0','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -1475,6 +1705,22 @@ class ChatOverlayApp:
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='engine_status':
+                self.engine_status_var.set('Engine setup: '+item[1])
+                continue
+            if item[0]=='engine_error':
+                self._engine_installing=False
+                self.engine_status_var.set('Engine install FAILED: '+item[1])
+                self.packet_status.set('Engine setup failed; use Install / repair to retry. '+item[1])
+                continue
+            if item[0]=='engine_installed':
+                self._engine_installing=False
+                self.config['gearth_path']=item[1]
+                self.gearth_path_display.set('Managed engine: '+item[1])
+                self.save()
+                self.engine_status_var.set('Engine installed from '+item[2]+'. Starting...')
+                self._start_gearth_direct(select_if_missing=False)
+                continue
             if item[0]=='status':
                 self.packet_status.set(item[1]);continue
             if item[0]=='manip_status':
