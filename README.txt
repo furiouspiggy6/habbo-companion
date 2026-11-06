@@ -1,17 +1,20 @@
-HABBO COMPANION v1.0.6 — VISIBLE G-EARTH STARTUP
+HABBO COMPANION v1.0.7 — DIRECT G-EARTH STARTUP
 ================================================
 
-When Companion opens, it attempts to prepare the saved G-Earth beta before Habbo starts.
+Open Habbo Companion BEFORE Habbo. Companion now starts the selected G-Earth
+beta directly through Windows ShellExecuteW, requesting admin consent and
+G-Earth's native --connect flash --host ... --port ... options.
+No hidden PowerShell helper or unreliable JavaFX accessibility button clicks.
 
-- Fix: request a NORMAL visible G-Earth window from the elevated PowerShell helper.
-- Fix: disable auto-minimize once, so the G-Earth window is visible for troubleshooting.
-- Safe fallback: if the helper never creates a G-Earth window, use the known-working
-  direct Windows launch without automatic connection flags. This may request UAC again.
-- The helper still attempts the usual G-Earth Connect control when available.
-- Keep Habbo closed until G-Earth says Waiting for connection.
-- Only attach the packet viewer after entering Habbo; packet rules remain OFF.
-- Saved chat settings, G-Earth beta path and packet rules are preserved.
+- Direct native launcher, with launch result and a real-window timeout status
+- G-Earth version window titles detected more flexibly
+- Auto-connect uses G-Earth's own native connection code, not a simulated click
+- Packets remain blank before Habbo connects, which is normal
+- Packet viewer NOT attached until after Habbo fully loads; no early G-Python
+- All personal settings remain; packet rules always OFF at startup
 
-If automatic Connect is not available through Windows UI Automation, G-Earth remains
-visible for one manual Connect click. This version cannot guarantee that native
-JavaFX controls are exposed to automation and has not been tested on the user's PC.
+Confirm that G-Earth shows Waiting for connection before starting Habbo.
+This direct native auto-connect is experimental on this PC, because previous
+CLI attempts coincided with a 60% hang. If that happens again, disable automatic
+G-Earth launch and use Open G-Earth (safe), then click Connect manually.
+G-Earth may still request Windows admin permission.
