@@ -297,5 +297,92 @@ class ManagedEngineTests(unittest.TestCase):
         launch=inspect.getsource(app.ChatOverlayApp._launch_habbo_with_gearth)
         self.assertIn('_gearth_extension_port_responds(port)',launch)
 
+
+    def test_replay_interval_limited_and_finite(self):
+        self.assertEqual(app.validate_replay_interval('2.5'),2.5)
+        for value in ['0.1','1.99','121','NaN','Inf','-Inf','x','']:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    app.validate_replay_interval(value)
+
+    def test_replay_rejects_incoming_and_disconnected(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock,patch
+        class V:
+            def __init__(self,value):self.v=value
+            def get(self):return self.v
+            def set(self,v):self.v=v
+        obj=object.__new__(app.ChatOverlayApp)
+        obj._replay_running=False
+        obj.packet_started=True
+        obj.packet_extension=SimpleNamespace(string_to_packet=lambda _:None)
+        obj._habbo_session_connected=True
+        obj.inject_direction_var=V('Incoming')
+        obj.replay_status_var=V('')
+        obj.inject_expression=SimpleNamespace(get=lambda *args:'{out:UseFurniture}{i:123}')
+        obj._start_packet_replay()
+        self.assertIn('outgoing',obj.replay_status_var.get())
+        obj.inject_direction_var.set('Outgoing')
+        obj._habbo_session_connected=False
+        obj._start_packet_replay()
+        self.assertIn('Enter a Habbo room',obj.replay_status_var.get())
+
+    def test_replay_tick_sends_one_then_schedules_and_stops(self):
+        from types import SimpleNamespace
+        class V:
+            def __init__(self):self.value=''
+            def set(self,v):self.value=v
+            def get(self):return self.value
+        class Packet:
+            def is_incomplete_packet(self):return False
+            def is_corrupted(self):return False
+        class Root:
+            def __init__(self):self.calls=[];self.cancelled=[]
+            def after(self,delay,cb):
+                self.calls.append((delay,cb));return 'timer1'
+            def after_cancel(self,timer):self.cancelled.append(timer)
+        ext=SimpleNamespace(string_to_packet=lambda _:Packet(),send_to_server=lambda p:True)
+        obj=object.__new__(app.ChatOverlayApp)
+        obj.root=Root()
+        obj.packet_started=True
+        obj.packet_extension=ext
+        obj._habbo_session_connected=True
+        obj._replay_running=True
+        obj._replay_generation=4
+        obj._replay_after_id=None
+        obj._replay_count=0
+        obj._replay_interval=2.5
+        obj._replay_expr='{out:UseFurniture}{i:123}'
+        obj.replay_status_var=V()
+        obj._packet_replay_tick(4)
+        self.assertEqual(obj._replay_count,1)
+        self.assertEqual(obj.root.calls[0][0],2500)
+        obj._stop_packet_replay()
+        self.assertFalse(obj._replay_running)
+        self.assertEqual(obj.root.cancelled,['timer1'])
+        obj._packet_replay_tick(4)
+        self.assertEqual(obj._replay_count,1)
+
+    def test_replay_disconnect_stops_without_further_send(self):
+        from types import SimpleNamespace
+        class V:
+            def __init__(self):self.value=''
+            def set(self,v):self.value=v
+        calls=[]
+        obj=object.__new__(app.ChatOverlayApp)
+        obj.root=SimpleNamespace(after_cancel=lambda _id:None)
+        obj.replay_status_var=V()
+        obj._replay_running=True
+        obj._replay_generation=1
+        obj._replay_after_id=None
+        obj._replay_count=0
+        obj._habbo_session_connected=False
+        obj.packet_started=True
+        obj.packet_extension=SimpleNamespace(send_to_server=lambda _:calls.append(True))
+        obj._packet_replay_tick(1)
+        self.assertFalse(obj._replay_running)
+        self.assertEqual(calls,[])
+
+
 if __name__=='__main__':
     unittest.main()

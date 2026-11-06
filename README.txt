@@ -1,28 +1,31 @@
-HABBO COMPANION v1.1.6 — SINGLE-WINDOW USER INTERFACE
-=======================================================
-Habbo Companion now provides the main user-facing workspace for Habbo,
-G-Earth's already-working connection engine, packet viewer and manipulator.
+HABBO COMPANION v1.1.7 — CONTROLLED OUTGOING PACKET REPEAT
+============================================================
+New: repeat a captured outgoing cup/interact packet without hardcoding
+hotel-specific header IDs.
 
-- Primary controls: Start engine, Launch Habbo and Connect packet viewer.
-- Reorganised Packet Viewer into one CONNECTION + PACKETS workspace.
-- Original G-Earth window is normally hidden after startup (1.8 seconds
-  after the extension backend responds). Engine still starts in normal
-  window mode to preserve the tested JavaFX and AIR initialisation.
-- One-time migration turns ON the "hide original window" setting only;
-  it does not change or re-enable your engine automatic-start preference.
-- "Advanced settings" expands within Companion to show the original engine
-  window for troubleshooting, return to single-window view, set hotel and
-  ports, inspect the network, or use recovery and diagnostic tools.
-- Launch Habbo uses the internal engine's backend check rather than
-  requiring its original window to be visible. Because port 9092 does not
-  independently confirm the proxy WAITING state, Habbo launch still
-  requires confirmation.
-- Packet viewer is deliberately connected manually AFTER Habbo loads
-  into a room to avoid the previously reproduced 60% loading freeze.
-- Windows proxy/hosts safety controls and consent requirements remain.
+WORKFLOW
+1. Connect G-Earth and load Habbo into a room.
+2. In Packet Viewer, click Connect packet viewer if needed.
+3. Interact with a cup or dispenser once.
+4. Select the corresponding Outgoing packet in Packet Viewer.
+5. Open Packet Manipulator and click Load selected viewer packet.
+6. Set repeat interval (default 2.5 seconds; minimum 2, maximum 120).
+7. Click Start repeating, review the exact packet and confirm.
+8. Click STOP to end replay. Replay also stops on Habbo connection_end,
+   extension errors, or when Companion closes.
 
-IMPORTANT: This is a SINGLE USER-FACING WINDOW, not one OS process. The
-MIT-licensed G-Earth Java process still runs internally in the background.
-Windows UAC may be required, and elevated windows may resist hiding under
-some Windows configurations. If hiding fails, Companion reports it.
-The live behaviour must still be tested on the user's PC.
+SAFETY
+- No automatic packet replay on startup. Existing rules remain disabled
+  until explicitly enabled. No packet ID or payload is guessed.
+- Only Outgoing packets are allowed; incoming injection is not replayed.
+- A fresh parsed packet is sent each interval using G-Python's
+  send_to_server method, not an unbounded worker/flood loop.
+- Repeat interval is validated against NaN/Infinity and rate-limited to
+  at least two seconds. Send failures stop the timer.
+- Session connection events update replay readiness and cancel replay.
+- No changes to Windows proxy, hosts, Flash/AIR connection launch or
+  the viewer-attachment timing that previously froze Habbo at 60%.
+- G-Earth/Java engine remains a separate background process.
+
+Repeating a game interaction may be limited by Habbo's server and may
+violate game automation rules. Use it only in your own game session.

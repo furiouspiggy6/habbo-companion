@@ -26,6 +26,7 @@ import zipfile
 import uuid
 from pathlib import PurePosixPath
 import hashlib
+import math
 import importlib.util
 from datetime import datetime
 import tkinter as tk
@@ -118,6 +119,17 @@ def get_message_colors(msg, theme):
 # G-Earth manipulation rules; intentionally disabled on every app startup.
 RULE_DIRECTIONS=('Incoming','Outgoing','Both')
 RULE_ACTIONS=('Block','Replace')
+
+def validate_replay_interval(value):
+    """Enforce a conservative single-packet repeat rate, in seconds."""
+    try:
+        interval=float(str(value).strip())
+    except (ValueError,TypeError,OverflowError):
+        raise ValueError('Enter a delay in seconds (2 to 120).')
+    if not math.isfinite(interval) or not 2.0<=interval<=120.0:
+        raise ValueError('Repeat delay must be between 2 and 120 seconds.')
+    return interval
+
 
 def validate_manipulation_rule(candidate):
     if not isinstance(candidate,dict):raise ValueError('Invalid rule')
@@ -724,6 +736,15 @@ class ChatOverlayApp:
         self.rule_contains_var=tk.StringVar(value='')
         self.rule_enabled_var=tk.BooleanVar(value=True)
         self.inject_direction_var=tk.StringVar(value='Outgoing')
+        self.replay_interval_var=tk.StringVar(value='2.5')
+        self.replay_status_var=tk.StringVar(value='Repeat OFF. Load an outgoing packet and start manually.')
+        self._replay_running=False
+        self._replay_expr=''
+        self._replay_interval=2.5
+        self._replay_count=0
+        self._replay_after_id=None
+        self._replay_generation=0
+        self._habbo_session_connected=False
         self.gearth_process=None
         self._gearth_minimize_tries=0
         self._gearth_hide_pending=False
@@ -1251,9 +1272,19 @@ class ChatOverlayApp:
         self.inject_expression=tk.Text(holder,height=3,wrap='word',font=('Consolas',9),bg='#0a1120',fg='#dceeff',insertbackground='white')
         self.inject_expression.pack(fill='x',pady=(3,6))
         ttk.Button(holder,text='Send packet once',command=self._send_manual_packet).pack(anchor='w')
-        ttk.Label(holder,text='Changing or blocking essential packets can disconnect Habbo. Rules stay saved but never auto-enable. '
-                  'Only send packets for your own session. No automatic replay or flood controls.',
-                  style='Panel.TLabel',wraplength=630).pack(anchor='w',pady=(8,0))
+        repeat_row=ttk.Frame(holder,style='Panel.TFrame')
+        repeat_row.pack(fill='x',pady=(8,3))
+        ttk.Label(repeat_row,text='Repeat outgoing packet every',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(repeat_row,textvariable=self.replay_interval_var,width=6).pack(side='left',padx=(6,5))
+        ttk.Label(repeat_row,text='seconds',style='Panel.TLabel').pack(side='left',padx=(0,10))
+        ttk.Button(repeat_row,text='Start repeating',command=self._start_packet_replay).pack(side='left',padx=(0,6))
+        ttk.Button(repeat_row,text='STOP',command=self._stop_packet_replay).pack(side='left')
+        ttk.Label(holder,textvariable=self.replay_status_var,style='Panel.TLabel',
+                  wraplength=640).pack(anchor='w',pady=(0,4))
+        ttk.Label(holder,text='Packet replay is OFF by default and sends only your selected outgoing action. '
+                  'Minimum delay: 2 seconds. Stops on disconnect or when Companion closes. '
+                  'Avoid excessive automation or violating Habbo rules.',
+                  style='Panel.TLabel',wraplength=630).pack(anchor='w',pady=(4,0))
         self._refresh_manipulation_rules()
 
     def _toggle_manipulator(self):
@@ -1354,6 +1385,90 @@ class ChatOverlayApp:
             success=(ext.send_to_server(packet) if direction=='Outgoing' else ext.send_to_client(packet))
             self.manipulator_status.set('Packet send requested.' if success is not False else 'G-Earth rejected the packet.')
         except Exception as exc:self.manipulator_status.set(f'Send failed: {str(exc)[:160]}')
+
+    def _start_packet_replay(self):
+        """Replay ONE user-selected outgoing packet at a controlled interval.
+
+        Never infer a packet ID or silently repeat an arbitrary incoming packet.
+        Never start before Habbo and the G-Python extension are connected.
+        """
+        if self._replay_running:
+            self.replay_status_var.set('Repeat already running; click STOP first.')
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.replay_status_var.set('Enter a Habbo room and connect Packet Viewer first.')
+            return
+        if self.inject_direction_var.get()!='Outgoing':
+            self.replay_status_var.set('Only outgoing client-to-server packets may be repeated.')
+            return
+        expr=self.inject_expression.get('1.0','end').strip()
+        if not 0<len(expr)<=4096:
+            self.replay_status_var.set('Load one outgoing cup-action packet from Packet Viewer first.')
+            return
+        if expr.startswith('[Block') or expr.startswith('[Replace'):
+            self.replay_status_var.set('This packet contains rule annotations. Capture it without manipulation.')
+            return
+        try:
+            delay=validate_replay_interval(self.replay_interval_var.get())
+            packet=self.packet_extension.string_to_packet(expr)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not parse this packet. Use an outgoing packet from the viewer.')
+        except (ValueError,TypeError,AttributeError) as exc:
+            self.replay_status_var.set('Repeat not started: '+str(exc)[:140])
+            return
+        if not messagebox.askyesno('Repeat outgoing action',
+            'Repeat this exact outgoing packet every '+format(delay,'.2f')+' seconds until STOP '
+            'or until Habbo disconnects?\n\n'
+            'Confirm this packet belongs to the cup action. '
+            'It will repeatedly send a game action and may be rate-limited by Habbo.',
+            parent=self.root):
+            self.replay_status_var.set('Repeat cancelled.')
+            return
+        self._replay_generation+=1
+        self._replay_running=True
+        self._replay_count=0
+        self._replay_expr=expr
+        self._replay_interval=delay
+        self.replay_status_var.set(f'Repeating outgoing cup action every {delay:g}s. Sent: 0')
+        self._replay_after_id=self.root.after(0,lambda generation=self._replay_generation:
+                                                 self._packet_replay_tick(generation))
+
+    def _packet_replay_tick(self,generation):
+        self._replay_after_id=None
+        if not self._replay_running or generation!=self._replay_generation:
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self._stop_packet_replay('Habbo or G-Earth disconnected. Repeat automatically stopped.')
+            return
+        try:
+            ext=self.packet_extension
+            packet=ext.string_to_packet(self._replay_expr)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('Packet expression became invalid.')
+            success=ext.send_to_server(packet)
+            if success is False:
+                raise RuntimeError('G-Earth rejected the send.')
+        except Exception as exc:
+            self._stop_packet_replay('Repeat stopped after send error: '+str(exc)[:140])
+            return
+        self._replay_count+=1
+        self.replay_status_var.set(
+            f'Repeating outgoing action every {self._replay_interval:g}s. Sent: {self._replay_count}')
+        if self._replay_running and generation==self._replay_generation:
+            self._replay_after_id=self.root.after(
+                round(self._replay_interval*1000),
+                lambda gen=generation:self._packet_replay_tick(gen))
+
+    def _stop_packet_replay(self,reason=None):
+        self._replay_running=False
+        self._replay_generation+=1
+        after_id=self._replay_after_id
+        self._replay_after_id=None
+        if after_id is not None:
+            try:self.root.after_cancel(after_id)
+            except (tk.TclError,AttributeError):pass
+        status=reason or 'Repeat stopped by user.'
+        self.replay_status_var.set(f'{status} Sent: {self._replay_count}')
 
     def _select_gearth(self):
         path=filedialog.askopenfilename(title='Select G-Earth.exe or G-Earth.jar',
@@ -2197,15 +2312,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.6','author':'Habbo Companion'}
+                  'version':'1.1.7','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
                 self._packet_put(('status',name))
             ext.on_event('init',lambda:event('G-Earth extension connected.'))
-            ext.on_event('connection_start',lambda:event('Habbo AIR connected; capturing packets in Habbo Companion.'))
+            def connected():
+                self._habbo_session_connected=True
+                self._packet_put(('session_connection',True))
+                event('Habbo AIR connected; capturing packets in Habbo Companion.')
+            ext.on_event('connection_start',connected)
             def disconnected():
+                self._habbo_session_connected=False
                 self.manipulation_enabled=False
+                self._packet_put(('session_connection',False))
                 self._packet_put(('manip_status','G-Earth disconnected. Manipulation automatically OFF.'))
                 self._packet_put(('manip_off',))
                 event('Habbo traffic disconnected.')
@@ -2231,6 +2352,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             ext.start()
         except Exception as exc:
             self.packet_started=False
+            self._habbo_session_connected=False
+            self.packet_extension=None
+            self._packet_put(('session_connection',False))
             self._packet_put(('status',f'G-Earth connection failed: {type(exc).__name__}: {str(exc)[:190]}'))
 
     def _packet_put(self,item):
@@ -2268,6 +2392,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='status':
                 self.packet_status.set(item[1]);continue
+            if item[0]=='session_connection':
+                if not item[1]:
+                    self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
+                continue
             if item[0]=='manip_status':
                 self.manipulator_status.set(item[1]);continue
             if item[0]=='manip_off':
@@ -2807,6 +2935,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.root.after(120,self.tick)
 
     def close(self):
+        self._stop_packet_replay('Companion closed. Repeat stopped.')
         if self.wheel_hook and os.name=='nt':
             try:
                 u=self.tracker.user32
