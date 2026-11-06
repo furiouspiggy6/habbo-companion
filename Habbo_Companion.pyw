@@ -1656,7 +1656,7 @@ class ChatOverlayApp:
         Never infer a packet ID or silently repeat an arbitrary incoming packet.
         Never start before Habbo and the G-Python extension are connected.
         """
-        if self._coffee_running:
+        if getattr(self,'_coffee_running',False):
             self.replay_status_var.set('Stop the coffee pass loop before starting the packet repeater.')
             return
         if self._replay_running:
