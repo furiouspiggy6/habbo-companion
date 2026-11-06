@@ -752,6 +752,8 @@ class ChatOverlayApp:
         self.packet_active=False
         self.packet_started=False
         self.packet_extension=None
+        self._packet_auto_retry_after=0.0
+        self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
         self.packet_rules=[]
         for rule in self.config.get('packet_rules',[]):
             try:self.packet_rules.append(validate_manipulation_rule(rule))
@@ -789,6 +791,9 @@ class ChatOverlayApp:
         self._coffee_completed=0
         self._coffee_generation=0
         self._coffee_after_id=None
+        self._coffee_start_queued=False
+        self._coffee_queue_after_id=None
+        self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
         self.gearth_process=None
         self._gearth_minimize_tries=0
@@ -1179,9 +1184,9 @@ class ChatOverlayApp:
         main.pack(fill='x',pady=(0,9))
         ttk.Button(main,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,7))
         ttk.Button(main,text='Launch Habbo',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
-        ttk.Button(main,text='Connect packet viewer',command=self._connect_gearth).pack(side='left')
-        tk.Label(holder,text='After Habbo fully loads into a room, click Connect packet viewer. '
-                 'Do not attach during the AIR loading screen.',
+        ttk.Button(main,text='Connect packet tools (manual)',command=self._connect_gearth).pack(side='left')
+        tk.Label(holder,text='Packet tools attach automatically when safe. Coffee Pass Loop can '
+                 'also connect directly; this manual button is only for troubleshooting.',
                  fg='#93a7bc',bg='#121a28',font=('Segoe UI',9),
                  wraplength=625,justify='left').pack(anchor='w',pady=(0,8))
         small=ttk.Frame(holder,style='Panel.TFrame')
@@ -1360,6 +1365,8 @@ class ChatOverlayApp:
         entry('Recipient target ID',self.coffee_recipient_var,'PassCarryItem')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,11))
         ttk.Label(holder,
                   text='Each cycle sends 4 packets: Cup 1 → pass → Cup 2 → pass. '
                        'Recipient IDs come from your captured PassCarryItem action; re-check the ID after rejoining a room.',
@@ -1383,7 +1390,24 @@ class ChatOverlayApp:
             self.coffee_status_var.set('Stop the single-packet repeater before starting this loop.')
             return
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
-            self.coffee_status_var.set('Enter a Habbo room and connect Packet Viewer to G-Earth first.')
+            if self._coffee_start_queued:
+                self.coffee_status_var.set('Preparing the G-Earth connection; the loop has not started yet.')
+                return
+            try:port=int(self.gearth_port_var.get())
+            except (TypeError,ValueError):port=0
+            if not self._gearth_extension_port_responds(port):
+                self.coffee_status_var.set('G-Earth backend is offline. Start the engine first.')
+                return
+            if not self.packet_started:
+                self._connect_gearth(capture=False)
+            if not self.packet_started:
+                self.coffee_status_var.set('Could not attach packet tools. See connection status above.')
+                return
+            self._coffee_start_queued=True
+            self._coffee_queue_deadline=time.monotonic()+20
+            self.coffee_status_var.set('Waiting for G-Earth and the Habbo room connection. No coffee packets sent yet.')
+            self._coffee_queue_after_id=self.root.after(
+                350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
         try:
             sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
@@ -1429,6 +1453,23 @@ class ChatOverlayApp:
         self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
                                                  self._coffee_loop_tick(generation))
 
+    def _check_queued_coffee_start(self,generation):
+        self._coffee_queue_after_id=None
+        if not self._coffee_start_queued or generation!=self._coffee_generation:
+            return
+        if self.packet_started and self.packet_extension is not None and self._habbo_session_connected:
+            self._coffee_start_queued=False
+            # Still asks permission before sending. Nothing runs in the background
+            # simply because Habbo or G-Earth connects later.
+            self._start_coffee_loop()
+            return
+        if time.monotonic()>self._coffee_queue_deadline or not self.packet_started:
+            self._coffee_start_queued=False
+            self.coffee_status_var.set('Connection was not ready. Join a Habbo room and press Start again.')
+            return
+        self._coffee_queue_after_id=self.root.after(
+            350,lambda gen=generation:self._check_queued_coffee_start(gen))
+
     def _coffee_loop_tick(self,generation):
         self._coffee_after_id=None
         if not self._coffee_running or generation!=self._coffee_generation:
@@ -1463,7 +1504,13 @@ class ChatOverlayApp:
 
     def _stop_coffee_loop(self,reason=None):
         self._coffee_running=False
+        self._coffee_start_queued=False
         self._coffee_generation+=1
+        queued=self._coffee_queue_after_id
+        self._coffee_queue_after_id=None
+        if queued is not None:
+            try:self.root.after_cancel(queued)
+            except (tk.TclError,AttributeError):pass
         timer=self._coffee_after_id
         self._coffee_after_id=None
         if timer is not None:
@@ -2041,6 +2088,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self._engine_last_error=''
             self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
             self._schedule_gearth_hide(delay_ms=1800)
+            self._maybe_auto_connect_packet_tools()
         elif self._engine_last_error:
             self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
         elif not self._engine_installing:
@@ -2054,6 +2102,27 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             else:
                 self.engine_status_var.set('Engine: not installed. Click Install / repair to retry setup.')
         self.root.after(2500,self._engine_heartbeat)
+
+    def _maybe_auto_connect_packet_tools(self):
+        """Attach the local G-Python extension without activating Packet Viewer.
+
+        Before Habbo launches, connecting to G-Earth's local extension port
+        cannot interrupt an in-progress AIR loading screen. If Habbo is already
+        open, wait for chat/room evidence. The Coffee Pass Loop Start button is
+        also an explicit room-ready signal and can attach directly.
+        """
+        if self.packet_started or time.monotonic()<self._packet_auto_retry_after:
+            return
+        try:
+            game_window=self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()])
+        except (OSError,ValueError,AttributeError):
+            game_window=None
+        if game_window and self.room_id is None:
+            self.packet_connection_status.set(
+                'G-Earth online; waiting for Habbo room readiness. '
+                'The Coffee Pass Loop Start button can connect directly.')
+            return
+        self._connect_gearth(capture=False)
 
     def _start_gearth_direct(self,select_if_missing=True):
         if os.name!='nt':
@@ -2472,28 +2541,36 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_status.set('G-Earth started, but extension port was not reachable. '
                                    'Use Advanced G-Earth window to check the connection and port.')
 
-    def _connect_gearth(self):
+    def _connect_gearth(self,capture=True):
+        # The same G-Earth extension serves all packet tools. Capturing is
+        # optional; auto-connect never enables the packet log or rules.
         if self.packet_started:
-            self.packet_active=True
-            self.packet_status.set('Viewer already started. Capture resumed.')
-            return
+            if capture:
+                self.packet_active=True
+                self.packet_status.set('Packet tools already attached. Viewer capture resumed.')
+            return True
         try:
             port=int(self.gearth_port_var.get())
             if not 1<=port<=65535:raise ValueError()
         except ValueError:
             self.packet_status.set('Enter a valid G-Earth extension port (usually 9092).')
-            return
+            self.packet_connection_status.set('Invalid G-Earth extension port (usually 9092).')
+            return False
         self.config['gearth_port']=port
         self.save()
         try:
             import g_python.gextension  # noqa: F401
         except ImportError:
             self.packet_status.set('Install G-Python once with: py -m pip install g-python')
-            return
-        self.packet_active=True
+            self.packet_connection_status.set('G-Python missing. Install once with: py -m pip install g-python')
+            self._packet_auto_retry_after=time.monotonic()+15
+            return False
+        self.packet_active=bool(capture)
         self.packet_started=True
+        self.packet_connection_status.set(f'Connecting packet tools to G-Earth on port {port}...')
         self.packet_status.set(f'Connecting extension on local port {port}...')
         threading.Thread(target=self._packet_worker,args=(port,),daemon=True).start()
+        return True
 
     def _packet_worker(self,port):
         try:
@@ -2501,7 +2578,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.9','author':'Habbo Companion'}
+                  'version':'1.1.10','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -2543,7 +2620,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_started=False
             self._habbo_session_connected=False
             self.packet_extension=None
+            self._packet_auto_retry_after=time.monotonic()+10
             self._packet_put(('session_connection',False))
+            self._packet_put(('packet_connect_error',f'{type(exc).__name__}: {str(exc)[:160]}'))
             self._packet_put(('status',f'G-Earth connection failed: {type(exc).__name__}: {str(exc)[:190]}'))
 
     def _packet_put(self,item):
@@ -2581,7 +2660,13 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='status':
                 self.packet_status.set(item[1]);continue
+            if item[0]=='packet_connect_error':
+                self.packet_connection_status.set('Packet tools failed: '+item[1])
+                continue
             if item[0]=='session_connection':
+                self.packet_connection_status.set(
+                    'Packet tools READY — Habbo and G-Earth connected.' if item[1]
+                    else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
