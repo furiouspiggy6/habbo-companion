@@ -295,9 +295,31 @@ def chat_one_line(text):
     return ' '.join(str(text or '').split())
 
 
-def native_bubble_fits_single_line(width,height,max_width,max_height):
-    """Wrapped or oversized AIR PNGs need a rebuilt one-line shell."""
-    return 0<width<=max_width and 0<height<=max_height
+def whisper_packet_text(packet_description):
+    """Read only the message body from a named G-Earth Whisper packet."""
+    if not isinstance(packet_description,str):
+        return None
+    if not re.match(r'^\s*(?:\{(?:in|out):Whisper\}|\[Whisper\])',
+                    packet_description,re.IGNORECASE):
+        return None
+    strings=re.findall(r'\{s:"((?:\\.|[^"\\])*)"\}',packet_description)
+    if not strings:
+        return None
+    try:
+        return chat_one_line(json.loads('"'+strings[-1]+'"'))
+    except (json.JSONDecodeError,ValueError,TypeError):
+        return chat_one_line(strings[-1])
+
+
+def match_recent_whisper(hints,body,arrived,window=8.0):
+    """Consume one temporally matched whisper packet, not every matching chat."""
+    needle=chat_one_line(body)
+    hints[:]=[(at,text) for at,text in hints if arrived-at<=window]
+    for i,(at,text) in enumerate(hints):
+        if abs(arrived-at)<=window and text==needle:
+            hints.pop(i)
+            return True
+    return False
 
 
 def fit_line_ellipsis(text,font_obj,available_px):
@@ -860,6 +882,7 @@ class ChatOverlayApp:
         self.update_manifest_var=tk.StringVar(value=str(self.config.get('update_manifest_url','')))
         self._online_update_busy=False
         self.messages=[]
+        self.whisper_hints=[]  # Brief local G-Earth hints when the AIR feed lacks chatType=2
         # 0 = live/newest. Positive offsets browse older chat without expiring it.
         self.scroll_offset=0
         self.pending_wheel=0
@@ -2635,9 +2658,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             ext.on_event('connection_end',disconnected)
             def hook(direction):
                 def on_message(msg):
-                    if not self.packet_active and not self.manipulation_enabled:return
+                    if not (self.packet_active or self.manipulation_enabled or
+                            self.config.get('whispers_right',True)):
+                        return
                     try:detail=str(msg.packet.g_string(ext))[:4000]
                     except Exception:detail='[Packet could not be formatted]'
+                    if self.config.get('whispers_right',True):
+                        whisper_body=whisper_packet_text(detail)
+                        if whisper_body is not None:
+                            self._packet_put(('whisper_hint',time.time(),whisper_body))
+                    if not self.packet_active and not self.manipulation_enabled:
+                        return
                     if self.manipulation_enabled and self.packet_rules:
                         try:
                             matched=apply_manipulation_rule(msg,direction,detail,
@@ -2698,6 +2729,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.packet_status.set(item[1]);continue
             if item[0]=='packet_connect_error':
                 self.packet_connection_status.set('Packet tools failed: '+item[1])
+                continue
+            if item[0]=='whisper_hint':
+                _,occurred,body=item
+                # The packet and AIR feed may arrive in either order.
+                for msg in reversed(self.messages[-24:]):
+                    if abs(msg.arrived-occurred)>8:
+                        continue
+                    if chat_one_line(msg.body)==body:
+                        msg.chat_type=2
+                        break
+                else:
+                    if not any(t==body and abs(at-occurred)<0.4
+                               for at,t in self.whisper_hints):
+                        self.whisper_hints.append((occurred,body))
+                        self.whisper_hints=self.whisper_hints[-32:]
                 continue
             if item[0]=='session_connection':
                 self.packet_connection_status.set(
@@ -2983,7 +3029,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if room is not None:self.room_id=room
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
-            chat_type=int(item.get('chatType',0) or 0)
+            chat_type=int(item.get('chatType',item.get('chat_type',0)) or 0)
+            if item.get('isWhisper') is True or item.get('whisper') is True:
+                chat_type=2
             raw_color=item.get('forcedColor')
             forced_color=int(raw_color) if isinstance(raw_color,(float,int)) else None
             image_path=None
@@ -2998,7 +3046,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # While reviewing earlier chat, keep the same messages in view as
             # incoming messages arrive instead of snapping back to the bottom.
             if self.scroll_offset>0:self.scroll_offset+=1
-            self.messages.append(Message(name,body,time.time(),within,room,
+            arrived=time.time()
+            if not is_whisper_chat(chat_type) and match_recent_whisper(
+                    self.whisper_hints,body,arrived):
+                chat_type=2
+            self.messages.append(Message(name,body,arrived,within,room,
                                          style_id,chat_type,forced_color,image_path))
             self._trim_history()
             if self.config.get('original_bubble_images',True):
@@ -3058,7 +3110,6 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         active_images=set()
         # Message ordering uses one shared vertical cursor, preventing an
         # incoming whisper and a normal message from obscuring each other.
-        font_cache={size:(self.canvas_font,self.canvas_bold)}
         for msg in reversed(self.messages[start:end]):
             right=align_whispers and is_whisper_chat(msg.chat_type)
             if single_line:
@@ -3066,13 +3117,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 body=chat_one_line(msg.body)
                 inset=pad+22
                 available=max(30,maxw-inset-pad)
+                # Fixed font size for every chat row. At the window edge,
+                # shorten overlong text with an ellipsis instead of shrinking.
                 fnt,bold=self.canvas_font,self.canvas_bold
-                for pt in range(size-1,8,-1):
-                    if bold.measure(username)+7+fnt.measure(body)<=available:break
-                    if pt not in font_cache:
-                        font_cache[pt]=(font.Font(family='Segoe UI',size=pt),
-                                        font.Font(family='Segoe UI Semibold',size=pt,weight='bold'))
-                    fnt,bold=font_cache[pt]
                 name_w=bold.measure(username)
                 visible_body=fit_line_ellipsis(body,fnt,max(0,available-name_w-7))
                 content_w=name_w+(7+fnt.measure(visible_body) if visible_body else 0)
@@ -3093,17 +3140,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 self.native_images[key]=native
                     except (OSError,tk.TclError,ValueError):
                         native=None
-                if native is not None and native_bubble_fits_single_line(
-                    native.width(),native.height(),maxw,max(35,fline+14)):
-                    w,h=native.width(),native.height()
-                    top=cursor-h
-                    if top<24:break
-                    bx=max(x,sw-x-w) if right else x
-                    cv.create_image(bx,top,image=native,anchor='nw')
-                    cursor=top-gap
-                    rendered_count+=1
-                    active_images.add(key)
-                    continue
+                # Never draw the full native PNG in single-line mode: it
+                # carries the client's own font size, which differs by type.
+                # Reuse its portrait and colours below; render ALL text once
+                # with the configured, constant Tk fonts.
                 top=cursor-height
                 if top<24:break
                 bx=max(x,sw-x-boxw) if right else x

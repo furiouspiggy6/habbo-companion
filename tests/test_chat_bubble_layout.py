@@ -1,15 +1,17 @@
 """GUI-free verification of the wide chat layout and whisper classification."""
 import ast
+import re
+import json
 from pathlib import Path
 import unittest
 
 APP=Path(__file__).resolve().parent.parent/'Habbo_Companion.pyw'
 CODE=APP.read_text(encoding='utf-8')
 TREE=ast.parse(CODE)
-HELPERS=('is_whisper_chat','chat_one_line','fit_line_ellipsis','native_bubble_fits_single_line')
+HELPERS=('is_whisper_chat','chat_one_line','fit_line_ellipsis','whisper_packet_text','match_recent_whisper')
 NODES=[n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name in HELPERS]
 assert len(NODES)==len(HELPERS), 'Missing chat layout helpers'
-namespace={}
+namespace={'re':re,'json':json}
 exec(compile(ast.Module(body=NODES,type_ignores=[]),str(APP),'exec'),namespace)
 
 
@@ -46,12 +48,32 @@ class WideChatTests(unittest.TestCase):
         self.assertTrue(result.endswith('…'))
         self.assertLessEqual(FixedFont().measure(result),240)
 
-    def test_wrapped_native_images_get_compact_fallback(self):
-        f=namespace['native_bubble_fits_single_line']
-        self.assertTrue(f(200,30,500,36))
-        self.assertFalse(f(200,75,500,36))
-        self.assertFalse(f(700,30,500,36))
-        self.assertFalse(f(0,30,500,36))
+    def test_whisper_packet_detection(self):
+        detect=namespace['whisper_packet_text']
+        self.assertEqual(detect('{out:Whisper}{s:"Cheesecake"}{s:"test"}'),'test')
+        self.assertEqual(detect('{in:Whisper}{i:123}{s:"hi there"}'),'hi there')
+        self.assertIsNone(detect('{in:Chat}{i:123}{s:"test"}'))
+        self.assertIsNone(detect('{in:Shout}{i:123}{s:"test"}'))
+        self.assertIsNone(detect('Whisper mentioned in a regular sentence'))
+
+    def test_whisper_hint_matched_once(self):
+        consume=namespace['match_recent_whisper']
+        hints=[(100.0,'test')]
+        self.assertTrue(consume(hints,'test',101.0))
+        self.assertFalse(consume(hints,'test',101.1))
+        self.assertEqual(hints,[])
+
+    def test_stale_whisper_hint_not_used(self):
+        hints=[(100.0,'test')]
+        self.assertFalse(namespace['match_recent_whisper'](hints,'test',130.0))
+        self.assertEqual(hints,[])
+
+    def test_single_line_does_not_shrink_or_blit_native_text(self):
+        source=CODE[CODE.index('            if single_line:'):CODE.index('            # Legacy wrapped-mode')]
+        self.assertNotIn('for pt in range(',source)
+        self.assertNotIn('cv.create_image(bx,top,image=native',source)
+        self.assertIn('fnt,bold=self.canvas_font,self.canvas_bold',source)
+        self.assertIn('fit_line_ellipsis',source)
 
     def test_short_widths_are_safe(self):
         self.assertEqual(namespace['fit_line_ellipsis']('hello',FixedFont(),0),'')
