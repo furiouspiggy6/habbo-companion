@@ -70,6 +70,11 @@ DEFAULT = dict(
     gearth_startup_safety_v104=True,
     gearth_startup_uia_v105=False,
     packet_rules=[],
+    coffee_cup_one='476989081',
+    coffee_cup_two='476989024',
+    coffee_recipient='68808036',
+    coffee_interval='0.1',
+    coffee_cycles='0',
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -129,6 +134,31 @@ def validate_replay_interval(value):
     if not math.isfinite(interval) or not 0.1<=interval<=120.0:
         raise ValueError('Repeat delay must be between 0.1 and 120 seconds.')
     return interval
+
+
+
+def build_coffee_pass_sequence(cup_one, cup_two, recipient):
+    """Build one two-cup/two-pass outgoing cycle from captured action IDs."""
+    def positive_id(raw, label):
+        value=str(raw).strip()
+        if not re.fullmatch(r'[0-9]{1,10}',value):
+            raise ValueError(label+' must be a positive numeric ID.')
+        number=int(value)
+        if not 1<=number<2147483648:
+            raise ValueError(label+' must be a positive 32-bit ID.')
+        return number
+
+    first=positive_id(cup_one,'Cup 1')
+    second=positive_id(cup_two,'Cup 2')
+    target=positive_id(recipient,'Recipient')
+    if first==second:
+        raise ValueError('Cup 1 and Cup 2 must have different furniture IDs.')
+    return (
+        f'{{out:UseFurniture}}{{i:{first}}}{{i:0}}',
+        f'{{out:PassCarryItem}}{{i:{target}}}',
+        f'{{out:UseFurniture}}{{i:{second}}}{{i:0}}',
+        f'{{out:PassCarryItem}}{{i:{target}}}',
+    )
 
 
 def validate_manipulation_rule(candidate):
@@ -744,6 +774,21 @@ class ChatOverlayApp:
         self._replay_count=0
         self._replay_after_id=None
         self._replay_generation=0
+        self.coffee_cup_one_var=tk.StringVar(value=str(self.config.get('coffee_cup_one','476989081')))
+        self.coffee_cup_two_var=tk.StringVar(value=str(self.config.get('coffee_cup_two','476989024')))
+        self.coffee_recipient_var=tk.StringVar(value=str(self.config.get('coffee_recipient','68808036')))
+        self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
+        self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
+        self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
+        self._coffee_running=False
+        self._coffee_sequence=()
+        self._coffee_interval=0.1
+        self._coffee_limit=0
+        self._coffee_index=0
+        self._coffee_sent=0
+        self._coffee_completed=0
+        self._coffee_generation=0
+        self._coffee_after_id=None
         self._habbo_session_connected=False
         self.gearth_process=None
         self._gearth_minimize_tries=0
@@ -1224,8 +1269,14 @@ class ChatOverlayApp:
                  wraplength=620).pack(anchor='w',pady=(12,0))
 
     def _make_manipulator_panel(self,parent):
-        # Separate from native G-Earth UI; shares the same extension session as Packet Viewer.
-        holder=ttk.Frame(parent,style='Panel.TFrame',padding=13)
+        # Keep original rules and packet replayer; add a separate action-loop tab.
+        tabs=ttk.Notebook(parent)
+        tabs.pack(fill='both',expand=True)
+        rules_tab=ttk.Frame(tabs,style='Panel.TFrame')
+        coffee_tab=ttk.Frame(tabs,style='Panel.TFrame')
+        tabs.add(rules_tab,text='  Rules & Replay  ')
+        tabs.add(coffee_tab,text='  Coffee Pass Loop  ')
+        holder=ttk.Frame(rules_tab,style='Panel.TFrame',padding=13)
         holder.pack(fill='both',expand=True)
         tk.Label(holder,text='PACKET MANIPULATOR',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
@@ -1286,6 +1337,141 @@ class ChatOverlayApp:
                   'Avoid excessive automation or violating Habbo rules.',
                   style='Panel.TLabel',wraplength=630).pack(anchor='w',pady=(4,0))
         self._refresh_manipulation_rules()
+        self._make_coffee_loop_panel(coffee_tab)
+
+
+    def _make_coffee_loop_panel(self,parent):
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='COFFEE PASS LOOP',font=('Segoe UI Semibold',18),
+                 fg='#e6f1ff',bg='#121a28').pack(anchor='w')
+        ttk.Label(holder,
+                  text='Pick up from Cup 1, pass to one person, pick up from Cup 2, then pass to the same person. Repeat in that order.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,14))
+
+        def entry(label,var,note):
+            row=ttk.Frame(holder,style='Panel.TFrame');row.pack(fill='x',pady=(0,9))
+            ttk.Label(row,text=label,style='Panel.TLabel',width=20).pack(side='left')
+            ttk.Entry(row,textvariable=var,width=18).pack(side='left',padx=(4,10))
+            ttk.Label(row,text=note,style='Panel.TLabel').pack(side='left')
+
+        entry('Cup 1 furniture ID',self.coffee_cup_one_var,'UseFurniture')
+        entry('Cup 2 furniture ID',self.coffee_cup_two_var,'UseFurniture')
+        entry('Recipient target ID',self.coffee_recipient_var,'PassCarryItem')
+        entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
+        entry('Complete cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Label(holder,
+                  text='Each cycle sends 4 packets: Cup 1 → pass → Cup 2 → pass. '
+                       'Recipient IDs come from your captured PassCarryItem action; re-check the ID after rejoining a room.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(12,12))
+        buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
+        ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
+        ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
+        ttk.Label(holder,textvariable=self.coffee_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
+        ttk.Label(holder,
+                  text='OFF by default. Requires a connected Habbo room and G-Earth. '
+                       'The client sends packets in sequence but cannot confirm the game accepted an item. '
+                       'Too-fast actions can be ignored or rate-limited. STOP or disconnect cancels the loop.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,0))
+
+    def _start_coffee_loop(self):
+        if self._coffee_running:
+            self.coffee_status_var.set('Coffee pass loop already running. Click STOP first.')
+            return
+        if self._replay_running:
+            self.coffee_status_var.set('Stop the single-packet repeater before starting this loop.')
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.coffee_status_var.set('Enter a Habbo room and connect Packet Viewer to G-Earth first.')
+            return
+        try:
+            sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
+                                                self.coffee_cup_two_var.get(),
+                                                self.coffee_recipient_var.get())
+            interval=validate_replay_interval(self.coffee_interval_var.get())
+            cycles_text=self.coffee_cycles_var.get().strip()
+            if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
+                raise ValueError('Cycles must be an integer from 0 to 10000.')
+            cycles=int(cycles_text)
+            if cycles>10000:raise ValueError('Cycles must be 0 to 10000.')
+            for expr in sequence:
+                packet=self.packet_extension.string_to_packet(expr)
+                if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                    raise ValueError('G-Earth could not parse a generated packet; check its headers.')
+        except (ValueError,TypeError,AttributeError) as exc:
+            self.coffee_status_var.set('Cannot start: '+str(exc)[:170])
+            return
+        duration='continuously until STOP' if cycles==0 else f'for {cycles} complete cycles'
+        if not messagebox.askyesno('Start coffee pass loop',
+            f'Send alternating cup/pass actions {duration}?\n'
+            f'Target ID: {self.coffee_recipient_var.get().strip()}\n'
+            f'Delay between each packet: {interval:g} seconds\n\n'
+            'Only proceed if you are permitted to automate these actions. '
+            'Habbo may reject actions or rate-limit them.',
+            parent=self.root):
+            self.coffee_status_var.set('Coffee loop cancelled.')
+            return
+        self.config.update(coffee_cup_one=self.coffee_cup_one_var.get().strip(),
+                           coffee_cup_two=self.coffee_cup_two_var.get().strip(),
+                           coffee_recipient=self.coffee_recipient_var.get().strip(),
+                           coffee_interval=str(interval),coffee_cycles=str(cycles))
+        self.save()
+        self._coffee_generation+=1
+        self._coffee_running=True
+        self._coffee_sequence=sequence
+        self._coffee_interval=interval
+        self._coffee_limit=cycles
+        self._coffee_index=0
+        self._coffee_sent=0
+        self._coffee_completed=0
+        self.coffee_status_var.set('Coffee loop ON — packet 1/4. Sent: 0; cycles: 0.')
+        self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
+                                                 self._coffee_loop_tick(generation))
+
+    def _coffee_loop_tick(self,generation):
+        self._coffee_after_id=None
+        if not self._coffee_running or generation!=self._coffee_generation:
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self._stop_coffee_loop('Habbo or G-Earth disconnected. Coffee loop stopped.')
+            return
+        try:
+            expression=self._coffee_sequence[self._coffee_index]
+            ext=self.packet_extension
+            packet=ext.string_to_packet(expression)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth rejected a generated packet.')
+            if ext.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth rejected the send.')
+        except Exception as exc:
+            self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
+            return
+        self._coffee_sent+=1
+        self._coffee_index=(self._coffee_index+1)%4
+        if self._coffee_index==0:
+            self._coffee_completed+=1
+            if self._coffee_limit and self._coffee_completed>=self._coffee_limit:
+                self._stop_coffee_loop('Requested cycles finished.')
+                return
+        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index]
+        self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
+                                   f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+        if self._coffee_running and generation==self._coffee_generation:
+            self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
+                lambda gen=generation:self._coffee_loop_tick(gen))
+
+    def _stop_coffee_loop(self,reason=None):
+        self._coffee_running=False
+        self._coffee_generation+=1
+        timer=self._coffee_after_id
+        self._coffee_after_id=None
+        if timer is not None:
+            try:self.root.after_cancel(timer)
+            except (tk.TclError,AttributeError):pass
+        self.coffee_status_var.set(
+            f'{reason or "Coffee loop stopped by user."} '
+            f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
 
     def _toggle_manipulator(self):
         if self.manipulation_enable_var.get() and not self.packet_started:
@@ -1392,6 +1578,9 @@ class ChatOverlayApp:
         Never infer a packet ID or silently repeat an arbitrary incoming packet.
         Never start before Habbo and the G-Python extension are connected.
         """
+        if self._coffee_running:
+            self.replay_status_var.set('Stop the coffee pass loop before starting the packet repeater.')
+            return
         if self._replay_running:
             self.replay_status_var.set('Repeat already running; click STOP first.')
             return
@@ -2312,7 +2501,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.8','author':'Habbo Companion'}
+                  'version':'1.1.9','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -2395,6 +2584,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='session_connection':
                 if not item[1]:
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
+                    self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
                 continue
             if item[0]=='manip_status':
                 self.manipulator_status.set(item[1]);continue
@@ -2936,6 +3126,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
 
     def close(self):
         self._stop_packet_replay('Companion closed. Repeat stopped.')
+        self._stop_coffee_loop('Companion closed. Coffee loop stopped.')
         if self.wheel_hook and os.name=='nt':
             try:
                 u=self.tracker.user32
