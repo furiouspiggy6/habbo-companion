@@ -480,12 +480,12 @@ def disable_active_local_proxy():
     """
     if os.name!='nt':
         raise OSError('Windows required.')
-    import winreg
     current=gearth_network_state()
     if current['error']:
         raise OSError('Network settings unavailable: '+current['error'])
     if not current['active_local_proxy']:
         return 'The Windows local manual proxy is already disabled. No changes made.'
+    import winreg
     key=r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER,key,0,winreg.KEY_READ|winreg.KEY_SET_VALUE) as h:
         enabled,enabled_type=winreg.QueryValueEx(h,'ProxyEnable')
