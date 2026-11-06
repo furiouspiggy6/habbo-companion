@@ -609,7 +609,9 @@ class ChatOverlayApp:
         self._gearth_launch_watch_until=0.0
         self._gearth_launch_started=0.0
         self._engine_installing=False
-        self.engine_status_var=tk.StringVar(value='Engine: checking installation...')
+        self._engine_last_error=''
+        self._engine_start_attempted=False
+        self.engine_status_var=tk.StringVar(value='Engine: scheduled to start automatically...')
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
         self.gearth_minimize_var=tk.BooleanVar(value=bool(self.config.get('gearth_minimize',True)))
@@ -1247,20 +1249,26 @@ class ChatOverlayApp:
         return ranked[0]
 
     def _auto_prepare_gearth(self):
-        """Prepare the internal engine, then request G-Earth's own AIR proxy."""
+        """Prepare the internal engine; show errors if startup cannot proceed."""
+        self._engine_start_attempted=True
         if not self.gearth_auto_arm_var.get():
             self.engine_status_var.set('Engine: automatic startup disabled')
             return
-        self._start_integrated_engine()
+        try:
+            self._start_integrated_engine()
+        except Exception as exc:
+            self._engine_installing=False
+            self._engine_last_error=f'{type(exc).__name__}: {str(exc)[:180]}'
+            self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
+            self.packet_status.set('Internal engine setup error; click Install / repair to retry.')
 
     def _start_integrated_engine(self):
-        """A single Companion action installs (once), starts, and monitors."""
+        """Install the engine independent of whether a Habbo window was detected."""
+        self._engine_start_attempted=True
         if self._engine_installing:
             self.engine_status_var.set('Engine: installation already in progress')
             return
-        if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.engine_status_var.set('Engine: Habbo already open; start the engine before login')
-            return
+        self._engine_last_error=''
         try:port=int(self.gearth_port_var.get())
         except (TypeError,ValueError):port=9092
         if self._gearth_extension_port_responds(port):
@@ -1273,10 +1281,14 @@ class ChatOverlayApp:
             self.gearth_path_display.set('Managed engine: '+str(exe))
             self.save()
             self.engine_status_var.set('Engine: installed; starting proxy...')
+            if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
+                self.engine_status_var.set('Engine installed, but a Habbo window was detected. Close it before starting the proxy.')
+                self.packet_status.set('Managed engine is installed; close Habbo before starting the proxy.')
+                return
             self._start_gearth_direct(select_if_missing=False)
             return
         self._engine_installing=True
-        self.engine_status_var.set('Engine: installing the managed runtime...')
+        self.engine_status_var.set('Engine: importing or downloading the managed runtime...')
         self.packet_status.set('Setting up G-Earth inside Companion. Keep Habbo closed.')
         seed=str(self.config.get('gearth_path') or '')
         threading.Thread(target=self._engine_install_worker,
@@ -1308,15 +1320,20 @@ class ChatOverlayApp:
         try:port=int(self.gearth_port_var.get())
         except (TypeError,ValueError):port=9092
         if self._gearth_extension_port_responds(port):
+            self._engine_last_error=''
             self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
+        elif self._engine_last_error:
+            self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
         elif not self._engine_installing:
             exe=managed_gearth_executable()
             if self._gearth_launch_watch_until>time.monotonic():
                 self.engine_status_var.set('Engine: starting; waiting for backend...')
             elif exe:
                 self.engine_status_var.set('Engine: installed · backend OFFLINE')
+            elif not self._engine_start_attempted:
+                self.engine_status_var.set('Engine: startup scheduled (not yet attempted)')
             else:
-                self.engine_status_var.set('Engine: not yet installed')
+                self.engine_status_var.set('Engine: not installed. Click Install / repair to retry setup.')
         self.root.after(2500,self._engine_heartbeat)
 
     def _start_gearth_direct(self,select_if_missing=True):
@@ -1660,7 +1677,7 @@ class ChatOverlayApp:
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.0','author':'Habbo Companion'}
+                  'version':'1.1.1','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
@@ -1710,16 +1727,22 @@ class ChatOverlayApp:
                 continue
             if item[0]=='engine_error':
                 self._engine_installing=False
-                self.engine_status_var.set('Engine install FAILED: '+item[1])
+                self._engine_last_error=item[1]
+                self.engine_status_var.set('Engine setup ERROR: '+item[1])
                 self.packet_status.set('Engine setup failed; use Install / repair to retry. '+item[1])
                 continue
             if item[0]=='engine_installed':
                 self._engine_installing=False
+                self._engine_last_error=''
                 self.config['gearth_path']=item[1]
                 self.gearth_path_display.set('Managed engine: '+item[1])
                 self.save()
                 self.engine_status_var.set('Engine installed from '+item[2]+'. Starting...')
-                self._start_gearth_direct(select_if_missing=False)
+                if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
+                    self.engine_status_var.set('Engine INSTALLED. A Habbo window was detected; close it before starting the proxy.')
+                    self.packet_status.set('Internal G-Earth engine installed; start the proxy before the next Habbo login.')
+                else:
+                    self._start_gearth_direct(select_if_missing=False)
                 continue
             if item[0]=='status':
                 self.packet_status.set(item[1]);continue

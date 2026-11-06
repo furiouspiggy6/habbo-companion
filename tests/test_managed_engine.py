@@ -80,5 +80,63 @@ class ManagedEngineTests(unittest.TestCase):
             app.install_managed_gearth('',lambda _:None)
         self.assertFalse((self.root/'malicious.txt').exists())
 
+
+    def test_auto_setup_starts_even_if_window_tracker_is_false_positive(self):
+        """A stray Habbo-title window must not prevent installing the engine."""
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        messages=[]
+        class Var:
+            def __init__(self,value=None):self.value=value
+            def get(self):return self.value
+            def set(self,value):self.value=value;messages.append(value)
+        class FakeTracker:
+            def find(self,_):return (0,0,800,600,1234,'Habbo')
+        class FakeRoot:
+            def winfo_id(self):return 100
+        appobj=object.__new__(app.ChatOverlayApp)
+        appobj._engine_installing=False
+        appobj._engine_last_error=''
+        appobj._engine_start_attempted=False
+        appobj.root=FakeRoot()
+        appobj.overlay=SimpleNamespace(winfo_id=lambda:200)
+        appobj.tracker=FakeTracker()
+        appobj.gearth_port_var=Var('9092')
+        appobj.engine_status_var=Var()
+        appobj.packet_status=Var()
+        appobj.config={'gearth_path':str(self.root/'working-beta'/'G-Earth.exe')}
+        appobj._engine_install_worker=lambda _seed:None
+        class FakeThread:
+            def __init__(self,target,args,daemon):self.target=target
+            def start(self):pass
+        with patch.object(app.ChatOverlayApp,'_gearth_extension_port_responds',return_value=False), \
+             patch.object(app,'managed_gearth_executable',return_value=None), \
+             patch.object(app.threading,'Thread',FakeThread):
+            appobj._start_integrated_engine()
+        self.assertTrue(appobj._engine_installing)
+        self.assertTrue(appobj._engine_start_attempted)
+        self.assertIn('importing or downloading',appobj.engine_status_var.get())
+
+    def test_heartbeat_does_not_erase_engine_error(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        class Var:
+            def __init__(self,value=None):self.value=value
+            def get(self):return self.value
+            def set(self,value):self.value=value
+        class FakeRoot:
+            def winfo_exists(self):return True
+            def after(self,*args):pass
+        appobj=object.__new__(app.ChatOverlayApp)
+        appobj.root=FakeRoot()
+        appobj._engine_installing=False
+        appobj._engine_last_error='PermissionError: access denied'
+        appobj._engine_start_attempted=True
+        appobj.engine_status_var=Var()
+        appobj.gearth_port_var=Var('9092')
+        with patch.object(app.ChatOverlayApp,'_gearth_extension_port_responds',return_value=False):
+            appobj._engine_heartbeat()
+        self.assertIn('access denied',appobj.engine_status_var.get())
+
 if __name__=='__main__':
     unittest.main()
