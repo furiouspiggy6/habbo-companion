@@ -1,33 +1,29 @@
-HABBO COMPANION 1.0.2 — G-EARTH AUTO PREPARE
-=================================================
+HABBO COMPANION 1.0.3 — INTEGRATED PACKET MANIPULATOR
+===================================================
 
 WHAT'S NEW
-- In Packet Viewer, enable "Automatically prepare G-Earth when Companion opens"
-  (enabled by default). Select the WORKING G-Earth beta with Find G-Earth once.
-- Companion requests Windows administrator permission for G-Earth and asks
-  G-Earth to prepare its Flash/AIR connection before Habbo is launched.
-- "Launch Habbo (with G-Earth)" starts the selected Habbo launcher after a
-  warm-up delay. Select your Habbo launcher .exe once; the location is saved.
-- Habbo already running? Companion will not start G-Earth mid-session.
-- Existing View Chat, custom bubbles, scrollback and settings remain.
-
-IMPORTANT
-This version has been checked for Python syntax, client startup flow, and
-update/restore behaviour, but the automatic G-Earth beta connection has NOT
-been tested live on this Windows PC. A visible G-Earth window is not proof its
-proxy is ready. If you see a 60% freeze, disable auto-prepare and use the beta's
-manual connection that already worked. UAC approval may be needed each launch.
+  * Packet Manipulator tab inside the existing Companion window.
+  * Add up to 60 packet rules: incoming/outgoing/both, exact header ID (or *)
+    and optional packet-text filter. Actions: Block or Replace.
+  * Enable/disable the rule engine explicitly; it always starts OFF.
+  * Manual packet send: enter a G-Earth packet expression and select direction.
+    Confirmation is required before each send.
+  * Select any captured packet in Packet Viewer and click
+    'Load selected viewer packet' to prefill the send field.
+  * Your packet rules, chat settings, and saved G-Earth beta path are preserved.
 
 HOW TO USE
-1. Close Habbo before launching Companion.
-2. Open Companion. Approve the G-Earth administrator permission prompt.
-3. Wait for G-Earth to show Waiting for connection.
-4. Launch Habbo normally, or use the new integrated Launch Habbo button.
+  1. Start Habbo Companion and the working G-Earth beta, connect Packet Viewer.
+  2. Go to Packet Manipulator. A rule needs a header ID or contains filter.
+  3. Add a rule, then explicitly enable manipulation for this session.
+  4. Use your own session for testing. Malformed packets may disconnect Habbo.
 
-FILES AND PRIVACY
-Keeps settings at %APPDATA%\HabboViewChat\settings.json; does not bundle or
-modify G-Earth itself or your Habbo AIR SWF, private logs, or account data.
+SAFETY & LIMITATIONS
+  Rules are local and OFF on each launch, even when previously saved. Rules
+  are not scheduled or replayed. G-Earth itself is not bundled. Actual
+  incoming/outgoing interception with your Windows beta has not been tested.
+  Client-side chat overlay files and HabboAir.swf are unchanged.
 
-UPDATES
-Companion > Updates > Check online:
-https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json
+UPDATING
+  Use Updates > Check online with the previously configured repository.
+  Your existing settings are stored in %APPDATA%\HabboViewChat\settings.json.

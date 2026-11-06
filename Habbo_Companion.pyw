@@ -57,6 +57,7 @@ DEFAULT = dict(
     gearth_game_port=30000,
     gearth_minimize=True,
     gearth_auto_arm=True,
+    packet_rules=[],
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -101,6 +102,56 @@ def get_message_colors(msg, theme):
         if forced>0:
             border=f'#{forced:06x}'
     return base,fg,accent,border
+
+
+# G-Earth manipulation rules; intentionally disabled on every app startup.
+RULE_DIRECTIONS=('Incoming','Outgoing','Both')
+RULE_ACTIONS=('Block','Replace')
+
+def validate_manipulation_rule(candidate):
+    if not isinstance(candidate,dict):raise ValueError('Invalid rule')
+    direction=str(candidate.get('direction','Both'))
+    action=str(candidate.get('action','Block'))
+    if direction not in RULE_DIRECTIONS or action not in RULE_ACTIONS:
+        raise ValueError('Choose a supported direction and action')
+    raw_header=str(candidate.get('header','')).strip()
+    if not raw_header or raw_header=='*':
+        header='*'
+    elif raw_header.isdecimal() and 0<=int(raw_header)<=65535:
+        header=str(int(raw_header))
+    else:raise ValueError('Header must be 0–65535, or * for any header')
+    contains=str(candidate.get('contains','')).strip()
+    if len(contains)>160:raise ValueError('Contains filter is too long (maximum 160 characters)')
+    replacement=str(candidate.get('replacement','')).strip()
+    if len(replacement)>4096:raise ValueError('Replacement is too long (maximum 4096 characters)')
+    if action=='Replace' and not replacement:raise ValueError('Enter the replacement G-Earth packet expression')
+    if header=='*' and not contains:
+        raise ValueError('Specify a packet ID or a matching text filter to avoid affecting every packet')
+    return {'enabled':bool(candidate.get('enabled',True)), 'direction':direction,
+            'header':header,'contains':contains,'action':action,'replacement':replacement}
+
+def apply_manipulation_rule(message,direction,packet_text,rules,extension):
+    """Process at most one rule in G-Python's synchronous intercept callback.
+
+    Returns (action, rule_number) or None. Does not touch the UI thread.
+    """
+    try:header=int(message.packet.header_id()) & 0xffff
+    except (AttributeError,TypeError,ValueError):return None
+    for index,rule in enumerate(rules):
+        if not rule['enabled'] or rule['direction'] not in ('Both',direction):continue
+        if rule['header']!='*' and int(rule['header'])!=header:continue
+        if rule['contains'] and rule['contains'].lower() not in packet_text.lower():continue
+        if rule['action']=='Block':
+            message.is_blocked=True
+            return ('Block',index+1)
+        # G-Earth performs expression parsing; do not evaluate any user input as Python.
+        new_packet=extension.string_to_packet(rule['replacement'])
+        if new_packet is None or new_packet.is_incomplete_packet() or new_packet.is_corrupted():
+            raise ValueError('Replacement packet could not be resolved or was corrupt')
+        message.packet.bytearray=bytearray(new_packet.bytearray)
+        message.packet.is_edited=True
+        return ('Replace',index+1)
+    return None
 
 def load_config():
     try:
@@ -326,6 +377,20 @@ class ChatOverlayApp:
         self.packet_active=False
         self.packet_started=False
         self.packet_extension=None
+        self.packet_rules=[]
+        for rule in self.config.get('packet_rules',[]):
+            try:self.packet_rules.append(validate_manipulation_rule(rule))
+            except (ValueError,TypeError,KeyError):pass
+        self.packet_rules=self.packet_rules[:60]
+        self.manipulation_enabled=False  # never enabled automatically on start
+        self.manipulation_enable_var=tk.BooleanVar(value=False)
+        self.manipulator_status=tk.StringVar(value='Rule engine OFF — no packets are changed.')
+        self.rule_direction_var=tk.StringVar(value='Outgoing')
+        self.rule_action_var=tk.StringVar(value='Block')
+        self.rule_header_var=tk.StringVar(value='')
+        self.rule_contains_var=tk.StringVar(value='')
+        self.rule_enabled_var=tk.BooleanVar(value=True)
+        self.inject_direction_var=tk.StringVar(value='Outgoing')
         self.gearth_process=None
         self._gearth_minimize_tries=0
         self._gearth_autostart_active=False
@@ -411,6 +476,9 @@ class ChatOverlayApp:
         packets=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(packets,text='  Packet Viewer  ')
         self._make_packet_panel(packets)
+        manip=ttk.Frame(self.notebook,style='Panel.TFrame')
+        self.notebook.add(manip,text='  Packet Manipulator  ')
+        self._make_manipulator_panel(manip)
         updates=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(updates,text='  Updates  ')
         self._make_updates_panel(updates)
@@ -738,6 +806,159 @@ class ChatOverlayApp:
                  bg='#121a28',fg='#8ea9c1',justify='left',font=('Segoe UI',9),
                  wraplength=620).pack(anchor='w',pady=(12,0))
 
+    def _make_manipulator_panel(self,parent):
+        # Separate from native G-Earth UI; shares the same extension session as Packet Viewer.
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=13)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='PACKET MANIPULATOR',font=('Segoe UI Semibold',18),
+                 fg='#e6f1ff',bg='#121a28').pack(anchor='w')
+        ttk.Label(holder,text='Rules are OFF by default. Use a specific packet header or contains filter.',
+                  style='Panel.TLabel',wraplength=640).pack(anchor='w',pady=(1,7))
+        ttk.Checkbutton(holder,text='Enable packet manipulation for this session',
+                        variable=self.manipulation_enable_var,command=self._toggle_manipulator).pack(anchor='w',pady=(0,5))
+        ttk.Label(holder,textvariable=self.manipulator_status,style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(0,7))
+        rules_box=ttk.Frame(holder,style='Panel.TFrame');rules_box.pack(fill='both',expand=True)
+        self.rules_tree=ttk.Treeview(rules_box,columns=('on','dir','header','filter','action'),show='headings',height=7)
+        for col,label,width in [('on','On',36),('dir','Direction',95),('header','ID',70),('filter','Contains',190),('action','Action',82)]:
+            self.rules_tree.heading(col,text=label)
+            self.rules_tree.column(col,width=width,stretch=(col=='filter'),anchor='w')
+        rs=ttk.Scrollbar(rules_box,orient='vertical',command=self.rules_tree.yview)
+        self.rules_tree.configure(yscrollcommand=rs.set)
+        rs.pack(side='right',fill='y');self.rules_tree.pack(side='left',fill='both',expand=True)
+        self.rules_tree.bind('<<TreeviewSelect>>',self._load_manipulation_rule)
+        form=ttk.Frame(holder,style='Panel.TFrame');form.pack(fill='x',pady=(8,0))
+        one=ttk.Frame(form,style='Panel.TFrame');one.pack(fill='x',pady=(0,5))
+        ttk.Label(one,text='Direction',style='Panel.TLabel').pack(side='left')
+        ttk.Combobox(one,textvariable=self.rule_direction_var,values=RULE_DIRECTIONS,state='readonly',width=10).pack(side='left',padx=(4,10))
+        ttk.Label(one,text='Header ID',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(one,textvariable=self.rule_header_var,width=10).pack(side='left',padx=(4,10))
+        ttk.Label(one,text='Action',style='Panel.TLabel').pack(side='left')
+        ttk.Combobox(one,textvariable=self.rule_action_var,values=RULE_ACTIONS,state='readonly',width=10).pack(side='left',padx=(4,10))
+        ttk.Checkbutton(one,text='Rule enabled',variable=self.rule_enabled_var).pack(side='left')
+        two=ttk.Frame(form,style='Panel.TFrame');two.pack(fill='x',pady=(0,6))
+        ttk.Label(two,text='Packet text contains',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(two,textvariable=self.rule_contains_var).pack(side='left',fill='x',expand=True,padx=(8,0))
+        ttk.Label(form,text='Replacement G-Earth expression (only for Replace):',style='Panel.TLabel').pack(anchor='w')
+        self.replace_expression=tk.Text(form,height=3,wrap='word',font=('Consolas',9),bg='#0a1120',fg='#dceeff',insertbackground='white')
+        self.replace_expression.pack(fill='x',pady=(3,5))
+        buttons=ttk.Frame(form,style='Panel.TFrame');buttons.pack(fill='x',pady=(0,6))
+        ttk.Button(buttons,text='Add rule',command=self._add_manipulation_rule).pack(side='left',padx=(0,5))
+        ttk.Button(buttons,text='Update selected',command=self._update_manipulation_rule).pack(side='left',padx=(0,5))
+        ttk.Button(buttons,text='Delete selected',command=self._delete_manipulation_rule).pack(side='left',padx=(0,5))
+        ttk.Button(buttons,text='Clear editor',command=self._clear_manipulation_editor).pack(side='left')
+        ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(9,7))
+        ttk.Label(holder,text='Manual packet send — requires a connected G-Earth session',style='Panel.TLabel').pack(anchor='w')
+        send_row=ttk.Frame(holder,style='Panel.TFrame');send_row.pack(fill='x',pady=(5,3))
+        ttk.Label(send_row,text='Direction',style='Panel.TLabel').pack(side='left')
+        ttk.Combobox(send_row,textvariable=self.inject_direction_var,values=('Outgoing','Incoming'),state='readonly',width=11).pack(side='left',padx=(6,12))
+        ttk.Button(send_row,text='Load selected viewer packet',command=self._load_packet_for_sending).pack(side='left')
+        self.inject_expression=tk.Text(holder,height=3,wrap='word',font=('Consolas',9),bg='#0a1120',fg='#dceeff',insertbackground='white')
+        self.inject_expression.pack(fill='x',pady=(3,6))
+        ttk.Button(holder,text='Send packet once',command=self._send_manual_packet).pack(anchor='w')
+        ttk.Label(holder,text='Changing or blocking essential packets can disconnect Habbo. Rules stay saved but never auto-enable. '
+                  'Only send packets for your own session. No automatic replay or flood controls.',
+                  style='Panel.TLabel',wraplength=630).pack(anchor='w',pady=(8,0))
+        self._refresh_manipulation_rules()
+
+    def _toggle_manipulator(self):
+        if self.manipulation_enable_var.get() and not self.packet_started:
+            self.manipulation_enable_var.set(False)
+            self.manipulator_status.set('Connect Packet Viewer to G-Earth before enabling manipulation.')
+            return
+        self.manipulation_enabled=bool(self.manipulation_enable_var.get())
+        self.manipulator_status.set('Rule engine ON — matching packets may be changed.' if self.manipulation_enabled
+                                    else 'Rule engine OFF — no packets are changed.')
+
+    def _refresh_manipulation_rules(self):
+        self.rules_tree.delete(*self.rules_tree.get_children())
+        for i,r in enumerate(self.packet_rules):
+            self.rules_tree.insert('','end',iid=str(i),values=('Yes' if r['enabled'] else 'No',
+               r['direction'],r['header'],r['contains'][:72],r['action']))
+
+    def _read_manipulation_form(self):
+        return validate_manipulation_rule({'enabled':self.rule_enabled_var.get(),
+            'direction':self.rule_direction_var.get(),'header':self.rule_header_var.get(),
+            'contains':self.rule_contains_var.get(),'action':self.rule_action_var.get(),
+            'replacement':self.replace_expression.get('1.0','end').strip()})
+
+    def _selected_manipulation_index(self):
+        selected=self.rules_tree.selection()
+        return int(selected[0]) if selected else None
+
+    def _load_manipulation_rule(self,event=None):
+        i=self._selected_manipulation_index()
+        if i is None or not 0<=i<len(self.packet_rules):return
+        r=self.packet_rules[i]
+        self.rule_enabled_var.set(r['enabled']);self.rule_direction_var.set(r['direction'])
+        self.rule_header_var.set(r['header']);self.rule_contains_var.set(r['contains'])
+        self.rule_action_var.set(r['action'])
+        self.replace_expression.delete('1.0','end');self.replace_expression.insert('1.0',r['replacement'])
+
+    def _save_manipulation_rules(self):
+        self.config['packet_rules']=[r.copy() for r in self.packet_rules]
+        self.save()
+        self._refresh_manipulation_rules()
+
+    def _add_manipulation_rule(self):
+        try:r=self._read_manipulation_form()
+        except ValueError as e:self.manipulator_status.set(str(e));return
+        if len(self.packet_rules)>=60:
+            self.manipulator_status.set('Maximum 60 rules. Delete one first.');return
+        self.packet_rules.append(r)
+        self._save_manipulation_rules()
+        self.manipulator_status.set('Rule added. '+('Engine ON.' if self.manipulation_enabled else 'Engine OFF.'))
+
+    def _update_manipulation_rule(self):
+        i=self._selected_manipulation_index()
+        if i is None:self.manipulator_status.set('Select a rule first.');return
+        try:r=self._read_manipulation_form()
+        except ValueError as e:self.manipulator_status.set(str(e));return
+        self.packet_rules[i]=r
+        self._save_manipulation_rules();self.rules_tree.selection_set(str(i))
+        self.manipulator_status.set('Rule updated.')
+
+    def _delete_manipulation_rule(self):
+        i=self._selected_manipulation_index()
+        if i is None:self.manipulator_status.set('Select a rule to delete.');return
+        self.packet_rules.pop(i);self._save_manipulation_rules()
+        self.manipulator_status.set('Rule deleted.')
+
+    def _clear_manipulation_editor(self):
+        self.rules_tree.selection_remove(*self.rules_tree.selection())
+        self.rule_header_var.set('');self.rule_contains_var.set('')
+        self.rule_direction_var.set('Outgoing');self.rule_action_var.set('Block')
+        self.rule_enabled_var.set(True);self.replace_expression.delete('1.0','end')
+
+    def _load_packet_for_sending(self):
+        rows=self.packet_tree.selection()
+        if not rows:self.manipulator_status.set('Select a packet in Packet Viewer first.');return
+        values=self.packet_tree.item(rows[0],'values')
+        if len(values)<3:return
+        for t,d,detail in reversed(self.packet_data):
+            if t==values[0] and d==values[1] and detail.startswith(values[2]):
+                self.inject_direction_var.set(d)
+                self.inject_expression.delete('1.0','end')
+                self.inject_expression.insert('1.0',detail)
+                self.manipulator_status.set('Loaded packet. Review before sending.')
+                return
+
+    def _send_manual_packet(self):
+        if not self.packet_started or self.packet_extension is None:
+            self.manipulator_status.set('Connect Packet Viewer to G-Earth first.');return
+        expr=self.inject_expression.get('1.0','end').strip()
+        if not 0<len(expr)<=4096:
+            self.manipulator_status.set('Enter one G-Earth packet expression (maximum 4096 characters).');return
+        direction=self.inject_direction_var.get()
+        if not messagebox.askyesno('Send packet once',f'Send one {direction} packet through G-Earth?\nThis may affect your game session.',parent=self.root):return
+        try:
+            ext=self.packet_extension
+            packet=ext.string_to_packet(expr)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not decode the packet expression')
+            success=(ext.send_to_server(packet) if direction=='Outgoing' else ext.send_to_client(packet))
+            self.manipulator_status.set('Packet send requested.' if success is not False else 'G-Earth rejected the packet.')
+        except Exception as exc:self.manipulator_status.set(f'Send failed: {str(exc)[:160]}')
+
     def _select_gearth(self):
         path=filedialog.askopenfilename(title='Select G-Earth.exe or G-Earth.jar',
             filetypes=[('G-Earth program','*.exe *.jar'),('All files','*.*')])
@@ -776,8 +997,7 @@ class ChatOverlayApp:
         self._gearth_auto_arm_attempted=True
         if os.name!='nt':return
         if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.packet_status.set('Habbo is already open. G-Earth must be prepared before opening Habbo; '
-                                   'close Habbo and start it again after G-Earth is waiting.')
+            self.packet_status.set('Habbo is already open. G-Earth must be prepared before opening Habbo; '                                   'close Habbo and start it again after G-Earth is waiting.')
             return
         if self._find_gearth_window():
             self.packet_status.set('G-Earth is already running. Check that it says Waiting for connection '
@@ -1058,22 +1278,36 @@ class ChatOverlayApp:
         try:
             from g_python.gextension import Extension
             from g_python.hmessage import Direction
-            info={'title':'Habbo Companion Packet Viewer',
-                  'description':'Local read-only packet viewer',
-                  'version':'0.1','author':'Habbo Companion'}
+            info={'title':'Habbo Companion Packet Tools',
+                  'description':'Packet viewer with optional session rules and manual send',
+                  'version':'1.0.3','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
                 self._packet_put(('status',name))
             ext.on_event('init',lambda:event('G-Earth extension connected.'))
             ext.on_event('connection_start',lambda:event('Habbo AIR connected; capturing packets in Habbo Companion.'))
-            ext.on_event('connection_end',lambda:event('Habbo traffic disconnected.'))
+            def disconnected():
+                self.manipulation_enabled=False
+                self._packet_put(('manip_status','G-Earth disconnected. Manipulation automatically OFF.'))
+                self._packet_put(('manip_off',))
+                event('Habbo traffic disconnected.')
+            ext.on_event('connection_end',disconnected)
             def hook(direction):
                 def on_message(msg):
-                    if not self.packet_active:return
+                    if not self.packet_active and not self.manipulation_enabled:return
                     try:detail=str(msg.packet.g_string(ext))[:4000]
                     except Exception:detail='[Packet could not be formatted]'
-                    self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail))
+                    if self.manipulation_enabled and self.packet_rules:
+                        try:
+                            matched=apply_manipulation_rule(msg,direction,detail,
+                                                            tuple(self.packet_rules),ext)
+                            if matched:
+                                detail=f'[{matched[0]} rule {matched[1]}] '+detail
+                        except Exception as exc:
+                            self._packet_put(('manip_status',f'Rule error; packet unchanged: {str(exc)[:160]}'))
+                    if self.packet_active:
+                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail))
                 return on_message
             ext.intercept(Direction.TO_CLIENT,hook('Incoming'))
             ext.intercept(Direction.TO_SERVER,hook('Outgoing'))
@@ -1091,7 +1325,12 @@ class ChatOverlayApp:
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
-            if item[0]=='status':self.packet_status.set(item[1]);continue
+            if item[0]=='status':
+                self.packet_status.set(item[1]);continue
+            if item[0]=='manip_status':
+                self.manipulator_status.set(item[1]);continue
+            if item[0]=='manip_off':
+                self.manipulation_enable_var.set(False);continue
             _,timestamp,direction,detail=item
             self.packet_data.append((timestamp,direction,detail))
             if len(self.packet_data)>500:self.packet_data.pop(0)
