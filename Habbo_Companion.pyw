@@ -465,9 +465,54 @@ def gearth_network_state():
         state['local_proxy']=bool(re.search(r'(^|[;= ])(?:https?://)?(?:localhost|127\.0\.0\.1|\[::1\]):\d+(?:$|[; ])',value))
     except (OSError,ValueError,TypeError) as exc:
         state['error']=str(exc)
+    state['active_local_proxy']=bool(state['proxy'] and state['local_proxy'])
     state['unsafe']=bool(state['error'] or state['redirects'] or
-                         (state['proxy'] and state['local_proxy']))
+                         state['active_local_proxy'])
     return state
+
+
+def disable_active_local_proxy():
+    """User-approved recovery for ONLY the enabled HKCU local manual proxy.
+
+    Makes a JSON backup first and rechecks the server and enabled flag so a
+    concurrently changed proxy is not disabled. Doesn't change ProxyServer
+    or any other Windows registry setting, DNS or firewall.
+    """
+    if os.name!='nt':
+        raise OSError('Windows required.')
+    import winreg
+    current=gearth_network_state()
+    if current['error']:
+        raise OSError('Network settings unavailable: '+current['error'])
+    if not current['active_local_proxy']:
+        return 'The Windows local manual proxy is already disabled. No changes made.'
+    key=r'Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER,key,0,winreg.KEY_READ|winreg.KEY_SET_VALUE) as h:
+        enabled,enabled_type=winreg.QueryValueEx(h,'ProxyEnable')
+        server,server_type=winreg.QueryValueEx(h,'ProxyServer')
+        if not enabled or str(server)!=current['proxy_server']:
+            raise RuntimeError('Proxy settings changed during inspection. No changes made.')
+        if enabled_type!=winreg.REG_DWORD:
+            raise RuntimeError('Unexpected ProxyEnable registry type; no changes made.')
+        folder=APP_DIR/'network-backups'
+        folder.mkdir(parents=True,exist_ok=True)
+        backup=folder/('proxy-before-recovery-'+uuid.uuid4().hex+'.json')
+        with backup.open('x',encoding='utf-8') as fh:
+            json.dump({'ProxyEnable':enabled,'ProxyServer':str(server),
+                       'ProxyServer_registry_type':server_type,
+                       'ProxyEnable_registry_type':enabled_type},fh,indent=2)
+        winreg.SetValueEx(h,'ProxyEnable',0,winreg.REG_DWORD,0)
+    # Inform WinINet clients of a settings change, best effort only.
+    try:
+        wininet=ctypes.WinDLL('wininet',use_last_error=True)
+        wininet.InternetSetOptionW(None,39,None,0)  # SETTINGS_CHANGED
+        wininet.InternetSetOptionW(None,37,None,0)  # REFRESH
+    except (OSError,AttributeError):pass
+    confirm=gearth_network_state()
+    if confirm['proxy']:
+        raise RuntimeError('Proxy remains enabled after recovery; check Windows Settings > Proxy.')
+    return 'Disabled the active localhost manual proxy (ProxyEnable=0). Stored server left unchanged. Backup: '+str(backup)
+
 
 def repair_gearth_hosts():
     """Targeted removal only; exact G-Earth-tagged Habbo redirects."""
@@ -689,6 +734,8 @@ class ChatOverlayApp:
         self._diagnostic_text='No diagnostic has run.'
         self._network_repair_report=None
         self._network_repair_deadline=0.0
+        self._proxy_watch_until=0.0
+        self._proxy_alerted=False
         self.engine_status_var=tk.StringVar(value='Engine: scheduled to start automatically...')
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',False)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
@@ -1054,6 +1101,7 @@ class ChatOverlayApp:
         net_row=ttk.Frame(holder,style='Panel.TFrame');net_row.pack(fill='x',pady=(0,7))
         ttk.Button(net_row,text='Check Windows network',command=self._show_network_safety).pack(side='left',padx=(0,8))
         ttk.Button(net_row,text='Repair G-Earth hosts',command=self._repair_gearth_hosts_ui).pack(side='left')
+        ttk.Button(net_row,text='Disable active local proxy',command=self._disable_local_proxy_ui).pack(side='left',padx=(8,0))
         diag_row=ttk.Frame(holder,style='Panel.TFrame');diag_row.pack(fill='x',pady=(0,5))
         ttk.Button(diag_row,text='Diagnose (may launch engine)',command=self._diagnose_and_repair).pack(side='left',padx=(0,8))
         ttk.Button(diag_row,text='Copy diagnostic',command=self._copy_engine_diagnostic).pack(side='left')
@@ -1406,12 +1454,42 @@ class ChatOverlayApp:
         state=gearth_network_state()
         lines=['G-Earth-tagged Habbo redirects: '+str(state['redirects']),
                'Windows manual proxy enabled: '+str(state['proxy']),
-               'Manual proxy server: '+(state['proxy_server'] or '(none)'),
-               'Local proxy: '+str(state['local_proxy'])]
+               'Saved manual proxy server: '+(state['proxy_server'] or '(none)'),
+               'Saved local proxy endpoint: '+str(state['local_proxy']),
+               'ACTIVE local manual proxy: '+str(state['active_local_proxy'])]
         if state['error']:lines.append('Inspection error: '+state['error'])
-        if state['proxy']:lines.append('Proxy is read-only here; check Windows Settings > Network & internet > Proxy.')
-        lines.append('Companion does not reset Windows proxy, DNS, firewall or VPN.')
+        if state['active_local_proxy']:
+            lines.append('An active local proxy may interfere with internet browsing if its service is unavailable. '
+                         'Use Disable active local proxy ONLY if you do not use this proxy or VPN.')
+        elif state['local_proxy']:
+            lines.append('The saved localhost address is INACTIVE because the manual proxy is OFF. '
+                         'No repair is needed at present.')
+        lines.append('Companion does not silently change Windows proxy, DNS, firewall or VPN.')
         messagebox.showinfo('Windows network safety','\n'.join(lines))
+
+    def _disable_local_proxy_ui(self):
+        state=gearth_network_state()
+        if state['error']:
+            messagebox.showerror('Proxy check failed',state['error'])
+            return
+        if not state['active_local_proxy']:
+            messagebox.showinfo('Proxy already disabled',
+                'The Windows local manual proxy is OFF. The stored address is inactive and does not need repair.')
+            return
+        if not messagebox.askyesno('Disable active Windows localhost proxy?',
+                'Windows currently routes browser traffic through the local manual proxy:\n'
+                +state['proxy_server']+'\n\n'
+                'Only proceed if you do not intentionally use this proxy or VPN. '
+                'Companion will back up the original registry values, then change ONLY ProxyEnable to OFF. '
+                'This might interrupt another program using the proxy. Continue?'):
+            return
+        try:
+            result=disable_active_local_proxy()
+            self.packet_status.set(result)
+            messagebox.showinfo('Local proxy recovery',result)
+        except Exception as exc:
+            self.packet_status.set('Local proxy recovery failed: '+str(exc)[:190])
+            messagebox.showerror('Local proxy recovery failed',str(exc)[:400])
 
     def _repair_gearth_hosts_ui(self):
         if os.name!='nt':return
@@ -1591,6 +1669,23 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
     def _engine_heartbeat(self):
         """Expose backend and installation state without trusting a GUI title."""
         if not self.root.winfo_exists():return
+        # The Flash/AIR engine should not enable Windows' browser proxy.
+        # Only watch after an engine launch accepted by Companion; never
+        # silently rewrite registry settings.
+        if (time.monotonic()<getattr(self,'_proxy_watch_until',0.0) and not getattr(self,'_proxy_alerted',False)):
+            net=gearth_network_state()
+            if net['active_local_proxy']:
+                self._proxy_alerted=True
+                self.gearth_auto_arm_var.set(False)
+                self.config['gearth_auto_arm']=False
+                self.save()
+                self.engine_status_var.set('NETWORK WARNING: unexpected active Windows localhost proxy')
+                self.packet_status.set('Windows local proxy was activated after G-Earth started. '
+                                       'Auto-start disabled. Close G-Earth; use Disable active local proxy if appropriate.')
+                messagebox.showwarning('Windows proxy unexpectedly enabled',
+                    'A Windows localhost manual proxy became active after Companion started G-Earth. '
+                    'This may disrupt browsing. Automatic G-Earth startup has been disabled. '
+                    'Close G-Earth and use Disable active local proxy only if this was not intended.')
         if getattr(self,'_diagnostic_running',False):
             self.root.after(2500,self._engine_heartbeat)
             return
@@ -1963,6 +2058,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 else:
                     self.packet_status.set(f'Could not launch G-Earth (Windows error {error or int(result or 0)}).')
                 return False
+            self._proxy_watch_until=time.monotonic()+600  # monitor for unexpected system proxy activation
+            self._proxy_alerted=False
             self._gearth_autostart_active=bool(auto_connect)
             self._gearth_manual_window=False
             self._gearth_hide_pending=False
@@ -2036,7 +2133,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.4','author':'Habbo Companion'}
+                  'version':'1.1.5','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):

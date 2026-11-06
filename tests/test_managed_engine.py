@@ -228,5 +228,47 @@ class ManagedEngineTests(unittest.TestCase):
              patch.object(app,'APP_DIR',self.root/'AppData'):
             self.assertIn('No tagged',app.repair_gearth_hosts())
 
+
+    def test_saved_proxy_is_inactive_when_disabled(self):
+        from unittest.mock import patch
+        from types import ModuleType
+        import sys
+        class FakeKey:
+            def __enter__(self):return self
+            def __exit__(self,*args):return False
+        fake=ModuleType('winreg')
+        fake.HKEY_CURRENT_USER=1
+        fake.KEY_READ=1
+        fake.OpenKey=lambda *args:FakeKey()
+        def query(h,name):
+            return (0 if name=='ProxyEnable' else 'http=127.0.0.1:42822;https=127.0.0.1:42822',4)
+        fake.QueryValueEx=query
+        path=self.root/'hosts'
+        path.write_bytes(b'127.0.0.1 localhost\n')
+        with patch.object(app,'os') as mock_os, \
+             patch.object(app,'gearth_hosts_path',return_value=path), \
+             patch.dict(sys.modules,{'winreg':fake}):
+            mock_os.name='nt'
+            state=app.gearth_network_state()
+        self.assertTrue(state['local_proxy'])
+        self.assertFalse(state['proxy'])
+        self.assertFalse(state['active_local_proxy'])
+        self.assertFalse(state['unsafe'])
+
+    def test_inactive_proxy_repair_is_noop(self):
+        from unittest.mock import patch
+        data={'error':'','proxy':False,'proxy_server':'127.0.0.1:42822',
+              'local_proxy':True,'active_local_proxy':False}
+        with patch.object(app,'os') as mock_os, \
+             patch.object(app,'gearth_network_state',return_value=data):
+            mock_os.name='nt'
+            self.assertIn('already disabled',app.disable_active_local_proxy())
+
+    def test_active_proxy_recovery_requests_user_approval(self):
+        import inspect
+        src=inspect.getsource(app.ChatOverlayApp._disable_local_proxy_ui)
+        self.assertIn('messagebox.askyesno',src)
+        self.assertIn('disable_active_local_proxy()',src)
+
 if __name__=='__main__':
     unittest.main()
