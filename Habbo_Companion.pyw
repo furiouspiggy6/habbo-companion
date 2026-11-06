@@ -612,7 +612,7 @@ class ChatOverlayApp:
         self._engine_last_error=''
         self._engine_start_attempted=False
         self._diagnostic_running=False
-        self._diagnostic_text='No diagnostic has been run.'
+        self._diagnostic_text='No diagnostic has run.'
         self.engine_status_var=tk.StringVar(value='Engine: scheduled to start automatically...')
         self.gearth_auto_arm_var=tk.BooleanVar(value=bool(self.config.get('gearth_auto_arm',True)))
         self.habbo_path_display=tk.StringVar(value='Habbo launcher: '+str(self.config.get('habbo_launcher_path') or '(not selected)'))
@@ -893,11 +893,10 @@ class ChatOverlayApp:
         self.update_status.set('Checking for updates…')
         def worker():
             try:
-                fresh_url=urllib.parse.urlsplit(url)
-                nonce=uuid.uuid4().hex
-                query=(fresh_url.query+'&' if fresh_url.query else '')+'check='+nonce
-                latest_url=urllib.parse.urlunsplit((fresh_url.scheme,fresh_url.netloc,fresh_url.path,query,fresh_url.fragment))
-                req=urllib.request.Request(latest_url,headers={'User-Agent':'HabboCompanionUpdater/1.2','Cache-Control':'no-cache','Pragma':'no-cache'})
+                p=urllib.parse.urlsplit(url)
+                query=(p.query+'&' if p.query else '')+'check='+uuid.uuid4().hex
+                fresh_url=urllib.parse.urlunsplit((p.scheme,p.netloc,p.path,query,p.fragment))
+                req=urllib.request.Request(fresh_url,headers={'User-Agent':'HabboCompanionUpdater/1.2','Cache-Control':'no-cache','Pragma':'no-cache'})
                 with urllib.request.urlopen(req,timeout=12) as response:
                     if response.geturl().split(':',1)[0]!='https':
                         raise ValueError('Update manifest redirected away from HTTPS')
@@ -976,8 +975,7 @@ class ChatOverlayApp:
                  fg='#8ea9c1',bg='#121a28',wraplength=600,justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(holder,textvariable=self.engine_status_var,bg='#121a28',fg='#76caab',
                  font=('Segoe UI Semibold',10),wraplength=620,justify='left').pack(anchor='w',pady=(0,9))
-        diag_row=ttk.Frame(holder,style='Panel.TFrame')
-        diag_row.pack(fill='x',pady=(0,5))
+        diag_row=ttk.Frame(holder,style='Panel.TFrame');diag_row.pack(fill='x',pady=(0,5))
         ttk.Button(diag_row,text='Diagnose & repair',command=self._diagnose_and_repair).pack(side='left',padx=(0,8))
         ttk.Button(diag_row,text='Copy diagnostic',command=self._copy_engine_diagnostic).pack(side='left')
         gearth_row=ttk.Frame(holder,style='Panel.TFrame');gearth_row.pack(fill='x',pady=(2,7))
@@ -1291,7 +1289,6 @@ class ChatOverlayApp:
             self.gearth_path_display.set('Managed engine: '+str(exe))
             self.save()
             self.engine_status_var.set('Engine: installed; starting proxy...')
-            # This title check generated false positives and stopped a ready engine.
             self._start_gearth_direct(select_if_missing=False)
             return
         self._engine_installing=True
@@ -1326,46 +1323,110 @@ class ChatOverlayApp:
         try:
             self.root.clipboard_clear()
             self.root.clipboard_append(self._diagnostic_text)
-            self.packet_status.set('Diagnostic copied to clipboard; paste it here.')
+            self.packet_status.set('Diagnostic copied. Paste it into this chat.')
         except tk.TclError as exc:
             self.packet_status.set('Copy failed: '+str(exc)[:100])
 
     def _diagnose_and_repair(self):
         if self._diagnostic_running or self._engine_installing:
-            self.packet_status.set('An engine setup or diagnosis is already running.')
+            self.packet_status.set('A diagnostic or installation is already running.')
             return
-        exe=managed_gearth_executable()
-        if not exe:
+        path=managed_gearth_executable()
+        if not path:
             self._start_integrated_engine()
             return
         target=self._gearth_connection_target()
         if target is None:return
         self._diagnostic_running=True
         self._engine_last_error=''
-        self.engine_status_var.set('Engine: checking process and port 9092...')
-        threading.Thread(target=self._diagnostic_worker,args=(str(exe),target),
-                         daemon=True).start()
+        self.engine_status_var.set('Engine: diagnosing startup...')
+        threading.Thread(target=self._diagnose_worker,
+                         args=(str(path),target),daemon=True).start()
 
-    def _diagnostic_worker(self,exe,target):
-        """One attempt using the already-tested Start-Process -Verb RunAs."""
+    def _diagnose_worker(self,exe,target):
+        """Check the backend; use the tested PowerShell command only if no process."""
+        host,gameport=target
         try:
-            host,gameport=target
             try:port=int(self.config.get('gearth_port',9092))
             except (ValueError,TypeError):port=9092
             if not 1<=port<=65535:port=9092
             probe=lambda:self._gearth_extension_port_responds(port)
-            lines=['Habbo Companion diagnostic',
+            lines=['Habbo Companion engine diagnostic',
                    'UTC: '+datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-                   'Engine path: '+exe,
+                   'Engine EXE: '+exe,
                    'EXE exists: '+str(Path(exe).is_file()),
                    'Extension port: '+str(port),
-                   'Port listening before: '+str(probe()),
-                   'AIR host: '+host,'AIR game port: '+str(gameport)]
+                   'Listening before: '+str(probe()),
+                   'Target host: '+host,
+                   'Target game port: '+str(gameport)]
+            flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
             ps_process=r"""$ErrorActionPreference='Stop'
-$xs=@(Get-CimInstance Win32_Process | Where-Object {
- $_.Name -match '^G[- ]?Earth\.exe
+$items=@(Get-CimInstance Win32_Process | Where-Object {
+ $_.Name -match 'G-Earth' -or
+ (($_.Name -eq 'java.exe' -or $_.Name -eq 'javaw.exe') -and $_.CommandLine -match 'G-Earth|gearth')
+} | ForEach-Object { @{name=[string]$_.Name;pid=[int]$_.ProcessId} })
+ConvertTo-Json -InputObject $items -Compress -Depth 3
+"""
+            known=None
+            try:
+                result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',ps_process],
+                    capture_output=True,text=True,timeout=15,creationflags=flags)
+                if result.returncode:
+                    raise OSError((result.stderr or 'Process query failed')[:160])
+                known=json.loads(result.stdout or '[]')
+                if isinstance(known,dict):known=[known]
+                lines.append('Processes: '+str(known))
+            except (OSError,ValueError,TypeError,subprocess.TimeoutExpired) as exc:
+                lines.append('Process query error: '+repr(exc))
+            if probe():
+                outcome='Backend already ONLINE. Proxy WAITING status not independently verified.'
+            elif known is None:
+                outcome='Cannot rule out an existing process; no duplicate launched.'
+            elif known:
+                outcome='Java/G-Earth running, but port '+str(port)+' is OFFLINE; no duplicate launched.'
+            else:
+                self._packet_put(('engine_status','No G-Earth process found; attempting the tested launch...'))
+                p=Path(exe).resolve()
+                quote=lambda x:"'"+str(x).replace("'","''")+"'"
+                arg='--connect flash --host '+host+' --port '+str(gameport)
+                cmd=("$ErrorActionPreference='Stop'; Start-Process -FilePath "+
+                     quote(str(p))+" -WorkingDirectory "+quote(str(p.parent))+
+                     " -ArgumentList "+quote(arg)+" -Verb RunAs -ErrorAction Stop; 'Accepted'")
+                try:
+                    launched=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',cmd],
+                        capture_output=True,text=True,timeout=80,creationflags=flags)
+                    lines.append('Launch exit code: '+str(launched.returncode))
+                    lines.append('Launch output: '+(launched.stdout or launched.stderr)[:200])
+                    if launched.returncode==0:
+                        deadline=time.monotonic()+35
+                        while time.monotonic()<deadline and not probe():
+                            time.sleep(1)
+                        outcome='Repair launch accepted; checking the backend.'
+                    else:outcome='Repair launch failed: '+(launched.stderr or launched.stdout)[:140]
+                except (OSError,subprocess.TimeoutExpired) as exc:
+                    outcome='Launch error: '+str(exc)[:140]
+                    lines.append(outcome)
+            online=probe()
+            lines+=['Listening after: '+str(online),
+                    'AIR proxy WAITING state: not independently verified']
+            if online:outcome='Engine backend ONLINE; proxy WAITING state not verified.'
+            lines.append('RESULT: '+outcome)
+            report='\n'.join(lines)+'\n'
+            try:
+                APP_DIR.mkdir(parents=True,exist_ok=True)
+                (APP_DIR/'gearth-diagnostic-last.txt').write_text(report,encoding='utf-8')
+            except OSError:pass
+            self._packet_put(('engine_diagnostic_done',report,outcome))
+        except Exception as exc:
+            self._packet_put(('engine_diagnostic_done','Diagnostic exception: '+repr(exc),
+                               'Diagnostic failed: '+str(exc)[:130]))
+
+    def _engine_heartbeat(self):
         """Expose backend and installation state without trusting a GUI title."""
         if not self.root.winfo_exists():return
+        if self._diagnostic_running:
+            self.root.after(2500,self._engine_heartbeat)
+            return
         try:port=int(self.gearth_port_var.get())
         except (TypeError,ValueError):port=9092
         if self._gearth_extension_port_responds(port):
@@ -1392,7 +1453,8 @@ $xs=@(Get-CimInstance Win32_Process | Where-Object {
         if self._gearth_launch_watch_until>time.monotonic():
             self.packet_status.set('G-Earth startup is still being checked. Please do not start Habbo yet.')
             return False
-        # Do not reject startup due to an unrelated window containing Habbo.
+        # The window title detector can mistake the Habbo launcher for AIR.
+        # Do not let false matches prevent the proxy from starting.
         try:port=int(self.gearth_port_var.get())
         except (TypeError,ValueError):port=9092
         if not 1<=port<=65535:port=9092
@@ -1773,1067 +1835,8 @@ $xs=@(Get-CimInstance Win32_Process | Where-Object {
                 self._diagnostic_running=False
                 self._diagnostic_text=item[1]
                 self.engine_status_var.set(item[2])
-                self.packet_status.set('Diagnosis complete. Click Copy diagnostic if backend stays offline.')
+                self.packet_status.set('Diagnosis completed. Click Copy diagnostic if backend is offline.')
                 continue
-            if item[0]=='engine_status':
-                self.engine_status_var.set('Engine setup: '+item[1])
-                continue
-            if item[0]=='engine_error':
-                self._engine_installing=False
-                self._engine_last_error=item[1]
-                self.engine_status_var.set('Engine setup ERROR: '+item[1])
-                self.packet_status.set('Engine setup failed; use Install / repair to retry. '+item[1])
-                continue
-            if item[0]=='engine_installed':
-                self._engine_installing=False
-                self._engine_last_error=''
-                self.config['gearth_path']=item[1]
-                self.gearth_path_display.set('Managed engine: '+item[1])
-                self.save()
-                self.engine_status_var.set('Engine installed from '+item[2]+'. Starting...')
-                self._start_gearth_direct(select_if_missing=False)
-                continue
-            if item[0]=='status':
-                self.packet_status.set(item[1]);continue
-            if item[0]=='manip_status':
-                self.manipulator_status.set(item[1]);continue
-            if item[0]=='manip_off':
-                self.manipulation_enable_var.set(False);continue
-            _,timestamp,direction,detail=item
-            self.packet_data.append((timestamp,direction,detail))
-            if len(self.packet_data)>500:self.packet_data.pop(0)
-            needle=self.packet_filter_var.get().lower().strip()
-            if needle and needle not in detail.lower():continue
-            self.packet_tree.insert('', 'end',values=(timestamp,direction,detail[:145]))
-            children=self.packet_tree.get_children()
-            if len(children)>500:self.packet_tree.delete(*children[:len(children)-500])
-        self.root.after(200,self._pump_packets)
-
-    def _select_packet(self,event=None):
-        rows=self.packet_tree.selection()
-        if not rows:return
-        values=self.packet_tree.item(rows[0],'values')
-        if not values:return
-        # Viewer uses only local packet data, with no remote requests or changes.
-        self.packet_details.delete('1.0','end')
-        # Treeview values contain a shortened preview; search the recent in-memory
-        # records for the selected row's complete message representation.
-        full=next((d for t,dirn,d in reversed(self.packet_data)
-                   if t==values[0] and dirn==values[1] and d.startswith(values[2])),values[2])
-        self.packet_details.insert('1.0',full)
-
-    def _toggle_capture(self):
-        if not self.packet_started:
-            self.packet_status.set('Connect to G-Earth before pausing or resuming packet capture.')
-            return
-        self.packet_active=not self.packet_active
-        self.packet_status.set('Packet viewer capturing.' if self.packet_active else 'Packet viewer paused.')
-
-    def _clear_packets(self):
-        self.packet_data.clear()
-        self.packet_tree.delete(*self.packet_tree.get_children())
-        self.packet_details.delete('1.0','end')
-
-    def _export_packets(self):
-        if not self.packet_data:
-            self.packet_status.set('No packets captured yet.')
-            return
-        path=filedialog.asksaveasfilename(title='Export packet log (may include private game data)',
-            defaultextension='.txt',filetypes=[('Text file','*.txt')])
-        if path:
-            try:
-                with open(path,'w',encoding='utf-8') as fh:
-                    for t,d,s in self.packet_data:fh.write(f'{t} [{d}] {s}\n')
-                self.packet_status.set('Packet log saved locally. Review its contents before sharing.')
-            except OSError as exc:self.packet_status.set('Export failed: '+str(exc)[:130])
-
-    def _check(self,parent,label,key,invert=False):
-        if invert:
-            value=not self.config[key]
-        else:value=self.config[key]
-        var=tk.BooleanVar(value=value)
-        self.cfg_vars[key]=var
-        def cb():
-            self.config[key]=not var.get() if invert else var.get()
-            self.save()
-        ttk.Checkbutton(parent,text=label,variable=var,command=cb,style='Panel.TCheckbutton').pack(anchor='w',pady=2)
-
-    def save(self):
-        self.config['theme']=self.theme.get() if hasattr(self,'theme') else self.config['theme']
-        try:save_config(self.config)
-        except OSError:pass
-
-    def update_theme(self):
-        self.config['theme']=self.theme.get();self.save()
-
-    def preview(self):
-        now=time.time()
-        self.messages.extend([
-          Message('auroral','this is the wide chat layout on the left side of the screen',now,style_id=2),
-          Message('zip-linez','only messages from people in your camera view',now+0.01,style_id=7),
-          Message('Shaolin128','you can adjust the width, height and background here',now+0.02,style_id=4)
-        ])
-        self._trim_history()
-        self.jump_to_latest()
-        self.draw()
-
-    def select_feed(self):
-        p=filedialog.askopenfilename(title='Find habbo_view_chat.jsonl',filetypes=[('Habbo overlay log','*.jsonl'),('All files','*.*')])
-        if p:
-            self.config['feed_path']=p;self.save();self.feed=Path(p)
-            self.feed_pos=self.feed.stat().st_size if self.feed.exists() else 0
-            self.status.set('Log connected: '+str(self.feed))
-
-    def clear_msgs(self):
-        self.messages.clear()
-        self.scroll_offset=0
-        self.visible_count_current=0
-        self.active_image_files.clear()
-        self.native_images.clear()
-        self._update_scroll_status()
-        self.draw()
-
-    def _trim_history(self):
-        """Keep a fixed-size, in-memory scrollback rather than a growing archive."""
-        limit=max(30,int(self.config.get('history_limit',200)))
-        if len(self.messages)>limit:
-            self.messages=self.messages[-limit:]
-        self.scroll_offset=clamp(self.scroll_offset,0,max(0,len(self.messages)-1))
-        self._update_scroll_status()
-
-    def _update_scroll_status(self):
-        if not hasattr(self,'scroll_status'):return
-        total=len(self.messages)
-        if self.scroll_offset:
-            self.scroll_status.set(f'HISTORY · {self.scroll_offset} newer message(s) below · scroll down to return')
-        else:
-            visible=min(total,self.visible_count_current)
-            more=max(0,total-visible)
-            mode='AUTO' if self.config.get('auto_fill_screen',True) else 'MANUAL'
-            self.scroll_status.set(f'LIVE · {visible} visible ({mode}) · {more} earlier in scrollback')
-
-    def scroll_chat(self,amount):
-        # Positive moves towards earlier messages; negative towards live.
-        self.scroll_offset=clamp(self.scroll_offset+int(amount),0,max(0,len(self.messages)-1))
-        self._update_scroll_status()
-        self.draw()
-
-    def jump_to_latest(self):
-        self.scroll_offset=0
-        self._update_scroll_status()
-        self.draw()
-
-    def _setup_wheel_hook(self):
-        """Listen only for wheel motion within the Habbo chat column.
-
-        The overlay remains fully click-through. The hook never reads mouse
-        clicks, keystrokes, message contents or any other application data.
-        """
-        if os.name!='nt' or self.wheel_hook:return
-        try:
-            u=self.tracker.user32
-            class MouseInfo(ctypes.Structure):
-                _fields_=[('pt',wintypes.POINT),('mouseData',wintypes.DWORD),
-                          ('flags',wintypes.DWORD),('time',wintypes.DWORD),
-                          ('dwExtraInfo',ctypes.c_size_t)]
-            callback_type=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,ctypes.c_int,
-                                             ctypes.c_size_t,ctypes.c_ssize_t)
-            u.SetWindowsHookExW.argtypes=(ctypes.c_int,callback_type,ctypes.c_void_p,wintypes.DWORD)
-            u.SetWindowsHookExW.restype=ctypes.c_void_p
-            u.CallNextHookEx.argtypes=(ctypes.c_void_p,ctypes.c_int,
-                                       ctypes.c_size_t,ctypes.c_ssize_t)
-            u.CallNextHookEx.restype=ctypes.c_ssize_t
-            u.GetForegroundWindow.restype=wintypes.HWND
-
-            @callback_type
-            def on_wheel(code,wparam,lparam):
-                try:
-                    if code>=0 and int(wparam)==0x020A and self.last_rect:
-                        pos=ctypes.cast(lparam,ctypes.POINTER(MouseInfo)).contents
-                        sx,sy,sw,sh,habbo_hwnd,*_=self.last_rect
-                        if int(u.GetForegroundWindow() or 0)==int(habbo_hwnd):
-                            mx=pos.pt.x-sx;my=pos.pt.y-sy
-                            x=int(self.config.get('x',22))
-                            width=min(int(self.config.get('width',540)),max(150,sw-x-10))
-                            room_clear=int(self.config.get('bottom_clearance',110)) if not self.config.get('show_room',True) else 0
-                            bottom=min(int(sh*int(self.config.get('anchor',80))/100),sh-room_clear-18)
-                            if x<=mx<=x+width and 24<=my<=bottom+10:
-                                notch=ctypes.c_short((int(pos.mouseData)>>16)&0xffff).value
-                                # Only consume if there actually is older/newer chat.
-                                if ((notch>0 and len(self.messages)-self.scroll_offset>self.visible_count_current) or
-                                    (notch<0 and self.scroll_offset>0)):
-                                    self.pending_wheel+=(1 if notch>0 else -1)*max(1,abs(notch)//120)*3
-                                    return 1
-                except Exception:
-                    pass
-                return u.CallNextHookEx(self.wheel_hook,code,wparam,lparam)
-
-            self._wheel_cb=on_wheel  # keep callback alive for as long as hook exists
-            # Global LL hook callbacks are delivered to this Tk thread's message pump.
-            kernel=ctypes.windll.kernel32
-            kernel.GetModuleHandleW.argtypes=(wintypes.LPCWSTR,)
-            kernel.GetModuleHandleW.restype=ctypes.c_void_p
-            handle=u.SetWindowsHookExW(14,self._wheel_cb,kernel.GetModuleHandleW(None),0)
-            if not handle:
-                self._wheel_cb=None
-                self.status.set('Mouse wheel hook unavailable; use panel Older/Newer or Ctrl+Shift+PgUp/PgDn.')
-            else:
-                self.wheel_hook=handle
-                self.wheel_hook_ready=True
-        except (OSError,ValueError,TypeError,AttributeError) as e:
-            self.wheel_hook=None;self._wheel_cb=None
-            self.status.set(f'Mouse wheel unavailable ({str(e)[:75]}); panel scroll buttons still work.')
-
-    def _apply_wheel(self):
-        if self.pending_wheel:
-            delta=self.pending_wheel
-            self.pending_wheel=0
-            self.scroll_chat(delta)
-
-    def clear_log(self):
-        if self.feed and self.feed.exists():
-            try:
-                self.feed.write_text('',encoding='utf-8');self.feed_pos=0
-                self.status.set('Local log cleared; new chat will still appear.')
-            except OSError as e:messagebox.showerror(APP_NAME,str(e))
-        self.clear_msgs()
-
-    def _find_feed(self):
-        given=self.config.get('feed_path','')
-        if given and Path(given).is_file():return Path(given)
-        # AIR's applicationStorageDirectory normally resides in AppData/Roaming.
-        # Checking this periodically rather than hardcoding an app ID avoids
-        # assuming the user's HabboAirPlus launcher installation name.
-        roaming=Path(os.environ.get('APPDATA', str(Path.home()/'AppData/Roaming')))
-        dirs=[roaming/'Habbo',roaming/'HabboAirPlus',roaming/'com.sulake.habbo',roaming]
-        for base in dirs:
-            if not base.is_dir():continue
-            if (base/FEED_NAME).is_file():return base/FEED_NAME
-            if base==roaming:
-                try:
-                    for folder in base.iterdir():
-                        if not folder.is_dir():continue
-                        for candidate in (folder/'Local Store'/FEED_NAME,folder/FEED_NAME,
-                                          folder/'local store'/FEED_NAME):
-                            if candidate.is_file():return candidate
-                except OSError:pass
-            else:
-                try:
-                    for x in base.rglob(FEED_NAME):return x
-                except OSError:pass
-        return None
-
-    def _poll_feed(self):
-        if self.feed is None:
-            if time.monotonic()-self.last_search>3:
-                self.last_search=time.monotonic()
-                found=self._find_feed()
-                if found:
-                    self.feed=found
-                    # Start at the end, so old conversation logs aren't replayed.
-                    # If the file appeared since this app started, include its first messages.
-                    self.feed_pos=0 if found.stat().st_mtime>=self.started else found.stat().st_size
-                    self.status.set('Connected to local Habbo chat feed.')
-            return
-        if not self.feed.is_file():
-            self.feed=None;self.feed_pos=0;return
-        try:
-            size=self.feed.stat().st_size
-            if size<self.feed_pos:self.feed_pos=0
-            if size==self.feed_pos:return
-            with self.feed.open('rb') as fh:
-                fh.seek(self.feed_pos)
-                data=fh.read(min(size-self.feed_pos,256000))
-                if not data:return
-                last_newline=data.rfind(b'\n')
-                if last_newline<0:return
-                self.feed_pos+=last_newline+1
-                for line in data[:last_newline+1].splitlines():
-                    try:item=json.loads(line.decode('utf-8'))
-                    except (UnicodeDecodeError,json.JSONDecodeError):continue
-                    if not isinstance(item,dict):continue
-                    self.handle_message(item)
-        except (OSError,ValueError):pass
-
-    def handle_message(self,item):
-        try:
-            name=str(item.get('name') or 'Habbo')[:80]
-            body=str(item.get('text') or '').strip()
-            if not body:return
-            x=item.get('x');y=item.get('y');sw=item.get('sw');sh=item.get('sh')
-            within=True
-            if isinstance(x,(int,float)) and isinstance(y,(int,float)) and sw and sh:
-                within=bool(0<=x<=sw and 0<=y<=sh)
-            if self.config.get('visible_only',True) and not within:return
-            room=item.get('room')
-            if room is not None and self.room_id is not None and room!=self.room_id:
-                self.clear_msgs()
-            if room is not None:self.room_id=room
-            raw_style=item.get('style')
-            style_id=int(raw_style) if raw_style is not None else None
-            chat_type=int(item.get('chatType',0) or 0)
-            raw_color=item.get('forcedColor')
-            forced_color=int(raw_color) if isinstance(raw_color,(float,int)) else None
-            image_path=None
-            raw_image=item.get('bubbleImage')
-            # Only trust the expected basename beside the local chat feed.
-            # Never open arbitrary paths embedded in a chat message.
-            if (self.feed is not None and isinstance(raw_image,str)
-                and re.fullmatch(r'habbo_view_bubble_[0-9]+_-?[0-9]+_-?[0-9]+\.png',raw_image)):
-                candidate=self.feed.parent/raw_image
-                try:
-                    if candidate.is_file() and 8<candidate.stat().st_size<2_000_000:
-                        image_path=candidate
-                except OSError:pass
-            # While reviewing earlier chat, keep the same messages in view as
-            # incoming messages arrive instead of snapping back to the bottom.
-            if self.scroll_offset>0:self.scroll_offset+=1
-            self.messages.append(Message(name,body,time.time(),within,room,
-                                         style_id,chat_type,forced_color,image_path))
-            self._trim_history()
-            if self.config.get('original_bubble_images',True):
-                if image_path:
-                    self.native_image_count+=1
-                    if self.native_image_count==1:
-                        self.status.set('Receiving original Habbo bubble images (native client artwork).')
-                elif self.native_image_count==0:
-                    self.status.set('No original bubble images yet. Check that both updated files are installed.')
-        except (ValueError,TypeError):pass
-
-    def _rounded(self,canvas,x1,y1,x2,y2,r,color):
-        r=min(r,(x2-x1)/2,(y2-y1)/2)
-        canvas.create_polygon(x1+r,y1,x2-r,y1,x2,y1+r,x2,y2-r,
-                              x2-r,y2,x1+r,y2,x1,y2-r,x1,y1+r,
-                              smooth=True,splinesteps=16,fill=color,outline='')
-
-    def draw(self):
-        if not self.last_rect:return
-        sx,sy,sw,sh,*_=self.last_rect
-        cv=self.stage;cv.delete('all')
-        theme=THEMES.get(self.config['theme'],THEMES['Midnight'])
-        if not self.config['show_room']:
-            # Do not paint over Habbo's native typing/input bar and toolbar.
-            room_height=max(0,sh-int(self.config.get('bottom_clearance',110)))
-            cv.create_rectangle(0,0,sw,room_height,fill=theme['room'],outline='')
-            # Very low-contrast ambient texture, entirely within overlay.
-            if self.config['theme']!='Graphite':
-                for xx in range(0,sw,115):cv.create_line(xx,0,xx,room_height,fill='#152137',width=1)
-                for yy in range(0,room_height,115):cv.create_line(0,yy,sw,yy,fill='#152137',width=1)
-                for i in range(min(35,int(sw*sh/35000))):
-                    x=(i*193+71)%max(1,sw);y=(i*137+99)%max(1,room_height)
-                    cv.create_oval(x,y,x+2,y+2,fill='#263b54',outline='')
-        size=int(self.config['font_size'])
-        self.canvas_font=font.Font(family='Segoe UI',size=size)
-        self.canvas_bold=font.Font(family='Segoe UI Semibold',size=size,weight='bold')
-        pad=12
-        maxw=min(int(self.config['width']), max(150,sw-int(self.config['x'])-10))
-        fline=max(self.canvas_font.metrics('linespace'),self.canvas_bold.metrics('linespace'))+2
-        clear=int(self.config.get('bottom_clearance',110)) if not self.config['show_room'] else 0
-        cursor=min(int(sh*int(self.config['anchor'])/100), sh-clear-18)
-        x=int(self.config['x'])
-        gap=int(self.config['gap'])
-        show_bubbles=self.config['bubbles']
-        # Virtual scrollback: either draw a manual number of bubbles or let the
-        # available screen height determine how many fit. The loop stops at the
-        # top edge; older messages remain only in the bounded history buffer.
-        end=max(0,len(self.messages)-self.scroll_offset)
-        if self.config.get('auto_fill_screen',True):
-            start=0
-        else:
-            start=max(0,end-int(self.config.get('visible_messages',14)))
-        rendered_count=0
-        active_images=set()
-        for msg in reversed(self.messages[start:end]):
-            # Original: render the actual image produced by Habbo's own
-            # PooledChatBubble/ChatStyle renderer. Keeps fonts, background,
-            # borders, avatar artwork, and pointers pixel-for-pixel.
-            if (show_bubbles and self.config.get('original_bubble_images',True)
-                and msg.bubble_image is not None):
-                key=str(msg.bubble_image)
-                try:
-                    original=self.native_images.get(key)
-                    if original is None:
-                        original=tk.PhotoImage(master=self.root,file=key,format='png')
-                        self.native_images[key]=original
-                    w,h=original.width(),original.height()
-                    if w>0 and h>0:
-                        top=cursor-h
-                        if top<24:break
-                        cv.create_image(x,top,image=original,anchor='nw')
-                        cursor=top-gap
-                        rendered_count+=1
-                        active_images.add(key)
-                        continue
-                except (OSError,tk.TclError,ValueError):
-                    pass  # old client or corrupted image: use normal fallback
-            # Compact Habbo-like bubbles: username and first part of the message
-            # share a line; follow-on text wraps to the available wide column.
-            username=msg.name+':'
-            inset=pad+22  # avatar emblem to the left of the text
-            fullw=max(110,maxw-inset-pad)
-            name_w=self.canvas_bold.measure(username)
-            available=max(45,fullw-name_w-7)
-            words=msg.body.replace('\n',' ').split()
-            first=[]
-            while words:
-                candidate=' '.join(first+[words[0]])
-                if self.canvas_font.measure(candidate)>available:break
-                first.append(words.pop(0))
-            first_line=' '.join(first)
-            rest=wrap_message(' '.join(words),fullw,self.canvas_font) if words else []
-            line_count=1+len(rest)
-            height=2*pad+fline*line_count
-            line1_w=name_w+(7+self.canvas_font.measure(first_line) if first_line else 0)
-            content_w=max([line1_w]+[self.canvas_font.measure(t) for t in rest])
-            boxw=min(maxw,max(160,content_w+inset+pad))
-            top=cursor-height
-            if top<24:break
-            if show_bubbles:
-                bg,fg,emblem,edge=(get_message_colors(msg,theme)
-                    if self.config.get('respect_chat_styles',True) else
-                    (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                cv.create_rectangle(x+3,top+4,x+boxw+3,cursor+4,fill='#070e19',outline='')
-                self._rounded(cv,x,top,x+boxw,cursor,9,edge)
-                self._rounded(cv,x+2,top+2,x+boxw-2,cursor-2,7,bg)
-                name_fg=fg
-            else:
-                fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
-            # Small avatar-like initial. No third-party game art is required.
-            ix=x+pad+7;iy=top+pad+fline/2
-            cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
-            cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
-                           font=('Segoe UI Semibold',9),fill='#f8fbff')
-            tx=x+inset;ty=top+pad
-            cv.create_text(tx,ty,text=username,anchor='nw',font=self.canvas_bold,fill=name_fg)
-            if first_line:
-                cv.create_text(tx+name_w+7,ty,text=first_line,anchor='nw',font=self.canvas_font,fill=fg)
-            for i,line in enumerate(rest,1):
-                cv.create_text(tx,ty+i*fline,text=line,anchor='nw',font=self.canvas_font,fill=fg)
-            cursor=top-gap
-            rendered_count+=1
-        self.visible_count_current=rendered_count
-        self.active_image_files=active_images
-        self._update_scroll_status()
-        if self.scroll_offset:
-            cv.create_rectangle(x,22,x+min(maxw,420),49,fill='#23354c',outline='#405e7b')
-            cv.create_text(x+10,35,text=f'OLDER CHAT  ·  {self.scroll_offset} newer message(s) below  ·  ↓ scroll for live',
-                           anchor='w',font=('Segoe UI',9,'bold'),fill='#e1f0ff')
-
-    def _hotkeys(self):
-        if os.name!='nt':return
-        u=self.tracker.user32
-        ctrl=bool(u.GetAsyncKeyState(0x11)&0x8000)
-        shift=bool(u.GetAsyncKeyState(0x10)&0x8000)
-        active=set()
-        if ctrl and shift:
-            if u.GetAsyncKeyState(0x75)&0x8000:active.add('panel') # F6
-            if u.GetAsyncKeyState(0x76)&0x8000:active.add('room') # F7
-            if u.GetAsyncKeyState(0x21)&0x8000:active.add('older') # Page Up
-            if u.GetAsyncKeyState(0x22)&0x8000:active.add('newer') # Page Down
-            if u.GetAsyncKeyState(0x23)&0x8000:active.add('latest') # End
-        for key in active-self.last_hotkeys:
-            if key=='panel':
-                if self.settings_open:self.root.withdraw()
-                else:self.root.deiconify();self.root.lift()
-                self.settings_open=not self.settings_open
-            if key=='older':self.scroll_chat(3)
-            if key=='newer':self.scroll_chat(-3)
-            if key=='latest':self.jump_to_latest()
-            if key=='room':
-                self.config['show_room']=not self.config['show_room']
-                self.cfg_vars['show_room'].set(not self.config['show_room'])
-                self.save()
-        self.last_hotkeys=active
-
-    def _maintain_storage(self):
-        """Limit temporary disk files without disrupting visible scrollback."""
-        if not self.feed or self.config.get('keep_log',False):return
-        try:
-            # AIR appends to this JSONL file. We've already ingested these
-            # records in RAM, so a large log does not need to persist forever.
-            if self.feed.is_file():
-                size=self.feed.stat().st_size
-                if size>2_000_000 and self.feed_pos>=size:
-                    with self.feed.open('r+b') as fh:fh.truncate(0)
-                    self.feed_pos=0
-            retained={str(m.bubble_image) for m in self.messages if m.bubble_image}
-            now=time.time()
-            for pngfile in self.feed.parent.glob('habbo_view_bubble_*.png'):
-                if str(pngfile) not in retained and now-pngfile.stat().st_mtime>30:
-                    try:pngfile.unlink()
-                    except OSError:pass
-        except OSError:pass
-
-    def tick(self):
-        try:
-            self._hotkeys()
-            self._poll_feed()
-            self._apply_wheel()
-            # Avoid holding decoded PNG images for all historical messages.
-            # Older images remain on disk only while their message is retained.
-            if self.feed and time.monotonic()-self.last_native_check>30:
-                self.last_native_check=time.monotonic()
-                self._maintain_storage()
-                for image_key in list(self.native_images):
-                    if image_key not in self.active_image_files:
-                        self.native_images.pop(image_key,None)
-            exclude=[self.root.winfo_id(),self.overlay.winfo_id()]
-            geom=self.tracker.find(exclude)
-            foreground=self.tracker.foreground_context(geom[4],self.root.winfo_id()) if geom else 'other'
-            # Do not hide the overlay simply because Explorer/Discord/Spotify
-            # is active. Position it directly above Habbo in the normal z-order
-            # instead, so other apps naturally cover it without erasing chat.
-            if geom:
-                sx,sy,sw,sh,*_=geom
-                # When the room is visible, only cover the left chat column.
-                # This also limits click obstruction if a Windows theme interferes
-                # with the click-through style. The room-hidden option uses the
-                # full client width for its background.
-                overlay_w=sw if not self.config['show_room'] else min(sw,max(260,
-                    int(self.config['x'])+int(self.config['width'])+28))
-                overlay_geom=(sx,sy,overlay_w,sh)
-                changed=geom!=self.last_rect or overlay_geom!=self.last_overlay_geometry
-                self.last_rect=geom
-                if changed and not self.clickthrough_failed:
-                    self.last_overlay_geometry=overlay_geom
-                    self.overlay.geometry(f'{overlay_w}x{sh}+{sx}+{sy}')
-                    self.overlay.update_idletasks()
-                    # Apply NOACTIVATE before showing, then reapply once mapped.
-                    # This avoids the transparent overlay briefly taking focus.
-                    self.tracker.set_clickthrough(self.overlay.winfo_id())
-                    self.overlay.deiconify()
-                    self.overlay.update_idletasks()
-                    if not self.tracker.set_clickthrough(self.overlay.winfo_id()):
-                        self.clickthrough_failed=True
-                        self.overlay.withdraw()
-                    else:
-                        # Place below unrelated apps EVEN if the panel was
-                        # started from Explorer with Habbo in the background.
-                        self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
-                    self.last_clickthrough_check=time.monotonic()
-                elif not self.clickthrough_failed and time.monotonic()-self.last_clickthrough_check>1.5:
-                    if not self.tracker.set_clickthrough(self.overlay.winfo_id()):
-                        self.clickthrough_failed=True
-                        self.overlay.withdraw()
-                    self.last_clickthrough_check=time.monotonic()
-                if not self.clickthrough_failed and foreground in ('habbo','settings'):
-                    # Focusing Habbo normally raises it above the overlay.
-                    # Repair only the game's own z-order when it is active,
-                    # never while another app is foreground.
-                    self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
-                if self.clickthrough_failed:
-                    self.status.set('Overlay hidden: Windows click-through could not be enabled. Restart the panel to retry.')
-                elif not self.feed:
-                    self.status.set('Habbo found. Waiting for local chat bridge log...')
-            else:
-                self.overlay.withdraw();self.last_rect=None;self.last_overlay_geometry=None
-                self.status.set('Waiting for a Habbo client window...')
-            self.draw()
-        except Exception as e:
-            self.status.set(f'Overlay issue: {str(e)[:140]}')
-        self.root.after(120,self.tick)
-
-    def close(self):
-        if self.wheel_hook and os.name=='nt':
-            try:
-                u=self.tracker.user32
-                u.UnhookWindowsHookEx.argtypes=(ctypes.c_void_p,)
-                u.UnhookWindowsHookEx.restype=wintypes.BOOL
-                u.UnhookWindowsHookEx(self.wheel_hook)
-            except (OSError,AttributeError,ValueError):pass
-            self.wheel_hook=None
-        self.save()
-        if not self.config.get('keep_log',False) and self.feed and self.feed.exists():
-            try:self.feed.unlink()
-            except OSError:pass
-        if not self.config.get('keep_log',False) and self.feed:
-            try:
-                for png in self.feed.parent.glob('habbo_view_bubble_*.png'):
-                    if png.is_file():
-                        try:png.unlink()
-                        except OSError:pass
-            except OSError:pass
-        self.native_images.clear()
-        self.root.destroy()
-
-
-def main():
-    if os.name!='nt':
-        raise SystemExit('This overlay needs Windows (for transparent click-through windows).')
-    root=tk.Tk()
-    ChatOverlayApp(root)
-    root.mainloop()
-
-
-if __name__=='__main__':
-    main() -or
- (($_.Name -eq 'java.exe' -or $_.Name -eq 'javaw.exe') -and $_.CommandLine -match 'G-Earth|gearth')
-} | ForEach-Object { @{name=[string]$_.Name;pid=[int]$_.ProcessId} })
-ConvertTo-Json -InputObject $xs -Compress -Depth 3
-"""
-            flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
-            processes=[]
-            try:
-                ps=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',ps_process],
-                    capture_output=True,text=True,timeout=15,creationflags=flags)
-                if ps.returncode:raise OSError((ps.stderr or 'Process query failed')[:160])
-                processes=json.loads(ps.stdout or '[]')
-                if isinstance(processes,dict):processes=[processes]
-                lines.append('Processes before: '+str(processes))
-            except (OSError,ValueError,subprocess.TimeoutExpired) as e:
-                lines.append('Process inspection error: '+repr(e))
-                processes=None
-            if probe():
-                state='Engine backend already online; proxy waiting not independently confirmed.'
-            elif processes is None:
-                state='Process query failed; avoiding a possible duplicate.'
-            elif processes:
-                state='Java/G-Earth process exists but extension port is closed; avoiding duplicate.'
-            else:
-                self._packet_put(('engine_status','No G-Earth process; launching using the tested method...'))
-                exe_path=Path(exe).resolve()
-                q=lambda x:"'"+str(x).replace("'","''")+"'"
-                args='--connect flash --host '+host+' --port '+str(gameport)
-                script=("$ErrorActionPreference='Stop'; Start-Process -FilePath "+
-                    q(str(exe_path))+" -WorkingDirectory "+q(str(exe_path.parent))+
-                    " -ArgumentList "+q(args)+" -Verb RunAs -ErrorAction Stop; 'Launch accepted'")
-                try:
-                    result=subprocess.run(['powershell.exe','-NoProfile','-NonInteractive','-Command',script],
-                        capture_output=True,text=True,timeout=80,creationflags=flags)
-                    lines.append('Launch return code: '+str(result.returncode))
-                    lines.append('Launch output: '+(result.stdout or result.stderr)[:250])
-                    if result.returncode==0:
-                        deadline=time.monotonic()+35
-                        while time.monotonic()<deadline and not probe():time.sleep(1)
-                        state='Windows accepted the engine launch.'
-                    else:
-                        state='Repair launch failed: '+(result.stderr or result.stdout)[:130]
-                except (OSError,subprocess.TimeoutExpired) as e:
-                    state='Repair launch error: '+str(e)[:130]
-                    lines.append(state)
-            online=probe()
-            lines.append('Port listening after: '+str(online))
-            lines.append('Habbo proxy WAITING state: not independently verified')
-            if online:state='Engine backend ONLINE on port '+str(port)+'; proxy waiting state not verified.'
-            report='\n'.join(lines)+'\nRESULT: '+state+'\n'
-            try:
-                APP_DIR.mkdir(parents=True,exist_ok=True)
-                (APP_DIR/'gearth-diagnostic-last.txt').write_text(report,encoding='utf-8')
-            except OSError:pass
-            self._packet_put(('engine_diagnostic_done',report,state))
-        except Exception as e:
-            self._packet_put(('engine_diagnostic_done','Diagnostic exception: '+repr(e),
-                'Diagnostic failed: '+str(e)[:130]))
-
-    def _engine_heartbeat(self):
-        """Expose backend and installation state without trusting a GUI title."""
-        if not self.root.winfo_exists():return
-        if self._diagnostic_running:
-            self.root.after(2500,self._engine_heartbeat)
-            return
-        try:port=int(self.gearth_port_var.get())
-        except (TypeError,ValueError):port=9092
-        if self._gearth_extension_port_responds(port):
-            self._engine_last_error=''
-            self.engine_status_var.set(f'Engine backend: ONLINE · extension port {port} · proxy WAITING state not independently verified')
-        elif self._engine_last_error:
-            self.engine_status_var.set('Engine setup ERROR: '+self._engine_last_error)
-        elif not self._engine_installing:
-            exe=managed_gearth_executable()
-            if self._gearth_launch_watch_until>time.monotonic():
-                self.engine_status_var.set('Engine: starting; waiting for backend...')
-            elif exe:
-                self.engine_status_var.set('Engine: installed · backend OFFLINE')
-            elif not self._engine_start_attempted:
-                self.engine_status_var.set('Engine: startup scheduled (not yet attempted)')
-            else:
-                self.engine_status_var.set('Engine: not installed. Click Install / repair to retry setup.')
-        self.root.after(2500,self._engine_heartbeat)
-
-    def _start_gearth_direct(self,select_if_missing=True):
-        if os.name!='nt':
-            self.packet_status.set('G-Earth background launch requires Windows.')
-            return False
-        if self._gearth_launch_watch_until>time.monotonic():
-            self.packet_status.set('G-Earth startup is still being checked. Please do not start Habbo yet.')
-            return False
-        # Do not reject startup due to an unrelated window containing Habbo.
-        try:port=int(self.gearth_port_var.get())
-        except (TypeError,ValueError):port=9092
-        if not 1<=port<=65535:port=9092
-        if self._gearth_extension_port_responds(port):
-            self._gearth_auto_arm_attempted=True
-            self.packet_status.set(f'G-Earth extension port {port} already responds. Skipped duplicate launch. AIR proxy connection not verified.')
-            return True
-        path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file():
-            discovered=self._discover_gearth_beta()
-            if discovered:
-                path=discovered
-                self.config['gearth_path']=str(path)
-                self.gearth_path_display.set('Selected G-Earth: '+str(path))
-                self.save()
-            elif select_if_missing:
-                self._select_gearth()
-                path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file() or path.suffix.lower() not in ('.exe','.jar'):
-            self.packet_status.set('Background launch needs the working G-Earth beta EXE. Click Find G-Earth to select it once.')
-            return False
-        if self._find_gearth_window():
-            self._gearth_auto_arm_attempted=True
-            self.packet_status.set('G-Earth window is running but extension port is not responding. Check the G-Earth connection before launching Habbo.')
-            return True
-        if not self._launch_gearth(auto_connect=True,select_if_missing=False):
-            return False
-        self._gearth_launch_watch_until=time.monotonic()+65
-        self._gearth_launch_started=time.monotonic()
-        self.root.after(850,self._poll_gearth_direct_launch)
-        return True
-
-    def _poll_gearth_direct_launch(self):
-        """Do not require a visible GUI. The backend listening port is the probe."""
-        if not self.root.winfo_exists():return
-        try:port=int(self.gearth_port_var.get())
-        except (TypeError,ValueError):port=9092
-        if self._gearth_extension_port_responds(port):
-            self._gearth_launch_watch_until=0.0
-            # Let JavaFX finish opening normally before minimizing the window.
-            # This uses the precise launch style that succeeded in PowerShell.
-            if self.gearth_minimize_var.get():
-                self.root.after(3500,self._minimize_gearth_after_backend)
-            self.packet_status.set(f'G-Earth backend detected: port {port} is listening. Flash/AIR auto-connect was requested. The Habbo proxy WAITING state is not independently verified.')
-            return
-        if time.monotonic()<self._gearth_launch_watch_until:
-            self.root.after(900,self._poll_gearth_direct_launch)
-        else:
-            self._gearth_launch_watch_until=0.0
-            self._gearth_auto_arm_attempted=False
-            if self._find_gearth_window():
-                self.packet_status.set(f'G-Earth window exists but extension port {port} is still closed. Check beta startup and selected port.')
-            else:
-                self.packet_status.set('Windows accepted the G-Earth start request but no backend was detected within 65 seconds. Check the saved beta EXE or admin prompt; click Launch + auto-connect to retry.')
-
-    def _minimize_gearth_after_backend(self):
-        """Minimize the working GUI only after startup; keep G-Earth running."""
-        if not self.root.winfo_exists() or not self.gearth_minimize_var.get():
-            return
-        try:port=int(self.gearth_port_var.get())
-        except (TypeError,ValueError):port=9092
-        if not self._gearth_extension_port_responds(port):
-            return
-        hwnd=self._find_gearth_window()
-        if hwnd:
-            user32=ctypes.WinDLL('user32',use_last_error=True)
-            user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
-            user32.ShowWindowAsync.restype=wintypes.BOOL
-            user32.ShowWindowAsync(hwnd,6)
-
-    def _launch_habbo_with_gearth(self):
-        """Start Habbo only after the user confirms G-Earth's WAITING state.
-
-        A timer or an open TCP extension port cannot prove that G-Earth has
-        successfully prepared its AIR proxy. Don't auto-connect as a side effect
-        of clicking the Habbo launcher button.
-        """
-        if os.name!='nt':return
-        if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.packet_status.set('Habbo is already running. Close it before starting a new intercepted session.')
-            return
-        path=Path(str(self.config.get('habbo_launcher_path') or ''))
-        if not path.is_file():
-            path=self._select_habbo_launcher()
-            if path is None:return
-        if not self._find_gearth_window():
-            self._start_integrated_engine()
-            self.packet_status.set('Starting the internal G-Earth engine. Wait until the proxy is ready, then launch Habbo again.')
-            return
-        if not messagebox.askyesno('G-Earth connection check',
-            'Does the G-Earth beta currently display "Waiting for connection"?\n\n'
-            'If not, click No and connect manually in G-Earth first.\n\n'
-            'Only click Yes when G-Earth is actually waiting for Habbo.'):
-            self.packet_status.set('Habbo not launched. Connect G-Earth first and verify its state.')
-            return
-        self._finish_habbo_launch()
-
-    def _finish_habbo_launch(self):
-        self._gearth_launch_queued=False
-        target=Path(str(self.config.get('habbo_launcher_path') or ''))
-        if not target.is_file():
-            self.packet_status.set('Habbo launcher not found; select it again.')
-            return
-        if not self._find_gearth_window():
-            self.packet_status.set('G-Earth did not appear. Habbo was NOT launched to avoid a failed handshake.')
-            return
-        if self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()]):
-            self.packet_status.set('Habbo is already open. No duplicate client launched.')
-            return
-        try:
-            os.startfile(str(target))
-            self.packet_status.set('Habbo launched. G-Earth should intercept the AIR session. '
-                                   'If it freezes at 60%, use Advanced G-Earth and the known-working beta manual connection.')
-        except OSError as exc:
-            self.packet_status.set('Could not launch Habbo: '+str(exc)[:150])
-
-    def _save_gearth_minimize(self):
-        self.config['gearth_minimize']=bool(self.gearth_minimize_var.get())
-        self.save()
-
-    @staticmethod
-    def _find_gearth_window():
-        """Find G-Earth's original top-level window by its actual title.
-
-        Never operate on a window if its title cannot be positively identified.
-        """
-        if os.name!='nt':return 0
-        user32=ctypes.WinDLL('user32',use_last_error=True)
-        enum_windows=user32.EnumWindows
-        callback_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
-        enum_windows.argtypes=[callback_type,wintypes.LPARAM]
-        enum_windows.restype=wintypes.BOOL
-        get_text=user32.GetWindowTextW
-        get_text.argtypes=[wintypes.HWND,wintypes.LPWSTR,ctypes.c_int]
-        get_text.restype=ctypes.c_int
-        is_window=user32.IsWindow
-        is_window.argtypes=[wintypes.HWND]
-        is_window.restype=wintypes.BOOL
-        found=[]
-        @callback_type
-        def callback(hwnd,lparam):
-            if not is_window(hwnd):return True
-            buf=ctypes.create_unicode_buffer(256)
-            get_text(hwnd,buf,256)
-            if re.match(r'^G[- ]Earth(?:\s|$)',buf.value.strip(),re.I):
-                found.append(int(hwnd))
-                return False
-            return True
-        enum_windows(callback,0)
-        return found[0] if found else 0
-
-    def _show_gearth(self):
-        if os.name!='nt':return
-        hwnd=self._find_gearth_window()
-        if not hwnd:
-            self.packet_status.set('G-Earth window not found. Use Connect Habbo AIR to start it.')
-            return
-        user32=ctypes.WinDLL('user32',use_last_error=True)
-        user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
-        user32.ShowWindowAsync.restype=wintypes.BOOL
-        user32.ShowWindowAsync(hwnd,9)  # SW_RESTORE; user can use the native advanced controls
-        user32.SetForegroundWindow.argtypes=[wintypes.HWND]
-        user32.SetForegroundWindow.restype=wintypes.BOOL
-        user32.SetForegroundWindow(hwnd)
-        self._gearth_autostart_active=False
-        self.packet_status.set('Advanced G-Earth window opened. Changes here remain in G-Earth.')
-
-    def _minimize_gearth_if_ready(self):
-        """Best-effort only: do not use unsupported cross-process window parenting."""
-        if not self._gearth_autostart_active or not self.gearth_minimize_var.get():return
-        hwnd=self._find_gearth_window()
-        if hwnd:
-            user32=ctypes.WinDLL('user32',use_last_error=True)
-            user32.ShowWindowAsync.argtypes=[wintypes.HWND,ctypes.c_int]
-            user32.ShowWindowAsync.restype=wintypes.BOOL
-            user32.ShowWindowAsync(hwnd,6) # SW_MINIMIZE; don't hide an elevated process invisibly
-            return
-        self._gearth_minimize_tries+=1
-        if self._gearth_minimize_tries<15:
-            self.root.after(900,self._minimize_gearth_if_ready)
-
-    def _connect_habbo_air(self):
-        """Start the managed engine instead of requiring a separately selected EXE."""
-        self._start_integrated_engine()
-
-    def _gearth_connection_target(self):
-        host=self.gearth_host_var.get().strip().lower()
-        raw_port=self.gearth_game_port_var.get().strip()
-        if not re.fullmatch(r'[a-z0-9.-]{3,253}',host) or host.startswith('.') or '..' in host:
-            self.packet_status.set('Enter a valid hotel hostname, e.g. game-us.habbo.com.')
-            return None
-        try:port=int(raw_port)
-        except ValueError:port=0
-        if not 1<=port<=65535:
-            self.packet_status.set('Enter a valid Habbo game port, e.g. 30000.')
-            return None
-        self.config['gearth_host']=host
-        self.config['gearth_game_port']=port
-        self.save()
-        return host,port
-
-    def _launch_gearth(self,auto_connect=False,select_if_missing=True):
-        """Run only G-Earth elevated; never elevate the whole chat companion.
-
-        G-Earth's own ConnectionController supports --connect flash (AIR).
-        No extension flag is passed as a proxy port; the extension port is separate.
-        """
-        path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file() and select_if_missing:
-            self._select_gearth()
-            path=Path(str(self.config.get('gearth_path') or ''))
-        if not path.is_file():
-            self.packet_status.set('Choose the working G-Earth beta with Find G-Earth first.')
-            return False
-        if path.suffix.lower() not in ('.exe','.jar'):
-            self.packet_status.set('Please select G-Earth.exe (or the G-Earth .jar).')
-            return False
-        if os.name!='nt':
-            self.packet_status.set('This launcher currently supports Windows only.')
-            return False
-        if self._find_gearth_window():
-            self.packet_status.set('G-Earth is already running. No duplicate launch.')
-            return False
-        try:
-            path=path.resolve()
-            if auto_connect:
-                target=self._gearth_connection_target()
-                if target is None:return False
-                host,game_port=target
-                connection_args=['--connect','flash','--host',host,'--port',str(game_port)]
-            else:
-                connection_args=[]
-            if path.suffix.lower()=='.jar':
-                import shutil
-                java=shutil.which('javaw.exe') or shutil.which('java.exe')
-                if java is None:
-                    self.packet_status.set('Java missing. Install Java or choose G-Earth.exe.')
-                    return False
-                program=java
-                parameters=subprocess.list2cmdline(['-jar',str(path)]+connection_args)
-            else:
-                program=str(path)
-                parameters=subprocess.list2cmdline(connection_args) if connection_args else None
-
-            shell32=ctypes.WinDLL('shell32',use_last_error=True)
-            execute=shell32.ShellExecuteW
-            execute.argtypes=(wintypes.HWND,wintypes.LPCWSTR,wintypes.LPCWSTR,
-                              wintypes.LPCWSTR,wintypes.LPCWSTR,ctypes.c_int)
-            execute.restype=ctypes.c_void_p
-            ctypes.set_last_error(0)
-            # The same normal-window launch behavior as the successful
-            # PowerShell Start-Process -Verb RunAs test. JavaFX can initialize
-            # incorrectly when asked to start minimized (SW_SHOWMINNOACTIVE=7).
-            # Minimize only after the extension backend has started responding.
-            result=execute(None,'runas',program,parameters,str(path.parent),1)
-            if int(result or 0)<=32:
-                error=ctypes.get_last_error()
-                if error==1223 or int(result or 0)==5:
-                    self.packet_status.set('Administrator permission declined; nothing was started.')
-                else:
-                    self.packet_status.set(f'Could not launch G-Earth (Windows error {error or int(result or 0)}).')
-                return False
-            self._gearth_autostart_active=bool(auto_connect)
-            self._gearth_auto_arm_attempted=True  # prevent racing a queued startup probe
-            self._gearth_started_at=time.monotonic()
-            if auto_connect:
-                # Never attach G-Python during Habbo's initial AIR handshake.
-                # A successful ShellExecuteW request does not prove that JavaFX
-                # or the G-Earth proxy actually started.
-                self.packet_status.set(f'Windows accepted the G-Earth start request for {host}:{game_port}. Checking whether the extension backend starts; no packet viewer attached.')
-            else:
-                self.packet_status.set(f'Opened {path.name} without auto-connect flags. In G-Earth, select Flash/AIR, '
-                                       'check game-us.habbo.com:30000 and click Connect before starting Habbo.')
-            return True
-        except (OSError,ValueError,AttributeError) as exc:
-            self.packet_status.set('G-Earth launch failed: '+str(exc)[:130])
-            return False
-
-    def _await_gearth_viewer(self,deadline):
-        """Do not start a socket extension before the backend's port is listening."""
-        if self.packet_started:return
-        try:
-            port=int(self.gearth_port_var.get())
-            if not 1<=port<=65535:raise ValueError()
-        except ValueError:
-            self.packet_status.set('Invalid extension port; open advanced controls to verify it.')
-            return
-        try:
-            import socket
-            with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.2)
-                ready=sock.connect_ex(('127.0.0.1',port))==0
-        except OSError:
-            ready=False
-        if ready:
-            self._connect_gearth()
-        elif time.monotonic()<deadline:
-            self.root.after(1200,lambda:self._await_gearth_viewer(deadline))
-        else:
-            self.packet_status.set('G-Earth started, but extension port was not reachable. '
-                                   'Use Advanced G-Earth window to check the connection and port.')
-
-    def _connect_gearth(self):
-        if self.packet_started:
-            self.packet_active=True
-            self.packet_status.set('Viewer already started. Capture resumed.')
-            return
-        try:
-            port=int(self.gearth_port_var.get())
-            if not 1<=port<=65535:raise ValueError()
-        except ValueError:
-            self.packet_status.set('Enter a valid G-Earth extension port (usually 9092).')
-            return
-        self.config['gearth_port']=port
-        self.save()
-        try:
-            import g_python.gextension  # noqa: F401
-        except ImportError:
-            self.packet_status.set('Install G-Python once with: py -m pip install g-python')
-            return
-        self.packet_active=True
-        self.packet_started=True
-        self.packet_status.set(f'Connecting extension on local port {port}...')
-        threading.Thread(target=self._packet_worker,args=(port,),daemon=True).start()
-
-    def _packet_worker(self,port):
-        try:
-            from g_python.gextension import Extension
-            from g_python.hmessage import Direction
-            info={'title':'Habbo Companion Packet Tools',
-                  'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.1','author':'Habbo Companion'}
-            ext=Extension(info,['-p',str(port)])
-            self.packet_extension=ext
-            def event(name):
-                self._packet_put(('status',name))
-            ext.on_event('init',lambda:event('G-Earth extension connected.'))
-            ext.on_event('connection_start',lambda:event('Habbo AIR connected; capturing packets in Habbo Companion.'))
-            def disconnected():
-                self.manipulation_enabled=False
-                self._packet_put(('manip_status','G-Earth disconnected. Manipulation automatically OFF.'))
-                self._packet_put(('manip_off',))
-                event('Habbo traffic disconnected.')
-            ext.on_event('connection_end',disconnected)
-            def hook(direction):
-                def on_message(msg):
-                    if not self.packet_active and not self.manipulation_enabled:return
-                    try:detail=str(msg.packet.g_string(ext))[:4000]
-                    except Exception:detail='[Packet could not be formatted]'
-                    if self.manipulation_enabled and self.packet_rules:
-                        try:
-                            matched=apply_manipulation_rule(msg,direction,detail,
-                                                            tuple(self.packet_rules),ext)
-                            if matched:
-                                detail=f'[{matched[0]} rule {matched[1]}] '+detail
-                        except Exception as exc:
-                            self._packet_put(('manip_status',f'Rule error; packet unchanged: {str(exc)[:160]}'))
-                    if self.packet_active:
-                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail))
-                return on_message
-            ext.intercept(Direction.TO_CLIENT,hook('Incoming'))
-            ext.intercept(Direction.TO_SERVER,hook('Outgoing'))
-            ext.start()
-        except Exception as exc:
-            self.packet_started=False
-            self._packet_put(('status',f'G-Earth connection failed: {type(exc).__name__}: {str(exc)[:190]}'))
-
-    def _packet_put(self,item):
-        try:self.packet_queue.put_nowait(item)
-        except queue.Full:pass  # never block the Habbo packet interception thread
-
-    def _pump_packets(self):
-        if not self.root.winfo_exists():return
-        for _ in range(150):
-            try:item=self.packet_queue.get_nowait()
-            except queue.Empty:break
             if item[0]=='engine_status':
                 self.engine_status_var.set('Engine setup: '+item[1])
                 continue
