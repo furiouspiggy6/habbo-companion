@@ -1,42 +1,33 @@
-HABBO COMPANION 1.0.0
-=====================
+HABBO COMPANION 1.0.2 — G-EARTH AUTO PREPARE
+=================================================
 
-Installed using INSTALL_Habbo_Companion.cmd (from the installer ZIP).
+WHAT'S NEW
+- In Packet Viewer, enable "Automatically prepare G-Earth when Companion opens"
+  (enabled by default). Select the WORKING G-Earth beta with Find G-Earth once.
+- Companion requests Windows administrator permission for G-Earth and asks
+  G-Earth to prepare its Flash/AIR connection before Habbo is launched.
+- "Launch Habbo (with G-Earth)" starts the selected Habbo launcher after a
+  warm-up delay. Select your Habbo launcher .exe once; the location is saved.
+- Habbo already running? Companion will not start G-Earth mid-session.
+- Existing View Chat, custom bubbles, scrollback and settings remain.
 
-YOUR SETTINGS ARE PRESERVED
-  %APPDATA%\HabboViewChat\settings.json
+IMPORTANT
+This version has been checked for Python syntax, client startup flow, and
+update/restore behaviour, but the automatic G-Earth beta connection has NOT
+been tested live on this Windows PC. A visible G-Earth window is not proof its
+proxy is ready. If you see a 60% freeze, disable auto-prepare and use the beta's
+manual connection that already worked. UAC approval may be needed each launch.
 
-INSTALL LOCATION
-  %LOCALAPPDATA%\Programs\Habbo Companion
+HOW TO USE
+1. Close Habbo before launching Companion.
+2. Open Companion. Approve the G-Earth administrator permission prompt.
+3. Wait for G-Earth to show Waiting for connection.
+4. Launch Habbo normally, or use the new integrated Launch Habbo button.
 
-START
-  Double-click the Habbo Companion desktop shortcut, or use the Start menu.
-  You can also run START_Habbo_Companion.bat from the install directory.
+FILES AND PRIVACY
+Keeps settings at %APPDATA%\HabboViewChat\settings.json; does not bundle or
+modify G-Earth itself or your Habbo AIR SWF, private logs, or account data.
 
 UPDATES
-  Open Habbo Companion -> Updates -> Install update ZIP.
-  Select a future trusted Habbo_Companion_Update_vX.Y.Z.zip.
-  The app will close, back itself up, install the update and restart.
-  If you later have a GitHub Releases / HTTPS update feed, paste its manifest
-  URL into Updates to enable checking and downloading updates in-app.
-
-ALREADY WORKING G-EARTH BETA
-  The selected executable path is saved in your existing settings. It will
-  remain the same. This installer does not install, elevate or change G-Earth.
-  Use Launch manually in Packet Viewer if that is what works with your beta.
-
-HABBO AIR
-  The installer never touches HabboAir.swf. Keep the client-side chat bridge
-  you already installed if you use original chat bubble artwork.
-
-BACKUPS
-  %LOCALAPPDATA%\HabboCompanion\Backups
-
-REQUIREMENTS
-  Windows 10/11 with Python 3 and Tkinter, which you already use for Companion.
-  Packet Viewer additionally uses your separate G-Earth / G-Python installation.
-
-NOTE ABOUT UPDATES
-  There is currently no preconfigured online release server. Local ZIP updates
-  work immediately. Online checks work only after a publisher provides a
-  trusted HTTPS manifest URL. Do not install updates from unknown sources.
+Companion > Updates > Check online:
+https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json
