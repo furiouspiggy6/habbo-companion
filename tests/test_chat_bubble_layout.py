@@ -6,7 +6,7 @@ import unittest
 APP=Path(__file__).resolve().parent.parent/'Habbo_Companion.pyw'
 CODE=APP.read_text(encoding='utf-8')
 TREE=ast.parse(CODE)
-HELPERS=('is_whisper_chat','chat_one_line','fit_line_ellipsis')
+HELPERS=('is_whisper_chat','chat_one_line','fit_line_ellipsis','native_bubble_fits_single_line')
 NODES=[n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name in HELPERS]
 assert len(NODES)==len(HELPERS), 'Missing chat layout helpers'
 namespace={}
@@ -45,6 +45,13 @@ class WideChatTests(unittest.TestCase):
         self.assertNotIn('\n',result)
         self.assertTrue(result.endswith('…'))
         self.assertLessEqual(FixedFont().measure(result),240)
+
+    def test_wrapped_native_images_get_compact_fallback(self):
+        f=namespace['native_bubble_fits_single_line']
+        self.assertTrue(f(200,30,500,36))
+        self.assertFalse(f(200,75,500,36))
+        self.assertFalse(f(700,30,500,36))
+        self.assertFalse(f(0,30,500,36))
 
     def test_short_widths_are_safe(self):
         self.assertEqual(namespace['fit_line_ellipsis']('hello',FixedFont(),0),'')

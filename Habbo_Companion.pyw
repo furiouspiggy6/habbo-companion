@@ -295,6 +295,11 @@ def chat_one_line(text):
     return ' '.join(str(text or '').split())
 
 
+def native_bubble_fits_single_line(width,height,max_width,max_height):
+    """Wrapped or oversized AIR PNGs need a rebuilt one-line shell."""
+    return 0<width<=max_width and 0<height<=max_height
+
+
 def fit_line_ellipsis(text,font_obj,available_px):
     available_px=max(0,int(available_px))
     if font_obj.measure(text)<=available_px:return text
@@ -2987,11 +2992,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # Never open arbitrary paths embedded in a chat message.
             if (self.feed is not None and isinstance(raw_image,str)
                 and re.fullmatch(r'habbo_view_bubble_[0-9]+_-?[0-9]+_-?[0-9]+\.png',raw_image)):
-                candidate=self.feed.parent/raw_image
-                try:
-                    if candidate.is_file() and 8<candidate.stat().st_size<2_000_000:
-                        image_path=candidate
-                except OSError:pass
+                # The AIR writer can append the chat record before the PNG is
+                # fully on disk. Keep its safe basename and retry at draw time.
+                image_path=self.feed.parent/raw_image
             # While reviewing earlier chat, keep the same messages in view as
             # incoming messages arrive instead of snapping back to the bottom.
             if self.scroll_offset>0:self.scroll_offset+=1
@@ -3076,19 +3079,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 boxw=min(maxw,max(60,content_w+inset+pad))
                 height=max(fline,fnt.metrics('linespace')+2)+12
                 native=None
+                key=None
                 if show_bubbles and self.config.get('original_bubble_images',True) and msg.bubble_image is not None:
                     key=str(msg.bubble_image)
                     try:
                         native=self.native_images.get(key)
-                        if native is None:
-                            native=tk.PhotoImage(master=self.root,file=key,format='png')
-                            self.native_images[key]=native
-                        w,h=native.width(),native.height()
-                        if not (w>0 and h>0 and h<=max(35,fline+14) and w<=maxw):
-                            native=None
+                        if native is None and msg.bubble_image.is_file():
+                            # Don't open an incomplete or unexpectedly large
+                            # client image; retry on the next draw instead.
+                            nbytes=msg.bubble_image.stat().st_size
+                            if 8<nbytes<2_000_000:
+                                native=tk.PhotoImage(master=self.root,file=key,format='png')
+                                self.native_images[key]=native
                     except (OSError,tk.TclError,ValueError):
                         native=None
-                if native is not None:
+                if native is not None and native_bubble_fits_single_line(
+                    native.width(),native.height(),maxw,max(35,fline+14)):
                     w,h=native.width(),native.height()
                     top=cursor-h
                     if top<24:break
@@ -3101,20 +3107,64 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 top=cursor-height
                 if top<24:break
                 bx=max(x,sw-x-boxw) if right else x
+                avatar=None
                 if show_bubbles:
                     bg,fg,emblem,edge=(get_message_colors(msg,theme)
                         if self.config.get('respect_chat_styles',True) else
                         (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                    cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
-                    self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
-                    self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
+                    border=edge
+                    if native is not None:
+                        # Derive the colour of this speaker's actual Habbo PNG
+                        # from the upper text-free strip, not an arbitrary style
+                        # ID palette. Preserve their real avatar from its left edge.
+                        try:
+                            sx=min(native.width()-2,30)
+                            sy=min(native.height()-2,3)
+                            rgb=native.get(sx,sy)
+                            if (len(rgb)>=3 and not native.transparency_get(sx,sy)):
+                                bg='#%02x%02x%02x'%tuple(int(v) for v in rgb[:3])
+                                fg=('#161616' if sum(rgb[:3])>420 else '#f4f6fa')
+                            border='#393939'
+                            aw=min(26,native.width())
+                            ah=min(30,native.height(),height-3)
+                            if aw>=18 and ah>=18:
+                                icon_key=f'{key}|avatar|{aw}x{ah}'
+                                avatar=self.native_images.get(icon_key)
+                                if avatar is None:
+                                    avatar=tk.PhotoImage(master=self.root,width=aw,height=ah)
+                                    self.root.tk.call(str(avatar),'copy',str(native),
+                                                      '-from',0,0,aw,ah,'-to',0,0)
+                                    self.native_images[icon_key]=avatar
+                                active_images.add(key)
+                                active_images.add(icon_key)
+                        except (tk.TclError,ValueError,TypeError,IndexError):
+                            avatar=None
+                    # A compact Habbo-style rectangular speech bubble with a
+                    # small bottom pointer. Unlike the old oval fallback, this
+                    # matches the silhouette of the native one-line artwork.
+                    left=bx+25
+                    upper=top+2
+                    lower=cursor-6
+                    far=bx+boxw-2
+                    cv.create_polygon(
+                        left+2,upper,far-4,upper,far,upper+4,
+                        far,lower-2,far-3,lower,far-10,lower,
+                        far-10,cursor-2,far-20,lower,
+                        left+2,lower,left,lower-2,left,upper+2,
+                        fill=bg,outline=border,width=1)
                     name_fg=fg
                 else:
                     fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
-                ix=bx+pad+7;iy=top+height/2
-                cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
-                cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
-                               font=('Segoe UI Semibold',9),fill='#f8fbff')
+                if avatar is not None:
+                    cv.create_image(bx,top+2,image=avatar,anchor='nw')
+                else:
+                    ix=bx+pad+7;iy=top+height/2
+                    if show_bubbles:
+                        cv.create_rectangle(bx,top+2,bx+25,cursor-6,
+                                            fill=emblem,outline=border,width=1)
+                    cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
+                    cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
+                                   font=('Segoe UI Semibold',9),fill='#f8fbff')
                 tx=bx+inset;ty=top+6
                 cv.create_text(tx,ty,text=username,anchor='nw',font=bold,fill=name_fg)
                 if visible_body:
