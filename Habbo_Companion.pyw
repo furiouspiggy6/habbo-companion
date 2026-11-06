@@ -53,6 +53,8 @@ DEFAULT = dict(
     bubbles=True,
     respect_chat_styles=True,
     original_bubble_images=True,
+    single_line_bubbles=True,
+    whispers_right=True,
     theme='Midnight',
     topmost=False,
     keep_log=False,
@@ -281,6 +283,28 @@ def save_config(cfg):
 
 def clamp(x, lo, hi):
     return max(lo, min(hi, x))
+
+
+def is_whisper_chat(chat_type):
+    """Habbo ChatItem type 2 is a whisper."""
+    try:return int(chat_type)==2
+    except (ValueError,TypeError):return False
+
+
+def chat_one_line(text):
+    return ' '.join(str(text or '').split())
+
+
+def fit_line_ellipsis(text,font_obj,available_px):
+    available_px=max(0,int(available_px))
+    if font_obj.measure(text)<=available_px:return text
+    if font_obj.measure('…')>available_px:return ''
+    lo,hi=0,len(text)
+    while lo<hi:
+        mid=(lo+hi+1)//2
+        if font_obj.measure(text[:mid]+'…')<=available_px:lo=mid
+        else:hi=mid-1
+    return text[:lo].rstrip()+'…'
 
 
 def wrap_message(text, max_px, fnt):
@@ -926,6 +950,13 @@ class ChatOverlayApp:
         self._check(f,'Hide room (ambient background)','show_room',invert=True)
         self._check(f,'Show bubble backgrounds','bubbles')
         self._check(f,'Original Habbo bubble artwork (native PNG)','original_bubble_images')
+        self._check(f,'Single-line chat bubbles (auto width)','single_line_bubbles')
+        self._check(f,'Whispers on the right','whispers_right')
+        tk.Label(f,text='Single-line bubbles expand across the room. Wrapped native '
+                     'PNGs are redrawn as compact one-line bubbles. Text shrinks '
+                     'to fit before shortening at the window edge.',
+                 wraplength=352,justify='left',font=('Segoe UI',9),
+                 bg='#121a28',fg='#88a2bc').pack(anchor='w',pady=(2,4))
         self._check(f,'Fallback bubble colours if original unavailable','respect_chat_styles')
         self._check(f,'Keep a local chat log after exit','keep_log')
         self._check(f,'Auto-fill available screen with chat bubbles','auto_fill_screen')
@@ -936,7 +967,7 @@ class ChatOverlayApp:
         for label,key,low,high,desc in [
             ('Vertical starting point','anchor',45,95,'% of screen height'),
             ('Left margin','x',0,200,'pixels from window edge'),
-            ('Bubble width','width',250,800,'pixels'),
+            ('Bubble width (wrapped mode)','width',250,800,'pixels'),
             ('Font size','font_size',11,23,'points'),
             ('Bubbles visible (manual mode)','visible_messages',3,100,'messages'),
             ('Messages kept for scrollback','history_limit',30,500,'in memory'),
@@ -3002,7 +3033,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.canvas_font=font.Font(family='Segoe UI',size=size)
         self.canvas_bold=font.Font(family='Segoe UI Semibold',size=size,weight='bold')
         pad=12
-        maxw=min(int(self.config['width']), max(150,sw-int(self.config['x'])-10))
+        single_line=bool(self.config.get('single_line_bubbles',True))
+        align_whispers=bool(self.config.get('whispers_right',True))
+        maxw=(max(80,sw-2*int(self.config['x'])-10) if single_line
+              else min(int(self.config['width']),max(150,sw-int(self.config['x'])-10)))
         fline=max(self.canvas_font.metrics('linespace'),self.canvas_bold.metrics('linespace'))+2
         clear=int(self.config.get('bottom_clearance',110)) if not self.config['show_room'] else 0
         cursor=min(int(sh*int(self.config['anchor'])/100), sh-clear-18)
@@ -3019,7 +3053,77 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             start=max(0,end-int(self.config.get('visible_messages',14)))
         rendered_count=0
         active_images=set()
+        # Message ordering uses one shared vertical cursor, preventing an
+        # incoming whisper and a normal message from obscuring each other.
+        font_cache={size:(self.canvas_font,self.canvas_bold)}
         for msg in reversed(self.messages[start:end]):
+            right=align_whispers and is_whisper_chat(msg.chat_type)
+            if single_line:
+                username=msg.name+':'
+                body=chat_one_line(msg.body)
+                inset=pad+22
+                available=max(30,maxw-inset-pad)
+                fnt,bold=self.canvas_font,self.canvas_bold
+                for pt in range(size-1,8,-1):
+                    if bold.measure(username)+7+fnt.measure(body)<=available:break
+                    if pt not in font_cache:
+                        font_cache[pt]=(font.Font(family='Segoe UI',size=pt),
+                                        font.Font(family='Segoe UI Semibold',size=pt,weight='bold'))
+                    fnt,bold=font_cache[pt]
+                name_w=bold.measure(username)
+                visible_body=fit_line_ellipsis(body,fnt,max(0,available-name_w-7))
+                content_w=name_w+(7+fnt.measure(visible_body) if visible_body else 0)
+                boxw=min(maxw,max(60,content_w+inset+pad))
+                height=max(fline,fnt.metrics('linespace')+2)+12
+                native=None
+                if show_bubbles and self.config.get('original_bubble_images',True) and msg.bubble_image is not None:
+                    key=str(msg.bubble_image)
+                    try:
+                        native=self.native_images.get(key)
+                        if native is None:
+                            native=tk.PhotoImage(master=self.root,file=key,format='png')
+                            self.native_images[key]=native
+                        w,h=native.width(),native.height()
+                        if not (w>0 and h>0 and h<=max(35,fline+14) and w<=maxw):
+                            native=None
+                    except (OSError,tk.TclError,ValueError):
+                        native=None
+                if native is not None:
+                    w,h=native.width(),native.height()
+                    top=cursor-h
+                    if top<24:break
+                    bx=max(x,sw-x-w) if right else x
+                    cv.create_image(bx,top,image=native,anchor='nw')
+                    cursor=top-gap
+                    rendered_count+=1
+                    active_images.add(key)
+                    continue
+                top=cursor-height
+                if top<24:break
+                bx=max(x,sw-x-boxw) if right else x
+                if show_bubbles:
+                    bg,fg,emblem,edge=(get_message_colors(msg,theme)
+                        if self.config.get('respect_chat_styles',True) else
+                        (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
+                    cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
+                    self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
+                    self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
+                    name_fg=fg
+                else:
+                    fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
+                ix=bx+pad+7;iy=top+height/2
+                cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
+                cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
+                               font=('Segoe UI Semibold',9),fill='#f8fbff')
+                tx=bx+inset;ty=top+6
+                cv.create_text(tx,ty,text=username,anchor='nw',font=bold,fill=name_fg)
+                if visible_body:
+                    cv.create_text(tx+name_w+7,ty,text=visible_body,anchor='nw',
+                                   font=fnt,fill=fg)
+                cursor=top-gap
+                rendered_count+=1
+                continue
+            # Legacy wrapped-mode artwork and layout follows.
             # Original: render the actual image produced by Habbo's own
             # PooledChatBubble/ChatStyle renderer. Keeps fonts, background,
             # borders, avatar artwork, and pointers pixel-for-pixel.
@@ -3035,7 +3139,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     if w>0 and h>0:
                         top=cursor-h
                         if top<24:break
-                        cv.create_image(x,top,image=original,anchor='nw')
+                        bx=max(x,sw-x-w) if right else x
+                        cv.create_image(bx,top,image=original,anchor='nw')
                         cursor=top-gap
                         rendered_count+=1
                         active_images.add(key)
@@ -3064,22 +3169,23 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             boxw=min(maxw,max(160,content_w+inset+pad))
             top=cursor-height
             if top<24:break
+            bx=max(x,sw-x-boxw) if right else x
             if show_bubbles:
                 bg,fg,emblem,edge=(get_message_colors(msg,theme)
                     if self.config.get('respect_chat_styles',True) else
                     (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                cv.create_rectangle(x+3,top+4,x+boxw+3,cursor+4,fill='#070e19',outline='')
-                self._rounded(cv,x,top,x+boxw,cursor,9,edge)
-                self._rounded(cv,x+2,top+2,x+boxw-2,cursor-2,7,bg)
+                cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
+                self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
+                self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
                 name_fg=fg
             else:
                 fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
             # Small avatar-like initial. No third-party game art is required.
-            ix=x+pad+7;iy=top+pad+fline/2
+            ix=bx+pad+7;iy=top+pad+fline/2
             cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
             cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
                            font=('Segoe UI Semibold',9),fill='#f8fbff')
-            tx=x+inset;ty=top+pad
+            tx=bx+inset;ty=top+pad
             cv.create_text(tx,ty,text=username,anchor='nw',font=self.canvas_bold,fill=name_fg)
             if first_line:
                 cv.create_text(tx+name_w+7,ty,text=first_line,anchor='nw',font=self.canvas_font,fill=fg)
@@ -3161,13 +3267,13 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # instead, so other apps naturally cover it without erasing chat.
             if geom:
                 sx,sy,sw,sh,*_=geom
-                # When the room is visible, only cover the left chat column.
-                # This also limits click obstruction if a Windows theme interferes
-                # with the click-through style. The room-hidden option uses the
-                # full client width for its background.
-                overlay_w=sw if not self.config['show_room'] else min(sw,max(260,
-                    int(self.config['x'])+int(self.config['width'])+28))
-                overlay_geom=(sx,sy,overlay_w,sh)
+                # The wider overlay allows single-line chat and right-aligned whispers.
+            # The existing click-through safeguard still protects the game UI.
+            wide_chat=bool(self.config.get('single_line_bubbles',True)
+                           or self.config.get('whispers_right',True))
+            overlay_w=(sw if wide_chat or not self.config['show_room']
+                       else min(sw,max(260,int(self.config['x'])+int(self.config['width'])+28)))
+            overlay_geom=(sx,sy,overlay_w,sh)
                 changed=geom!=self.last_rect or overlay_geom!=self.last_overlay_geometry
                 self.last_rect=geom
                 if changed and not self.clickthrough_failed:
