@@ -1424,7 +1424,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
     def _engine_heartbeat(self):
         """Expose backend and installation state without trusting a GUI title."""
         if not self.root.winfo_exists():return
-        if self._diagnostic_running:
+        if getattr(self,'_diagnostic_running',False):
             self.root.after(2500,self._engine_heartbeat)
             return
         try:port=int(self.gearth_port_var.get())
