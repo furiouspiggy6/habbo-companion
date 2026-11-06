@@ -138,5 +138,46 @@ class ManagedEngineTests(unittest.TestCase):
             appobj._engine_heartbeat()
         self.assertIn('access denied',appobj.engine_status_var.get())
 
+
+    def test_installed_engine_starts_despite_false_habbo_window(self):
+        """Previously an unrelated Habbo-titled window prevented engine start."""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        class Var:
+            def __init__(self,value=None):self.value=value
+            def get(self):return self.value
+            def set(self,value):self.value=value
+        exe=self.root/'installed'/'G-Earth.exe'
+        exe.parent.mkdir()
+        exe.write_bytes(b'test exe')
+        appobj=object.__new__(app.ChatOverlayApp)
+        appobj.config={'gearth_path':str(exe)}
+        appobj._engine_installing=False
+        appobj._engine_start_attempted=False
+        appobj._engine_last_error=''
+        appobj.gearth_port_var=Var('9092')
+        appobj.engine_status_var=Var()
+        appobj.packet_status=Var()
+        appobj.gearth_path_display=Var()
+        appobj.tracker=SimpleNamespace(find=lambda _:('false Habbo window',))
+        appobj.root=SimpleNamespace(winfo_id=lambda:55)
+        appobj.overlay=SimpleNamespace(winfo_id=lambda:56)
+        appobj.save=lambda:None
+        called=[]
+        appobj._start_gearth_direct=lambda select_if_missing:called.append(select_if_missing)
+        with patch.object(app.ChatOverlayApp,'_gearth_extension_port_responds',return_value=False), \
+             patch.object(app,'managed_gearth_executable',return_value=exe):
+            appobj._start_integrated_engine()
+        self.assertEqual(called,[False])
+        self.assertIn('installed',appobj.engine_status_var.get())
+
+    def test_diagnostic_button_and_cache_bust_are_present(self):
+        import inspect
+        self.assertTrue(callable(app.ChatOverlayApp._diagnose_and_repair))
+        self.assertTrue(callable(app.ChatOverlayApp._copy_engine_diagnostic))
+        code=inspect.getsource(app.ChatOverlayApp._check_online_update)
+        self.assertIn('uuid.uuid4().hex',code)
+        self.assertIn("Cache-Control",code)
+
 if __name__=='__main__':
     unittest.main()
