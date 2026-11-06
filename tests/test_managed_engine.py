@@ -299,8 +299,10 @@ class ManagedEngineTests(unittest.TestCase):
 
 
     def test_replay_interval_limited_and_finite(self):
+        self.assertEqual(app.validate_replay_interval('0.1'),0.1)
+        self.assertEqual(app.validate_replay_interval('0.2'),0.2)
         self.assertEqual(app.validate_replay_interval('2.5'),2.5)
-        for value in ['0.1','1.99','121','NaN','Inf','-Inf','x','']:
+        for value in ['0','0.01','0.099','-1','121','NaN','Inf','-Inf','x','']:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     app.validate_replay_interval(value)
@@ -351,12 +353,12 @@ class ManagedEngineTests(unittest.TestCase):
         obj._replay_generation=4
         obj._replay_after_id=None
         obj._replay_count=0
-        obj._replay_interval=2.5
+        obj._replay_interval=0.1
         obj._replay_expr='{out:UseFurniture}{i:123}'
         obj.replay_status_var=V()
         obj._packet_replay_tick(4)
         self.assertEqual(obj._replay_count,1)
-        self.assertEqual(obj.root.calls[0][0],2500)
+        self.assertEqual(obj.root.calls[0][0],100)
         obj._stop_packet_replay()
         self.assertFalse(obj._replay_running)
         self.assertEqual(obj.root.cancelled,['timer1'])

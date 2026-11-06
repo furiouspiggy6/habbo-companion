@@ -125,9 +125,9 @@ def validate_replay_interval(value):
     try:
         interval=float(str(value).strip())
     except (ValueError,TypeError,OverflowError):
-        raise ValueError('Enter a delay in seconds (2 to 120).')
-    if not math.isfinite(interval) or not 2.0<=interval<=120.0:
-        raise ValueError('Repeat delay must be between 2 and 120 seconds.')
+        raise ValueError('Enter a delay in seconds (0.1 to 120).')
+    if not math.isfinite(interval) or not 0.1<=interval<=120.0:
+        raise ValueError('Repeat delay must be between 0.1 and 120 seconds.')
     return interval
 
 
@@ -736,11 +736,11 @@ class ChatOverlayApp:
         self.rule_contains_var=tk.StringVar(value='')
         self.rule_enabled_var=tk.BooleanVar(value=True)
         self.inject_direction_var=tk.StringVar(value='Outgoing')
-        self.replay_interval_var=tk.StringVar(value='2.5')
+        self.replay_interval_var=tk.StringVar(value='0.1')
         self.replay_status_var=tk.StringVar(value='Repeat OFF. Load an outgoing packet and start manually.')
         self._replay_running=False
         self._replay_expr=''
-        self._replay_interval=2.5
+        self._replay_interval=0.1
         self._replay_count=0
         self._replay_after_id=None
         self._replay_generation=0
@@ -1282,7 +1282,7 @@ class ChatOverlayApp:
         ttk.Label(holder,textvariable=self.replay_status_var,style='Panel.TLabel',
                   wraplength=640).pack(anchor='w',pady=(0,4))
         ttk.Label(holder,text='Packet replay is OFF by default and sends only your selected outgoing action. '
-                  'Minimum delay: 2 seconds. Stops on disconnect or when Companion closes. '
+                  'Minimum delay: 0.1 seconds (100 ms). Stops on disconnect or when Companion closes. '
                   'Avoid excessive automation or violating Habbo rules.',
                   style='Panel.TLabel',wraplength=630).pack(anchor='w',pady=(4,0))
         self._refresh_manipulation_rules()
@@ -2312,7 +2312,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             from g_python.hmessage import Direction
             info={'title':'Habbo Companion Packet Tools',
                   'description':'Packet viewer with optional session rules and manual send',
-                  'version':'1.1.7','author':'Habbo Companion'}
+                  'version':'1.1.8','author':'Habbo Companion'}
             ext=Extension(info,['-p',str(port)])
             self.packet_extension=ext
             def event(name):
