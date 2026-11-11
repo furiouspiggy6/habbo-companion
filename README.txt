@@ -1,29 +1,40 @@
-HABBO COMPANION v1.1.16 — RESTORED ORIGINAL HABBO BUBBLES
-===========================================================
+HABBO COMPANION v1.1.17 — COFFEE USERNAME RESOLUTION FIX
+============================================================
 
-The white/grey/pastel speech bubbles introduced by Companion's custom
-drawing code were not original Habbo artwork. They have been removed.
+WHY THE COFFEE TOOL SHOWED "0 PLAYERS":
+Previous versions could erase the entire detected room-player list when
+any player left, even when unrelated users were still in the room.
 
-The View Chat overlay now shows the ACTUAL Habbo bubble PNG (pixel for
-pixel) received from your local Habbo chat feed, preserving its original
-shape, text, avatar, chat badge, border, pointer and colouring.
+FIXES:
+- An incoming UserRemove now removes only the known matching room index.
+  Players with unrelated IDs remain mapped.
+- Give 1 cup / Start coffee loop now works when the player list was not
+  received: type an exact Habbo username and the tool sends
+  GetExtendedProfileByName to Habbo through your existing G-Earth session.
+- An ExtendedProfile response returns the server-confirmed numeric account
+  ID and username; the answer must match the requested username exactly.
+- Profile-based gifting is allowed only after the player has spoken in
+  the CURRENT Habbo room according to the existing local chat feed.
+  This ensures an unrelated player's profile isn't accepted as proof
+  of their presence in the room.
+- If the target hasn't spoken in the room, ask them to say something
+  then press Give 1 cup again. The matching profile ID is retained
+  only for that room/session, without guessing an ID.
+- Profile lookup gives a specific error after 8 seconds. It does not
+  send a cup unless the target can be verified and the confirmation
+  dialog is accepted.
+- Room/session changes clear pending lookups and profile caches.
 
-The "Use original colours and avatars" checkbox has been removed, and
-native artwork is always enabled. Older installations that unchecked
-the setting are automatically corrected.
+HOW TO USE:
+1. Connect Habbo Companion and G-Earth, and enter the same Habbo room.
+2. Have the recipient say something in chat (for the fallback method).
+3. Packet Manipulator > Coffee Pass Loop.
+4. Type their exact username and press Give 1 cup.
+5. Confirm the displayed username and numeric ID before sending.
 
-When an original PNG has not been supplied, Companion displays only
-transparent, unboxed chat text as a fallback — NEVER a synthetic white
-bubble or an invented coloured letter-avatar bubble. Incoming PNG files
-can take a moment to be written to disk, and Companion retries.
+The existing two-cup continuous loop, manual recipient ID fallback,
+original Habbo speech bubble artwork, one-line/wrapped setting,
+whisper-right, and update flow are preserved.
 
-Original Habbo PNGs contain Habbo's own text and layout. This means
-the one-line/wrapped toggle and Font size slider can alter the unboxed
-text fallback but cannot independently reformat the text ALREADY baked
-into the original PNG. Using Habbo's actual artwork takes precedence
-over these presentation overrides.
-
-Whisper-right alignment, chat history, G-Earth integration, username
-coffee targeting, the packet manipulator and the updater are unchanged.
-
-INSTALL: Habbo Companion > Updates > Check online.
+This build has automated tests but the profile packet exchange and
+actual coffee transfer must be confirmed in a running Habbo client.
