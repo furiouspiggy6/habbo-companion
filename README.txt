@@ -1,36 +1,47 @@
-HABBO COMPANION v1.1.19 — GIVE COFFEE WITHOUT ROOM CHAT
-==========================================================
+HABBO COMPANION v1.1.20 — COFFEE DELIVERY MONITOR & STEADIER CURSOR
+===================================================================
 
-You can now give a cup by typing someone's Habbo username EVEN IF THEY
-HAVE NOT SPOKEN IN ROOM CHAT.
+COFFEE DELIVERY MONITOR
+-----------------------
+The Coffee Pass panel now reports:
+- Pass requests sent: number of PassCarryItem packets accepted by the
+  local G-Earth send interface. This does NOT prove the recipient got one.
+- Recipient carrying-item updates observed: the number of incoming
+  CarryObject notifications with a nonzero item type and a matching ROOM
+  AVATAR INDEX received within four seconds of a pass request.
+- When no room avatar index is known (for example, when resolving the
+  username only from a Habbo public profile), it clearly says receipt
+  cannot be verified from this connection.
 
-HOW IT WORKS
-------------
-1. Enter the same Habbo room as the intended recipient.
-2. Open Packet Manipulator > Coffee Pass Loop.
-3. Enter the exact Recipient username and press Give 1 cup.
-4. Companion checks its current room-player list. If the player is not
-   mapped, it sends GetExtendedProfileByName to the Habbo server.
-5. Habbo must return the matching username and a valid numeric account ID.
-6. Confirm the username and ID in the existing dialog before any cup
-   packets are sent.
+These are separate counts. A server carry-state update suggests the
+recipient was holding an item, but it is NOT a per-cup delivery receipt.
+Habbo sends HandItemReceived directly to the recipient; the giver's
+client cannot generally see that private notification. Sending a cup
+can fail because the recipient is absent, too far away, or blocked by
+server rules.
 
-NO CHAT REQUIREMENT
--------------------
-A Habbo profile confirms the account identity, but does NOT prove that
-the account is standing in your current room. The confirmation dialog
-clearly warns you when only the profile ID was verified. Ensure the
-person is actually in the room yourself; Habbo can reject an out-of-room
-or out-of-range item pass.
+The monitor always shows the difference between requests attempted and
+available server-side activity. It never labels a sent packet alone
+as delivered. If you're using a profile ID without a room avatar index,
+you can ask the recipient to confirm they see the cup.
 
-Verified profile IDs are held in a separate in-session cache rather
-than being falsely counted as detected room occupants. Room changes,
-disconnects and restarts clear the cache. Unknown or mismatched profile
-replies never trigger a transfer.
+CURSOR / OVERLAY STABILITY
+--------------------------
+Companion previously redrew the entire full-screen, transparent chat
+canvas at each 120ms update, even when messages and settings did not
+change. It now draws immediately on new messages, scrolling, game
+window motion, and settings changes; otherwise it refreshes about
+every 600ms. Full-screen click-through and window-stacking checks
+are also less frequent when nothing changed.
 
-Nothing changes for users already mapped from room packets. The
-numeric fallback ID remains available when username is blank. Original
-Habbo PNG bubbles, whisper-right alignment, coffee pass loop and all
-other features are preserved.
+This reduces unnecessary layered-window activity that can contribute
+to cursor flicker. It does NOT programmatically move or click the
+mouse. If the cursor still flickers, press STOP in Coffee Pass to test
+whether rapid Habbo furniture interactions are responsible, and
+try a higher delay per action.
+
+All original native Habbo bubble PNGs, whisper-right settings,
+username-based coffee targeting and unlimited loop cycles (0)
+remain in place.
 
 INSTALL: Habbo Companion > Updates > Check online.
