@@ -47,7 +47,7 @@ class UsernameCoffeeTests(unittest.TestCase):
         self.assertEqual(parse('{in:Users}{i:68808036}{s:"Atuu"}')['atuu'][1],68808036)
 
     def test_json_escaped_username(self):
-        found=parse(r'{in:Users}{i:15}{s:"A\\\"B"}')
+        found=parse(r'{in:Users}{i:15}{s:"A\"B"}')
         self.assertEqual(found['a"b'][1],15)
 
     def test_single_cup_uses_only_first_furniture(self):
