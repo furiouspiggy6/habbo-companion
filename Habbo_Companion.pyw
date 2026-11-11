@@ -1721,6 +1721,10 @@ class ChatOverlayApp:
             self._coffee_queue_after_id=self.root.after(
                 350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
+        username=self.coffee_username_var.get().strip()
+        if username and username.casefold() not in self._room_users:
+            self._lookup_coffee_profile(username,single_cup=single_cup)
+            return
         try:
             target_id,target_name=self._resolve_coffee_recipient()
             sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
@@ -1829,6 +1833,8 @@ class ChatOverlayApp:
         self._coffee_start_queued=False
         self._coffee_queued_single=False
         self._coffee_target_name=''
+        self._coffee_profile_pending=None
+        self._coffee_profile_generation+=1
         self._coffee_generation+=1
         queued=self._coffee_queue_after_id
         self._coffee_queue_after_id=None
@@ -2939,6 +2945,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 try:room_index=int(msg.packet.read_string(6))
                                 except (IndexError,ValueError,TypeError,AttributeError):pass
                             self._packet_put(('room_user_removed',room_index))
+                        elif kind=='ExtendedProfile':
+                            profile=profile_recipient_from_packet(msg.packet)
+                            if profile is not None:
+                                self._packet_put(('coffee_profile',profile[0],profile[1]))
                         elif kind=='Users':
                             # g_string() is the legacy raw rendering. Use
                             # g_expression() for {i:ID}{s:"username"} fields,
@@ -3040,8 +3050,15 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.whisper_hints.append((occurred,body))
                         self.whisper_hints=self.whisper_hints[-32:]
                 continue
+            if item[0]=='coffee_profile':
+                self._accept_coffee_profile(item[1],item[2])
+                continue
             if item[0]=='room_users_reset':
                 self._room_users.clear()
+                self._room_chat_names.clear()
+                self._room_profile_cache.clear()
+                self._coffee_profile_pending=None
+                self._coffee_profile_generation+=1
                 self._room_lookup_pending=False
                 self._room_lookup_generation+=1
                 self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
@@ -3064,15 +3081,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='room_user_removed':
                 index=item[1]
-                if index is None or any(v[2] is None for v in self._room_users.values()):
-                    self._room_users.clear()  # fail closed rather than guessing room index
-                else:
-                    self._room_users={name:v for name,v in self._room_users.items() if v[2]!=index}
+                self._room_users,removed=remove_room_user_by_index(self._room_users,index)
+                for name in removed:
+                    self._room_chat_names.discard(name)
+                    self._room_profile_cache.pop(name,None)
                 if (self._coffee_running and self._coffee_target_name
-                    and self._coffee_target_name not in self._room_users):
-                    self._stop_coffee_loop('Recipient left or room identity changed; coffee pass stopped.')
+                    and (self._coffee_target_name in removed or index is None)):
+                    self._stop_coffee_loop(
+                        'Recipient may have left; coffee pass stopped pending re-verification.')
                 self.coffee_users_status_var.set(
-                    f'{len(self._room_users)} player(s) currently mapped. Refresh if a name is missing.')
+                    f'{len(self._room_users)} player(s) mapped. '
+                    'A player left; unrelated players remain mapped.')
                 continue
             if item[0]=='session_connection':
                 self.packet_connection_status.set(
@@ -3080,6 +3099,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
                     self._room_users.clear()
+                    self._room_chat_names.clear()
+                    self._room_profile_cache.clear()
+                    self._coffee_profile_pending=None
+                    self._coffee_profile_generation+=1
                     self._room_lookup_pending=False
                     self._room_lookup_generation+=1
                     self.coffee_users_status_var.set('Disconnected. Room users cleared.')
@@ -3373,9 +3396,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if room is not None and self.room_id is not None and room!=self.room_id:
                 self.clear_msgs()
                 self._room_users.clear()
+                self._room_chat_names.clear()
+                self._room_profile_cache.clear()
+                self._coffee_profile_pending=None
+                self._coffee_profile_generation+=1
                 self.coffee_users_status_var.set('Room changed. Waiting for player IDs...')
                 if self._coffee_running:self._stop_coffee_loop('Room changed; coffee pass stopped.')
             if room is not None:self.room_id=room
+            self._room_chat_names.add(name.casefold())
+            cached=self._room_profile_cache.pop(name.casefold(),None)
+            if cached and self._habbo_session_connected:
+                self._room_users[name.casefold()]=(cached[0],cached[1],None)
+                self.coffee_users_status_var.set(
+                    f'{cached[0]} verified from current room chat and profile (ID {cached[1]}).')
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
             chat_type=int(item.get('chatType',item.get('chat_type',0)) or 0)
