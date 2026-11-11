@@ -72,7 +72,8 @@ class UsernameCoffeeTests(unittest.TestCase):
         resolve=ns['_resolve_coffee_recipient']
         obj=SimpleNamespace(coffee_username_var=Var(' aTuU '),
                             coffee_recipient_var=Var('999'),
-                            _room_users={'atuu':('Atuu',68808036,7)})
+                            _room_users={'atuu':('Atuu',68808036,7)},
+                            _room_profile_cache={})
         self.assertEqual(resolve(obj),('68808036','Atuu'))
         obj.coffee_username_var=Var('SomeoneElse')
         with self.assertRaisesRegex(ValueError,'not found'):

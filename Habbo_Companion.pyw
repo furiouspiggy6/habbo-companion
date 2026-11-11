@@ -1580,8 +1580,9 @@ class ChatOverlayApp:
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
-        ttk.Label(holder,text='If room packets miss a username, Give 1 cup checks its Habbo profile. '
-                   'The target must have chatted in this room before sending. '
+        ttk.Label(holder,text='No chat required: if the room list is missing, '
+                   'the exact username is resolved through Habbo profile lookup. '
+                   'Confirm the ID and ensure the recipient is in your room. '
                   'No ID is guessed if the name cannot be found. '
                   'One cup sends Cup 1 + Pass once; the loop alternates both cups. '
                   'G-Earth must be connected. The server can ignore or rate-limit requests.',
@@ -1595,10 +1596,15 @@ class ChatOverlayApp:
         if len(username)>80 or any(ch in username for ch in '\r\n\x00'):
             raise ValueError('Enter a valid Habbo username.')
         user=self._room_users.get(username.casefold())
-        if user is None:
-            raise ValueError('Player "'+username+'" not found in this room. '
-                             'Join the same room and click Refresh room players.')
-        return str(user[1]),user[0]
+        if user is not None:
+            return str(user[1]),user[0]
+        # A direct ExtendedProfile response confirms username <-> account ID
+        # even when the player has not said anything in the current room.
+        profile=self._room_profile_cache.get(username.casefold())
+        if profile is not None:
+            return str(profile[1]),profile[0]
+        raise ValueError('Player "'+username+'" not found in room list, '
+                         'and no matching Habbo profile response was received.')
 
     def _lookup_coffee_profile(self,username,single_cup=False):
         """Get the exact numeric ID from Habbo without guessing a recipient."""
@@ -1640,16 +1646,21 @@ class ChatOverlayApp:
                 self.coffee_username_var.get().strip().casefold()!=name.casefold()):
             self.coffee_status_var.set('Profile lookup cancelled: session or username changed.')
             return
-        if name.casefold() not in self._room_chat_names:
+        # Do not mislabel profile lookup as evidence of room presence.
+        # A server-confirmed name/ID is enough to attempt PassCarryItem,
+        # subject to the existing explicit user confirmation. The Habbo
+        # server is responsible for rejecting recipients outside the room.
+        if name.casefold() in self._room_chat_names:
+            self._room_users[name.casefold()]=(name,user_id,None)
+            self.coffee_users_status_var.set(
+                f'{name} confirmed by Habbo profile and current room chat (ID {user_id}).')
+        else:
             self._room_profile_cache[name.casefold()]=(name,user_id)
-            self.coffee_status_var.set(
-                f'Habbo confirmed {name} (ID {user_id}), but this player has not spoken '
-                'in the current room. Ask them to chat once and press Give 1 cup again.')
-            return
-        self._room_users[name.casefold()]=(name,user_id,None)
-        self.coffee_users_status_var.set(
-            f'{name} confirmed in room chat and by Habbo profile (ID {user_id}).')
-        self.coffee_status_var.set('Username verified; checking cup actions...')
+            self.coffee_users_status_var.set(
+                f'Habbo confirmed {name} (ID {user_id}). Room presence not verified; '
+                'the recipient does not need to speak to attempt a cup.')
+        self.coffee_status_var.set(
+            'Exact username and account ID confirmed by Habbo; checking cup actions...')
         self.root.after(0,lambda once=pending[1]:self._start_coffee_loop(single_cup=once))
 
     def _refresh_room_players(self):
@@ -1723,7 +1734,8 @@ class ChatOverlayApp:
                 350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
         username=self.coffee_username_var.get().strip()
-        if username and username.casefold() not in self._room_users:
+        if (username and username.casefold() not in self._room_users
+            and username.casefold() not in self._room_profile_cache):
             self._lookup_coffee_profile(username,single_cup=single_cup)
             return
         try:
@@ -1749,9 +1761,16 @@ class ChatOverlayApp:
             return
         duration=('one cup' if single_cup else
                   'continuously until STOP' if cycles==0 else f'for {cycles} complete cycles')
+        profile_only=(bool(username)
+                      and username.casefold() in self._room_profile_cache
+                      and username.casefold() not in self._room_users)
+        presence_note=('This ID is from Habbo profile lookup, not a verified room '
+                       'player list. Check the recipient is in your room.\n'
+                       if profile_only else '')
         if not messagebox.askyesno('Give cup' if single_cup else 'Start coffee pass loop',
             f'Send coffee actions {duration}?\n'
             f'Recipient: {target_name or target_id} (ID {target_id})\n'
+            f'{presence_note}'
             f'Delay between each packet: {interval:g} seconds\n\n'
             'Only proceed if you are permitted to automate these actions. '
             'Habbo may reject actions or rate-limit them.',
