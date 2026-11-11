@@ -2742,6 +2742,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             def connected():
                 self._habbo_session_connected=True
                 self._packet_put(('session_connection',True))
+                self._packet_put(('room_users_reset',))
                 event('Habbo AIR connected; capturing packets in Habbo Companion.')
             ext.on_event('connection_start',connected)
             def disconnected():
@@ -2755,10 +2756,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             def hook(direction):
                 def on_message(msg):
                     if not (self.packet_active or self.manipulation_enabled or
-                            self.config.get('whispers_right',True)):
+                            self.config.get('whispers_right',True) or direction=='Incoming'):
                         return
-                    try:detail=str(msg.packet.g_string(ext))[:4000]
+                    try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    if direction=='Incoming':
+                        if incoming_packet_is(detail,'RoomReady'):
+                            self._packet_put(('room_users_reset',))
+                        elif incoming_packet_is(detail,'UserRemove'):
+                            self._packet_put(('room_user_removed',removed_room_user_index(detail)))
+                        else:
+                            users=room_user_ids_from_packet(detail)
+                            if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
                         whisper_body=whisper_packet_text(detail)
                         if whisper_body is not None:
@@ -2774,7 +2783,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         except Exception as exc:
                             self._packet_put(('manip_status',f'Rule error; packet unchanged: {str(exc)[:160]}'))
                     if self.packet_active:
-                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail))
+                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail[:4000]))
                 return on_message
             ext.intercept(Direction.TO_CLIENT,hook('Incoming'))
             ext.intercept(Direction.TO_SERVER,hook('Outgoing'))
@@ -2841,11 +2850,36 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.whisper_hints.append((occurred,body))
                         self.whisper_hints=self.whisper_hints[-32:]
                 continue
+            if item[0]=='room_users_reset':
+                self._room_users.clear()
+                self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
+                if self._coffee_running:
+                    self._stop_coffee_loop('Room changed; coffee pass stopped for safety.')
+                continue
+            if item[0]=='room_users':
+                self._room_users.update(item[1])
+                self.coffee_users_status_var.set(
+                    f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
+                continue
+            if item[0]=='room_user_removed':
+                index=item[1]
+                if index is None or any(v[2] is None for v in self._room_users.values()):
+                    self._room_users.clear()  # fail closed rather than guessing room index
+                else:
+                    self._room_users={name:v for name,v in self._room_users.items() if v[2]!=index}
+                if (self._coffee_running and self._coffee_target_name
+                    and self._coffee_target_name not in self._room_users):
+                    self._stop_coffee_loop('Recipient left or room identity changed; coffee pass stopped.')
+                self.coffee_users_status_var.set(
+                    f'{len(self._room_users)} player(s) currently mapped. Refresh if a name is missing.')
+                continue
             if item[0]=='session_connection':
                 self.packet_connection_status.set(
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._room_users.clear()
+                    self.coffee_users_status_var.set('Disconnected. Room users cleared.')
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
                 continue
@@ -3122,6 +3156,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             room=item.get('room')
             if room is not None and self.room_id is not None and room!=self.room_id:
                 self.clear_msgs()
+                self._room_users.clear()
+                self.coffee_users_status_var.set('Room changed. Waiting for player IDs...')
+                if self._coffee_running:self._stop_coffee_loop('Room changed; coffee pass stopped.')
             if room is not None:self.room_id=room
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
