@@ -3740,24 +3740,41 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         # started from Explorer with Habbo in the background.
                         self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
                     self.last_clickthrough_check=time.monotonic()
-                elif not self.clickthrough_failed and time.monotonic()-self.last_clickthrough_check>1.5:
+                    self.last_stack_check=time.monotonic()
+                elif not self.clickthrough_failed and time.monotonic()-self.last_clickthrough_check>6.0:
                     if not self.tracker.set_clickthrough(self.overlay.winfo_id()):
                         self.clickthrough_failed=True
                         self.overlay.withdraw()
                     self.last_clickthrough_check=time.monotonic()
-                if not self.clickthrough_failed and foreground in ('habbo','settings'):
-                    # Focusing Habbo normally raises it above the overlay.
-                    # Repair only the game's own z-order when it is active,
-                    # never while another app is foreground.
+                if (not self.clickthrough_failed and foreground in ('habbo','settings')
+                    and time.monotonic()-self.last_stack_check>0.75):
+                    # Avoid making repeated z-order calls every 120ms; these
+                    # can cause flicker as the cursor crosses layered windows.
                     self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
+                    self.last_stack_check=time.monotonic()
                 if self.clickthrough_failed:
                     self.status.set('Overlay hidden: Windows click-through could not be enabled. Restart the panel to retry.')
                 elif not self.feed:
                     self.status.set('Habbo found. Waiting for local chat bridge log...')
             else:
                 self.overlay.withdraw();self.last_rect=None;self.last_overlay_geometry=None
+                self.last_overlay_draw_signature=None
                 self.status.set('Waiting for a Habbo client window...')
-            self.draw()
+            # No need to clear and rebuild the entire transparent canvas
+            # eight times a second while nothing changes. Keep immediate
+            # redraw for new chat, scrolling, layout or room movement.
+            visual_keys=('theme','show_room','single_line_bubbles','whispers_right',
+                         'bubbles','x','width','anchor','gap','font_size',
+                         'bottom_clearance','auto_fill_screen','visible_messages')
+            signature=(self.last_rect,self.last_overlay_geometry,self.scroll_offset,
+                       len(self.messages),self.messages[-1].arrived if self.messages else None,
+                       tuple(self.config.get(k) for k in visual_keys))
+            now=time.monotonic()
+            if (signature!=self.last_overlay_draw_signature
+                or now-self.last_overlay_draw_at>=0.6):
+                self.draw()
+                self.last_overlay_draw_signature=signature
+                self.last_overlay_draw_at=now
         except Exception as e:
             self.status.set(f'Overlay issue: {str(e)[:140]}')
         self.root.after(120,self.tick)
