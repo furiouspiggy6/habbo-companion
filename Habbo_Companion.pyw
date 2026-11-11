@@ -888,6 +888,9 @@ class ChatOverlayApp:
         self.root.configure(bg='#121a28')
         self.tracker=WinTracker()
         self.config=load_config()
+        # Original Habbo artwork is mandatory. Older settings may have saved
+        # this as False while replacement bubbles were supported.
+        self.config['original_bubble_images']=True
         # Packet tools are optional. The existing local AIR chat bridge works
         # even without G-Earth or G-Python installed.
         self.packet_queue=queue.Queue(maxsize=1200)
@@ -1077,17 +1080,18 @@ class ChatOverlayApp:
         lab.pack(anchor='w',fill='x',pady=(0,10))
         self._check(f,'Only people inside my view','visible_only')
         self._check(f,'Hide room (ambient background)','show_room',invert=True)
-        self._check(f,'Show bubble backgrounds','bubbles')
-        self._check(f,'Use original Habbo bubble colours and avatars','original_bubble_images')
+        self._check(f,'Show original Habbo bubbles','bubbles')
+        tk.Label(f,text='Original Habbo bubble artwork is always used (no imitation bubbles).',
+                 wraplength=352,justify='left',font=('Segoe UI',9),
+                 bg='#121a28',fg='#a9c2d8').pack(anchor='w',pady=(3,4))
         self._chat_line_toggle(f)
         self._check(f,'Whispers on the right','whispers_right')
-        tk.Label(f,text='ON: messages stay on one long line. OFF: text wraps over '
-                     'multiple lines, like the old chat layout. Both modes use '
-                     'your chosen Font size without changing it. Wrapped mode '
-                     'shows the whole message instead of shortening it.',
+        tk.Label(f,text='Original Habbo bubbles keep their genuine artwork, '
+                     'font and wrapping. The one-line switch and Font size '
+                     'control only affect text-only messages when Habbo has not '
+                     'supplied an original PNG.',
                  wraplength=352,justify='left',font=('Segoe UI',9),
                  bg='#121a28',fg='#88a2bc').pack(anchor='w',pady=(2,4))
-        self._check(f,'Fallback bubble colours if original unavailable','respect_chat_styles')
         self._check(f,'Keep a local chat log after exit','keep_log')
         self._check(f,'Auto-fill available screen with chat bubbles','auto_fill_screen')
         tk.Label(f,text='The overlay stays above Habbo, but behind other apps. Switching windows does not clear chat.',
@@ -3309,13 +3313,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.messages.append(Message(name,body,arrived,within,room,
                                          style_id,chat_type,forced_color,image_path))
             self._trim_history()
-            if self.config.get('original_bubble_images',True):
-                if image_path:
-                    self.native_image_count+=1
-                    if self.native_image_count==1:
-                        self.status.set('Receiving original Habbo bubble images (native client artwork).')
-                elif self.native_image_count==0:
-                    self.status.set('No original bubble images yet. Check that both updated files are installed.')
+            if image_path:
+                self.native_image_count+=1
+                if self.native_image_count==1:
+                    self.status.set('Displaying original Habbo bubble artwork from the client.')
+            elif self.native_image_count==0:
+                self.status.set('Waiting for original Habbo bubble PNGs. Missing images show text only.')
         except (ValueError,TypeError):pass
 
     def _rounded(self,canvas,x1,y1,x2,y2,r,color):
@@ -3364,203 +3367,58 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             start=max(0,end-int(self.config.get('visible_messages',14)))
         rendered_count=0
         active_images=set()
-        # Message ordering uses one shared vertical cursor, preventing an
-        # incoming whisper and a normal message from obscuring each other.
+        # Native client PNGs are the only speech bubble artwork we ever draw.
+        # They contain Habbo's genuine styling, text, chat badges and pointers.
+        # Replacing them with Tk polygons/rounded rectangles made fake white
+        # bubbles: do not bring those paths back.
         for msg in reversed(self.messages[start:end]):
             right=align_whispers and is_whisper_chat(msg.chat_type)
-            if single_line:
-                username=msg.name+':'
-                body=chat_one_line(msg.body)
-                inset=pad+22
-                available=max(30,maxw-inset-pad)
-                # Fixed font size for every chat row. At the window edge,
-                # shorten overlong text with an ellipsis instead of shrinking.
-                fnt,bold=self.canvas_font,self.canvas_bold
-                name_w=bold.measure(username)
-                visible_body=fit_line_ellipsis(body,fnt,max(0,available-name_w-7))
-                content_w=name_w+(7+fnt.measure(visible_body) if visible_body else 0)
-                boxw=min(maxw,max(60,content_w+inset+pad))
-                height=max(fline,fnt.metrics('linespace')+2)+12
-                native=None
-                key=None
-                if show_bubbles and self.config.get('original_bubble_images',True) and msg.bubble_image is not None:
-                    key=str(msg.bubble_image)
-                    try:
-                        native=self.native_images.get(key)
-                        if native is None and msg.bubble_image.is_file():
-                            # Don't open an incomplete or unexpectedly large
-                            # client image; retry on the next draw instead.
-                            nbytes=msg.bubble_image.stat().st_size
-                            if 8<nbytes<2_000_000:
-                                native=tk.PhotoImage(master=self.root,file=key,format='png')
-                                self.native_images[key]=native
-                    except (OSError,tk.TclError,ValueError):
-                        native=None
-                # Never draw the full native PNG in single-line mode: it
-                # carries the client's own font size, which differs by type.
-                # Reuse its portrait and colours below; render ALL text once
-                # with the configured, constant Tk fonts.
-                top=cursor-height
-                if top<24:break
-                bx=max(x,sw-x-boxw) if right else x
-                avatar=None
-                if show_bubbles:
-                    bg,fg,emblem,edge=(get_message_colors(msg,theme)
-                        if self.config.get('respect_chat_styles',True) else
-                        (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                    border=edge
-                    if native is not None:
-                        # Derive the colour of this speaker's actual Habbo PNG
-                        # from the upper text-free strip, not an arbitrary style
-                        # ID palette. Preserve their real avatar from its left edge.
-                        try:
-                            sx=min(native.width()-2,30)
-                            sy=min(native.height()-2,3)
-                            rgb=native.get(sx,sy)
-                            if (len(rgb)>=3 and not native.transparency_get(sx,sy)):
-                                bg='#%02x%02x%02x'%tuple(int(v) for v in rgb[:3])
-                                fg=('#161616' if sum(rgb[:3])>420 else '#f4f6fa')
-                            border='#393939'
-                            aw=min(26,native.width())
-                            ah=min(30,native.height(),height-3)
-                            if aw>=18 and ah>=18:
-                                icon_key=f'{key}|avatar|{aw}x{ah}'
-                                avatar=self.native_images.get(icon_key)
-                                if avatar is None:
-                                    avatar=tk.PhotoImage(master=self.root,width=aw,height=ah)
-                                    self.root.tk.call(str(avatar),'copy',str(native),
-                                                      '-from',0,0,aw,ah,'-to',0,0)
-                                    self.native_images[icon_key]=avatar
-                                active_images.add(key)
-                                active_images.add(icon_key)
-                        except (tk.TclError,ValueError,TypeError,IndexError):
-                            avatar=None
-                    # A compact Habbo-style rectangular speech bubble with a
-                    # small bottom pointer. Unlike the old oval fallback, this
-                    # matches the silhouette of the native one-line artwork.
-                    left=bx+25
-                    upper=top+2
-                    lower=cursor-6
-                    far=bx+boxw-2
-                    cv.create_polygon(
-                        left+2,upper,far-4,upper,far,upper+4,
-                        far,lower-2,far-3,lower,far-10,lower,
-                        far-10,cursor-2,far-20,lower,
-                        left+2,lower,left,lower-2,left,upper+2,
-                        fill=bg,outline=border,width=1)
-                    name_fg=fg
-                else:
-                    fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
-                if avatar is not None:
-                    cv.create_image(bx,top+2,image=avatar,anchor='nw')
-                else:
-                    ix=bx+pad+7;iy=top+height/2
-                    if show_bubbles:
-                        cv.create_rectangle(bx,top+2,bx+25,cursor-6,
-                                            fill=emblem,outline=border,width=1)
-                    cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
-                    cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
-                                   font=('Segoe UI Semibold',9),fill='#f8fbff')
-                tx=bx+inset;ty=top+6
-                cv.create_text(tx,ty,text=username,anchor='nw',font=bold,fill=name_fg)
-                if visible_body:
-                    cv.create_text(tx+name_w+7,ty,text=visible_body,anchor='nw',
-                                   font=fnt,fill=fg)
-                cursor=top-gap
-                rendered_count+=1
-                continue
-            # Legacy wrapped-mode: keep uniform font size and reflow the whole message.
-            # Wrapped mode uses the same user-selected Tk font sizes as one-line
-            # mode. Never blit the original PNG's embedded text, because Habbo's
-            # native text sizes can differ between bubble types and speakers.
-            # Keep its avatar and sampled colour palette when available.
             native=None
             key=None
-            if (show_bubbles and self.config.get('original_bubble_images',True)
-                and msg.bubble_image is not None):
+            if show_bubbles and msg.bubble_image is not None:
                 key=str(msg.bubble_image)
                 try:
                     native=self.native_images.get(key)
                     if native is None and msg.bubble_image.is_file():
                         nbytes=msg.bubble_image.stat().st_size
                         if 8<nbytes<2_000_000:
-                            native=tk.PhotoImage(master=self.root,file=key,format='png')
-                            self.native_images[key]=native
+                            loaded=tk.PhotoImage(master=self.root,file=key,format='png')
+                            if loaded.width()>0 and loaded.height()>0:
+                                native=loaded
+                                self.native_images[key]=native
                 except (OSError,tk.TclError,ValueError):
                     native=None
-            # Compact Habbo-like bubbles: username and first part of the message
-            # share a line; follow-on text wraps to the available wide column.
-            username=msg.name+':'
-            inset=pad+22  # avatar emblem to the left of the text
-            fullw=max(110,maxw-inset-pad)
-            name_w=self.canvas_bold.measure(username)
-            available=max(45,fullw-name_w-7)
-            words=msg.body.replace('\n',' ').split()
-            first=[]
-            while words:
-                candidate=' '.join(first+[words[0]])
-                if self.canvas_font.measure(candidate)>available:break
-                first.append(words.pop(0))
-            first_line=' '.join(first)
-            rest=wrap_message(' '.join(words),fullw,self.canvas_font) if words else []
-            line_count=1+len(rest)
-            height=2*pad+fline*line_count
-            line1_w=name_w+(7+self.canvas_font.measure(first_line) if first_line else 0)
-            content_w=max([line1_w]+[self.canvas_font.measure(t) for t in rest])
-            boxw=min(maxw,max(160,content_w+inset+pad))
+            if native is not None:
+                w,h=native.width(),native.height()
+                top=cursor-h
+                if top<24:break
+                bx=max(x,sw-x-w) if right else x
+                cv.create_image(bx,top,image=native,anchor='nw')
+                active_images.add(key)
+                cursor=top-gap
+                rendered_count+=1
+                continue
+
+            # No native image: never fabricate a bubble shape or coloured
+            # avatar letter. The transparent text-only fallback is deliberate.
+            # A missing PNG might still be in progress on disk; allow the AIR
+            # client a moment to finish writing it before falling back.
+            if (show_bubbles and msg.bubble_image is not None
+                and time.time()-msg.arrived<1.5):
+                continue
+            content=chat_one_line(msg.name+': '+msg.body)
+            available=max(60,maxw-12)
+            if single_line:
+                lines=[fit_line_ellipsis(content,self.canvas_font,available)]
+            else:
+                lines=wrap_message(content,available,self.canvas_font)
+            height=max(fline, len(lines)*fline)+4
             top=cursor-height
             if top<24:break
-            bx=max(x,sw-x-boxw) if right else x
-            if show_bubbles:
-                bg,fg,emblem,edge=(get_message_colors(msg,theme)
-                    if self.config.get('respect_chat_styles',True) else
-                    (theme['bubble'],theme['fg'],theme['acc'],theme['name']))
-                if native is not None:
-                    try:
-                        sample_x=min(native.width()-2,30)
-                        sample_y=min(native.height()-2,3)
-                        rgb=native.get(sample_x,sample_y)
-                        if len(rgb)>=3 and not native.transparency_get(sample_x,sample_y):
-                            bg='#%02x%02x%02x'%tuple(int(v) for v in rgb[:3])
-                            fg=('#161616' if sum(rgb[:3])>420 else '#f4f6fa')
-                    except (tk.TclError,ValueError,TypeError,IndexError):
-                        pass
-                cv.create_rectangle(bx+3,top+4,bx+boxw+3,cursor+4,fill='#070e19',outline='')
-                self._rounded(cv,bx,top,bx+boxw,cursor,9,edge)
-                self._rounded(cv,bx+2,top+2,bx+boxw-2,cursor-2,7,bg)
-                name_fg=fg
-            else:
-                fg='#edf4ff';name_fg='#83c9f7';emblem='#334d66'
-            avatar=None
-            if native is not None:
-                try:
-                    aw=min(26,native.width())
-                    ah=min(30,native.height(),max(1,height-4))
-                    if aw>=18 and ah>=18:
-                        icon_key=f'{key}|avatar|{aw}x{ah}'
-                        avatar=self.native_images.get(icon_key)
-                        if avatar is None:
-                            avatar=tk.PhotoImage(master=self.root,width=aw,height=ah)
-                            self.root.tk.call(str(avatar),'copy',str(native),
-                                              '-from',0,0,aw,ah,'-to',0,0)
-                            self.native_images[icon_key]=avatar
-                        active_images.add(key)
-                        active_images.add(icon_key)
-                except (tk.TclError,ValueError,TypeError,IndexError):
-                    avatar=None
-            if avatar is not None:
-                cv.create_image(bx+3,top+4,image=avatar,anchor='nw')
-            else:
-                ix=bx+pad+7;iy=top+pad+fline/2
-                cv.create_oval(ix-9,iy-9,ix+9,iy+9,fill=emblem,outline='')
-                cv.create_text(ix,iy,text=msg.name[:1].upper(),anchor='center',
-                               font=('Segoe UI Semibold',9),fill='#f8fbff')
-            tx=bx+inset;ty=top+pad
-            cv.create_text(tx,ty,text=username,anchor='nw',font=self.canvas_bold,fill=name_fg)
-            if first_line:
-                cv.create_text(tx+name_w+7,ty,text=first_line,anchor='nw',font=self.canvas_font,fill=fg)
-            for i,line in enumerate(rest,1):
-                cv.create_text(tx,ty+i*fline,text=line,anchor='nw',font=self.canvas_font,fill=fg)
+            tx=max(x,sw-x-maxw) if right else x
+            for line_number,line in enumerate(lines):
+                cv.create_text(tx,top+line_number*fline,text=line,anchor='nw',
+                               font=self.canvas_font,fill='#dce8f7')
             cursor=top-gap
             rendered_count+=1
         self.visible_count_current=rendered_count

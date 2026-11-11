@@ -68,12 +68,22 @@ class WideChatTests(unittest.TestCase):
         self.assertFalse(namespace['match_recent_whisper'](hints,'test',130.0))
         self.assertEqual(hints,[])
 
-    def test_single_line_does_not_shrink_or_blit_native_text(self):
-        source=CODE[CODE.index('            if single_line:'):CODE.index('            # Legacy wrapped-mode')]
-        self.assertNotIn('for pt in range(',source)
-        self.assertNotIn('cv.create_image(bx,top,image=native',source)
-        self.assertIn('fnt,bold=self.canvas_font,self.canvas_bold',source)
-        self.assertIn('fit_line_ellipsis',source)
+    def test_original_png_drawn_before_any_text_fallback(self):
+        body=CODE[CODE.index('    def draw(self):'):CODE.index('    def _hotkeys(self):')]
+        self.assertIn('native=self.native_images.get(key)',body)
+        self.assertIn('native=tk.PhotoImage' if False else 'native=loaded',body)
+        self.assertIn("cv.create_image(bx,top,image=native,anchor='nw')",body)
+        self.assertLess(body.index("cv.create_image(bx,top,image=native"),
+                        body.index("content=chat_one_line(msg.name+': '+msg.body)"))
+
+    def test_no_imitation_speech_bubbles(self):
+        draw=CODE[CODE.index('    def draw(self):'):CODE.index('    def _hotkeys(self):')]
+        bubbles=draw[draw.index('        for msg in reversed(self.messages[start:end]):'):]
+        self.assertNotIn('self._rounded(',bubbles)
+        self.assertNotIn('cv.create_polygon(',bubbles)
+        self.assertNotIn('cv.create_oval(',bubbles)
+        self.assertNotIn('STYLE_VARIANTS',bubbles)
+        self.assertIn('cv.create_text(tx,top+line_number*fline',bubbles)
 
     def test_toggle_labels_make_both_behaviours_obvious(self):
         label=next(node for node in TREE.body
@@ -85,14 +95,17 @@ class WideChatTests(unittest.TestCase):
         self.assertIn('OFF',ns['chat_line_mode_label'](False))
         self.assertIn('multiple lines',ns['chat_line_mode_label'](False))
 
-    def test_wrapped_mode_does_not_use_original_png_embedded_font_sizes(self):
-        start=CODE.index('            # Legacy wrapped-mode:')
-        end=CODE.index('        self.visible_count_current=rendered_count',start)
-        segment=CODE[start:end]
-        self.assertNotIn('create_image(bx,top,image=original',segment)
-        self.assertIn("font=self.canvas_bold",segment)
-        self.assertIn("font=self.canvas_font",segment)
-        self.assertIn("wrap_message(' '.join(words)",segment)
+    def test_native_png_is_pixel_exact_even_when_one_line_is_off(self):
+        body=CODE[CODE.index('    def draw(self):'):CODE.index('    def _hotkeys(self):')]
+        self.assertIn('if native is not None:',body)
+        self.assertIn('cv.create_image(bx,top,image=native',body)
+        self.assertIn('continue\n\n            # No native image',body)
+        self.assertIn('lines=wrap_message(content,available,self.canvas_font)',body)
+
+    def test_original_artwork_is_not_a_disableable_setting(self):
+        self.assertIn("self.config['original_bubble_images']=True",CODE)
+        self.assertNotIn("self._check(f,'Use original Habbo bubble colours",CODE)
+        self.assertIn("Original Habbo bubble artwork is always used",CODE)
 
     def test_line_toggle_does_not_mutate_font_size(self):
         start=CODE.index('    def _chat_line_toggle(self,parent):')

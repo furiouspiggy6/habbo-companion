@@ -1,30 +1,29 @@
-HABBO COMPANION v1.1.15 — ONE-LINE TEXT ON/OFF TOGGLE
-==========================================================
+HABBO COMPANION v1.1.16 — RESTORED ORIGINAL HABBO BUBBLES
+===========================================================
 
-In View Chat there is now a plainly labelled, persistent switch:
+The white/grey/pastel speech bubbles introduced by Companion's custom
+drawing code were not original Habbo artwork. They have been removed.
 
-  One-line chat text: ON  (one long line)
-  One-line chat text: OFF  (wrap onto multiple lines)
+The View Chat overlay now shows the ACTUAL Habbo bubble PNG (pixel for
+pixel) received from your local Habbo chat feed, preserving its original
+shape, text, avatar, chat badge, border, pointer and colouring.
 
-When ON, messages appear on a single row. Very long messages can
-be shortened at the room edge, as before.
+The "Use original colours and avatars" checkbox has been removed, and
+native artwork is always enabled. Older installations that unchecked
+the setting are automatically corrected.
 
-When OFF, messages return to the multi-line / narrow-column arrangement.
-They wrap at your configured "Bubble width (wrapped mode)" and display
-the full text rather than truncating at the room edge.
+When an original PNG has not been supplied, Companion displays only
+transparent, unboxed chat text as a fallback — NEVER a synthetic white
+bubble or an invented coloured letter-avatar bubble. Incoming PNG files
+can take a moment to be written to disk, and Companion retries.
 
-IMPORTANT: Both settings use exactly the same Font size slider. Turning
-the switch OFF does not restore the inconsistent font sizes embedded in
-original Habbo bubble PNGs. With original bubble colours/avatars enabled,
-Companion can retain a speaker's image details while drawing the text
-at your chosen uniform font size.
+Original Habbo PNGs contain Habbo's own text and layout. This means
+the one-line/wrapped toggle and Font size slider can alter the unboxed
+text fallback but cannot independently reformat the text ALREADY baked
+into the original PNG. Using Habbo's actual artwork takes precedence
+over these presentation overrides.
 
-You can toggle while Habbo is open, without restarting Companion. Your
-choice is saved across launches. Whisper-right positioning is independent.
+Whisper-right alignment, chat history, G-Earth integration, username
+coffee targeting, the packet manipulator and the updater are unchanged.
 
-OTHER FEATURES PRESERVED:
-- Username-based Give 1 cup, coffee loop and room player refresh diagnostics.
-- G-Earth integrated packet tools, settings and chat scrolling.
-- One-line bubbles and native image-derived colour/avatars.
-
-Update by opening Habbo Companion > Updates > Check online.
+INSTALL: Habbo Companion > Updates > Check online.
