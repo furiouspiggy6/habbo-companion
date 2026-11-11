@@ -1603,8 +1603,8 @@ class ChatOverlayApp:
         profile=self._room_profile_cache.get(username.casefold())
         if profile is not None:
             return str(profile[1]),profile[0]
-        raise ValueError('Player "'+username+'" not mapped in the room and no '
-                         'matching Habbo profile response was received.')
+        raise ValueError('Player "'+username+'" not found in room list, '
+                         'and no matching Habbo profile response was received.')
 
     def _lookup_coffee_profile(self,username,single_cup=False):
         """Get the exact numeric ID from Habbo without guessing a recipient."""
