@@ -1834,7 +1834,7 @@ class ChatOverlayApp:
         self._coffee_queued_single=False
         self._coffee_target_name=''
         self._coffee_profile_pending=None
-        self._coffee_profile_generation+=1
+        self._coffee_profile_generation=getattr(self,'_coffee_profile_generation',0)+1
         self._coffee_generation+=1
         queued=self._coffee_queue_after_id
         self._coffee_queue_after_id=None
