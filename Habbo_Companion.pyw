@@ -1101,6 +1101,8 @@ class ChatOverlayApp:
         self._own_account_id=None
         self._own_name=''
         self._own_room_index=None
+        self._own_identity_last_request=0.0
+        self._own_identity_pending=False
         self._coffee_wait_for_hand=False
         self._coffee_ack_phase=None
         self._coffee_ack_since=0.0
@@ -1738,7 +1740,12 @@ class ChatOverlayApp:
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,4))
         ttk.Label(holder,textvariable=self.coffee_own_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
-        ttk.Button(holder,text='Refresh room players',command=self._refresh_room_players).pack(anchor='w',pady=(0,9))
+        diagnostics=ttk.Frame(holder,style='Panel.TFrame')
+        diagnostics.pack(anchor='w',pady=(0,9))
+        ttk.Button(diagnostics,text='Refresh room players',
+                   command=self._refresh_room_players).pack(side='left',padx=(0,8))
+        ttk.Button(diagnostics,text='Detect my avatar',
+                   command=lambda:self._request_own_identity(force=True)).pack(side='left')
         buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
         ttk.Button(buttons,text='Give 1 cup',command=lambda:self._start_coffee_loop(single_cup=True)).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
@@ -1831,6 +1838,52 @@ class ChatOverlayApp:
         self.coffee_status_var.set(
             'Exact username and account ID confirmed by Habbo; checking cup actions...')
         self.root.after(0,lambda once=pending[1]:self._start_coffee_loop(single_cup=once))
+
+    def _request_own_identity(self,force=False):
+        """Request current account ID from Habbo's normal UserObject response.
+
+        InfoRetrieve is a one-shot query, not a repeating packet probe.
+        Once the ID is known, pair it with the current Users room index.
+        """
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.coffee_own_status_var.set(
+                'Cannot detect your avatar until Habbo and G-Earth are connected.')
+            return False
+        now=time.monotonic()
+        if now-self._own_identity_last_request<5.0:
+            if force:
+                self.coffee_own_status_var.set(
+                    'Avatar lookup was just requested; check the room-index status again.')
+            return False
+        try:
+            packet=self.packet_extension.string_to_packet('{out:InfoRetrieve}')
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('InfoRetrieve header is unavailable in G-Earth.')
+            self._own_identity_last_request=now
+            if self.packet_extension.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth refused the avatar identity request.')
+            self._own_identity_pending=True
+            self.coffee_own_status_var.set(
+                'Detecting your Habbo avatar via InfoRetrieve; '
+                f'{len(self._room_users)} room player(s) mapped...')
+            self.root.after(5000,lambda stamp=now:self._own_identity_timeout(stamp))
+            return True
+        except (AttributeError,RuntimeError,ValueError,TypeError) as exc:
+            self._own_identity_pending=False
+            self.coffee_own_status_var.set(
+                'Could not request your avatar identity: '+str(exc)[:130])
+            return False
+
+    def _own_identity_timeout(self,stamp):
+        if (not self._own_identity_pending or
+            self._own_identity_last_request!=stamp):
+            return
+        self._own_identity_pending=False
+        if self._own_room_index is not None:
+            return
+        self.coffee_own_status_var.set(
+            'Habbo did not confirm your room index. Click Detect my avatar, '
+            'or turn off Wait for my avatar to use the original timed loop.')
 
     def _refresh_room_players(self):
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
@@ -1984,9 +2037,21 @@ class ChatOverlayApp:
                                                     target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
             if self.coffee_wait_for_hand_var.get() and self._own_room_index is None:
-                raise ValueError('Your own room avatar index is unknown. '
-                                 'Join the room after Companion and G-Earth connect '
-                                 'to use server-acknowledged pickup/pass.')
+                self._request_own_identity()
+                use_timer=messagebox.askyesno(
+                    'Waiting for your avatar ID',
+                    'Companion has not yet matched your avatar to a room index. '
+                    'It has requested your identity from Habbo.\n\n'
+                    'Would you like to use the ORIGINAL timed coffee loop '
+                    'for this run instead? It does not confirm pickup or delivery.\n\n'
+                    'Yes = timed mode; No = do not send anything yet.',
+                    parent=self.root)
+                if not use_timer:
+                    self.coffee_status_var.set(
+                        'No coffee sent. Avatar detection requested; '
+                        'click Start again after your room index appears.')
+                    return
+                self.coffee_wait_for_hand_var.set(False)
             if group_mode and interval<10:
                 raise ValueError('Group mode requires at least 10 seconds per packet action.')
             cycles_text=self.coffee_cycles_var.get().strip()
@@ -3451,15 +3516,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._accept_coffee_profile(item[1],item[2])
                 continue
             if item[0]=='coffee_self_identity':
+                self._own_identity_pending=False
                 self._own_account_id=item[1]
                 self._own_name=item[2]
                 own=self._room_users.get(self._own_name.casefold())
                 self._own_room_index=(
                     own[2] if own is not None and own[1]==self._own_account_id
                     else None)
-                self.coffee_own_status_var.set(
-                    f'Your avatar: {self._own_name} — room index '
-                    f'{self._own_room_index if self._own_room_index is not None else "unknown"}')
+                if self._own_room_index is not None:
+                    self.coffee_own_status_var.set(
+                        f'Your avatar: {self._own_name} — room index {self._own_room_index}')
+                else:
+                    self.coffee_own_status_var.set(
+                        f'Account confirmed: {self._own_name} (ID {self._own_account_id}); '
+                        'room index still unavailable. Re-enter the room if needed.')
                 continue
             if item[0]=='coffee_carry_observed':
                 _,room_index,item_type,seen_at=item
@@ -3511,6 +3581,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._room_lookup_pending=False
                 self.coffee_users_status_var.set(
                     f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
+                if self._own_account_id is None:
+                    self._request_own_identity()
+                elif self._own_room_index is None:
+                    self.coffee_own_status_var.set(
+                        f'Your account {self._own_name} is known, but its room index '
+                        'has not been decoded. Re-enter the room with G-Earth connected.')
                 continue
             if item[0]=='room_user_removed':
                 index=item[1]
@@ -3551,6 +3627,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._own_account_id=None
                     self._own_name=''
                     self._own_room_index=None
+                    self._own_identity_pending=False
+                    self._own_identity_last_request=0.0
                     self.coffee_own_status_var.set(
                         'Your avatar room index unavailable until Habbo reconnects.')
                     self._room_users.clear()
