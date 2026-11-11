@@ -227,7 +227,7 @@ def classify_room_packet(extension,direction,packet,description=''):
             if isinstance(name,str):names.add(name.casefold())
     except (ValueError,TypeError,AttributeError):
         pass
-    for name in ('Users','RoomReady','UserRemove','ExtendedProfile'):
+    for name in ('Users','RoomReady','UserRemove','ExtendedProfile','CarryObject'):
         if name.casefold() in names or incoming_packet_is(description,name):
             return name
     return None
@@ -279,6 +279,33 @@ def coffee_profile_request_expression(username):
     if not 1<=len(username)<=80 or any(c in username for c in '\r\n\x00{}'):
         raise ValueError('Enter a valid username (1-80 characters).')
     return '{out:GetExtendedProfileByName}{s:'+json.dumps(username,ensure_ascii=True)+'}'
+
+
+def carry_object_from_packet(packet):
+    """Read the incoming CarryObject [room avatar index, hand-item type].
+
+    An avatar index is NOT a Habbo account ID, and a carrying update
+    is not a receipt confirmation for a particular PassCarryItem request.
+    """
+    try:
+        room_index=packet.read_int(6)
+        item_type=packet.read_int(10)
+        if not (0<=room_index<=1000000 and 0<=item_type<=100000):
+            return None
+        return room_index,item_type
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return None
+
+
+def coffee_delivery_text(pass_requests,carry_observations,target_index):
+    """Report observable facts only. A sent packet does not prove receipt."""
+    sent=max(0,int(pass_requests))
+    seen=max(0,int(carry_observations))
+    if target_index is None:
+        return (f'Pass requests sent: {sent}. Recipient room index unavailable: '
+                'cannot verify receipt from this connection.')
+    return (f'Pass requests sent: {sent}. Recipient carrying-item updates '
+            f'observed: {seen}. An item update is not proof each cup arrived.')
 
 
 def validate_manipulation_rule(candidate):
@@ -974,6 +1001,11 @@ class ChatOverlayApp:
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
+        self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self._coffee_pass_requests=0
+        self._coffee_carry_observations=0
+        self._coffee_target_room_index=None
+        self._coffee_last_pass_at=0.0
         self._coffee_running=False
         self._coffee_sequence=()
         self._coffee_interval=0.1
@@ -1043,6 +1075,9 @@ class ChatOverlayApp:
         self.last_rect=None
         self.last_overlay_geometry=None
         self.last_clickthrough_check=0
+        self.last_stack_check=0.0
+        self.last_overlay_draw_at=0.0
+        self.last_overlay_draw_signature=None
         self.clickthrough_failed=False
         self.last_hotkeys=set()
         self.settings_open=True
@@ -1579,7 +1614,11 @@ class ChatOverlayApp:
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,7))
+        ttk.Label(holder,text='DELIVERY MONITOR (server activity, not a guarantee)',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,3))
+        ttk.Label(holder,textvariable=self.coffee_delivery_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
                    'Confirm the ID and ensure the recipient is in your room. '
@@ -1792,6 +1831,14 @@ class ChatOverlayApp:
         self._coffee_index=0
         self._coffee_sent=0
         self._coffee_completed=0
+        self._coffee_pass_requests=0
+        self._coffee_carry_observations=0
+        self._coffee_last_pass_at=0.0
+        user=self._room_users.get(target_name.casefold()) if target_name else None
+        self._coffee_target_room_index=(user[2] if user and user[2] is not None else None)
+        self.coffee_delivery_var.set(coffee_delivery_text(
+            self._coffee_pass_requests,self._coffee_carry_observations,
+            self._coffee_target_room_index))
         self.coffee_status_var.set(f'Coffee pass ON — action 1/{len(sequence)}. Sent: 0; cycles: 0.')
         self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
                                                  self._coffee_loop_tick(generation))
@@ -1835,6 +1882,14 @@ class ChatOverlayApp:
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
+        # Odd steps are PassCarryItem. Counting a successful local send
+        # does NOT establish that Habbo accepted the handoff.
+        if self._coffee_index%2==1:
+            self._coffee_pass_requests+=1
+            self._coffee_last_pass_at=time.time()
+            self.coffee_delivery_var.set(coffee_delivery_text(
+                self._coffee_pass_requests,self._coffee_carry_observations,
+                self._coffee_target_room_index))
         self._coffee_index=(self._coffee_index+1)%len(self._coffee_sequence)
         if self._coffee_index==0:
             self._coffee_completed+=1
@@ -2969,6 +3024,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             profile=profile_recipient_from_packet(msg.packet)
                             if profile is not None:
                                 self._packet_put(('coffee_profile',profile[0],profile[1]))
+                        elif kind=='CarryObject':
+                            carry=carry_object_from_packet(msg.packet)
+                            if carry is not None:
+                                self._packet_put(('coffee_carry_observed',carry[0],
+                                                  carry[1],time.time()))
                         elif kind=='Users':
                             # g_string() is the legacy raw rendering. Use
                             # g_expression() for {i:ID}{s:"username"} fields,
@@ -3073,12 +3133,25 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='coffee_profile':
                 self._accept_coffee_profile(item[1],item[2])
                 continue
+            if item[0]=='coffee_carry_observed':
+                _,room_index,item_type,seen_at=item
+                if (self._coffee_pass_requests>0
+                    and self._coffee_target_room_index is not None
+                    and room_index==self._coffee_target_room_index
+                    and item_type>0 and 0<=seen_at-self._coffee_last_pass_at<=4):
+                    self._coffee_carry_observations+=1
+                    self.coffee_delivery_var.set(coffee_delivery_text(
+                        self._coffee_pass_requests,self._coffee_carry_observations,
+                        self._coffee_target_room_index))
+                continue
             if item[0]=='room_users_reset':
                 self._room_users.clear()
                 self._room_chat_names.clear()
                 self._room_profile_cache.clear()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
+                self._coffee_target_room_index=None
+                self._coffee_last_pass_at=0.0
                 self._room_lookup_pending=False
                 self._room_lookup_generation+=1
                 self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
@@ -3667,24 +3740,41 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         # started from Explorer with Habbo in the background.
                         self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
                     self.last_clickthrough_check=time.monotonic()
-                elif not self.clickthrough_failed and time.monotonic()-self.last_clickthrough_check>1.5:
+                    self.last_stack_check=time.monotonic()
+                elif not self.clickthrough_failed and time.monotonic()-self.last_clickthrough_check>6.0:
                     if not self.tracker.set_clickthrough(self.overlay.winfo_id()):
                         self.clickthrough_failed=True
                         self.overlay.withdraw()
                     self.last_clickthrough_check=time.monotonic()
-                if not self.clickthrough_failed and foreground in ('habbo','settings'):
-                    # Focusing Habbo normally raises it above the overlay.
-                    # Repair only the game's own z-order when it is active,
-                    # never while another app is foreground.
+                if (not self.clickthrough_failed and foreground in ('habbo','settings')
+                    and time.monotonic()-self.last_stack_check>0.75):
+                    # Avoid making repeated z-order calls every 120ms; these
+                    # can cause flicker as the cursor crosses layered windows.
                     self.tracker.stack_above_habbo(self.overlay.winfo_id(),geom[4])
+                    self.last_stack_check=time.monotonic()
                 if self.clickthrough_failed:
                     self.status.set('Overlay hidden: Windows click-through could not be enabled. Restart the panel to retry.')
                 elif not self.feed:
                     self.status.set('Habbo found. Waiting for local chat bridge log...')
             else:
                 self.overlay.withdraw();self.last_rect=None;self.last_overlay_geometry=None
+                self.last_overlay_draw_signature=None
                 self.status.set('Waiting for a Habbo client window...')
-            self.draw()
+            # No need to clear and rebuild the entire transparent canvas
+            # eight times a second while nothing changes. Keep immediate
+            # redraw for new chat, scrolling, layout or room movement.
+            visual_keys=('theme','show_room','single_line_bubbles','whispers_right',
+                         'bubbles','x','width','anchor','gap','font_size',
+                         'bottom_clearance','auto_fill_screen','visible_messages')
+            signature=(self.last_rect,self.last_overlay_geometry,self.scroll_offset,
+                       len(self.messages),self.messages[-1].arrived if self.messages else None,
+                       tuple(self.config.get(k) for k in visual_keys))
+            now=time.monotonic()
+            if (signature!=self.last_overlay_draw_signature
+                or now-self.last_overlay_draw_at>=0.6):
+                self.draw()
+                self.last_overlay_draw_signature=signature
+                self.last_overlay_draw_at=now
         except Exception as e:
             self.status.set(f'Overlay issue: {str(e)[:140]}')
         self.root.after(120,self.tick)
