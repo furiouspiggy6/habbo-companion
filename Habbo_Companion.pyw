@@ -1999,6 +1999,16 @@ class ChatOverlayApp:
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             self._stop_coffee_loop('Habbo or G-Earth disconnected. Coffee loop stopped.')
             return
+        if self._coffee_group_active:
+            if len(self._coffee_group_targets)<2:
+                self._stop_coffee_loop('No active group rotation; stopped.')
+                return
+            recipient=self._coffee_group_targets[
+                (self._coffee_index//2)%len(self._coffee_group_targets)]
+            self._coffee_target_name=recipient[0].casefold()
+            record=self._room_users.get(self._coffee_target_name)
+            self._coffee_target_room_index=(
+                record[2] if record and record[2] is not None else None)
         try:
             expression=self._coffee_sequence[self._coffee_index]
             ext=self.packet_extension
@@ -2025,9 +2035,16 @@ class ChatOverlayApp:
             if self._coffee_limit and self._coffee_completed>=self._coffee_limit:
                 self._stop_coffee_loop('Requested cycles finished.')
                 return
-        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index]
-        self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
-                                   f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index%4]
+        if self._coffee_group_active:
+            next_recipient=self._coffee_group_targets[
+                (self._coffee_index//2)%len(self._coffee_group_targets)][0]
+            self.coffee_status_var.set(
+                f'Group ON — next: {next_recipient} ({label}). '
+                f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+        else:
+            self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
+                                       f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
         if self._coffee_running and generation==self._coffee_generation:
             self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
                 lambda gen=generation:self._coffee_loop_tick(gen))
@@ -2037,6 +2054,8 @@ class ChatOverlayApp:
         self._coffee_start_queued=False
         self._coffee_queued_single=False
         self._coffee_target_name=''
+        self._coffee_group_active=False
+        self._coffee_group_targets=[]
         self._coffee_profile_pending=None
         self._coffee_profile_generation=getattr(self,'_coffee_profile_generation',0)+1
         self._coffee_generation+=1
