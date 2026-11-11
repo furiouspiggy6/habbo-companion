@@ -81,6 +81,7 @@ DEFAULT = dict(
     coffee_group_names='',
     coffee_group_enabled=False,
     coffee_wait_for_hand=False,
+    coffee_extra_furniture='',
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -1152,6 +1153,13 @@ class ChatOverlayApp:
         self._replay_generation=0
         self.coffee_cup_one_var=tk.StringVar(value=str(self.config.get('coffee_cup_one','476989081')))
         self.coffee_cup_two_var=tk.StringVar(value=str(self.config.get('coffee_cup_two','476989024')))
+        self.coffee_extra_furniture_var=tk.StringVar(
+            value=str(self.config.get('coffee_extra_furniture','')))
+        self.coffee_furniture_capture_var=tk.StringVar(
+            value='Optional bookcase / other sources: click Capture, then use the furniture in Habbo.')
+        self._coffee_furniture_capture_pending=False
+        self._coffee_furniture_capture_generation=0
+        self._coffee_active_extra_sources=()
         self.coffee_recipient_var=tk.StringVar(value=str(self.config.get('coffee_recipient','68808036')))
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
@@ -1188,6 +1196,15 @@ class ChatOverlayApp:
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self.coffee_speed_var=tk.StringVar(value='Speed test not run. Requires your own avatar room index.')
+        self._coffee_speed_active=False
+        self._coffee_speed_started=0.0
+        self._coffee_speed_source_attempts={}
+        self._coffee_speed_source_confirmations={}
+        self._coffee_speed_pickups=0
+        self._coffee_speed_releases=0
+        self._coffee_speed_last_source=None
+        self._coffee_speed_delay=0.1
         self._coffee_pass_requests=0
         self._coffee_carry_observations=0
         self._coffee_target_room_index=None
@@ -1787,6 +1804,12 @@ class ChatOverlayApp:
         entry('Recipient ID (fallback)',self.coffee_recipient_var,'Used only when username is blank')
         entry('Cup 1 furniture ID',self.coffee_cup_one_var,'One-cup action starts here')
         entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
+        entry('Other furniture IDs',self.coffee_extra_furniture_var,
+              'Optional bookcase / extras: comma-separated room IDs')
+        ttk.Button(holder,text='Capture next furniture click',
+                   command=self._arm_coffee_furniture_capture).pack(anchor='w',pady=(0,5))
+        ttk.Label(holder,textvariable=self.coffee_furniture_capture_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
         ttk.Checkbutton(holder,text='Wait for my avatar to receive/pass each cup',
@@ -1824,12 +1847,15 @@ class ChatOverlayApp:
         buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
         ttk.Button(buttons,text='Give 1 cup',command=lambda:self._start_coffee_loop(single_cup=True)).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
+        ttk.Button(buttons,text='Test speed (3 cycles)',command=self._run_coffee_speed_test).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,7))
         ttk.Label(holder,text='DELIVERY MONITOR (server activity, not a guarantee)',
                   style='Panel.TLabel').pack(anchor='w',pady=(3,3))
         ttk.Label(holder,textvariable=self.coffee_delivery_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
+        ttk.Label(holder,textvariable=self.coffee_speed_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
