@@ -63,7 +63,6 @@ class AvatarLookupTests(unittest.TestCase):
         self.assertTrue(obj._own_identity_pending)
         self.assertFalse(request(obj))
         self.assertEqual(len(obj.packet_extension.requests),2)
-        self.assertIn('16',CODE) if False else None
 
     def test_missing_identity_reports_fallback(self):
         obj=self.instance()
