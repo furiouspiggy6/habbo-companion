@@ -31,7 +31,7 @@ class Value:
     def set(self,x):self.value=x
 
 CL=next(n for n in TREE.body if isinstance(n,ast.ClassDef) and n.name=='ChatOverlayApp')
-methods={}
+methods={'carry_ack_matches':ns['carry_ack_matches']}
 for name in ('_on_own_carry_update','_coffee_ack_timeout'):
     n=next(n for n in CL.body if isinstance(n,ast.FunctionDef) and n.name==name)
     exec(compile(ast.Module(body=[n],type_ignores=[]),str(APP),'exec'),methods)
