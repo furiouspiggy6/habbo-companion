@@ -1831,6 +1831,14 @@ class ChatOverlayApp:
         self._coffee_index=0
         self._coffee_sent=0
         self._coffee_completed=0
+        self._coffee_pass_requests=0
+        self._coffee_carry_observations=0
+        self._coffee_last_pass_at=0.0
+        user=self._room_users.get(target_name.casefold()) if target_name else None
+        self._coffee_target_room_index=(user[2] if user and user[2] is not None else None)
+        self.coffee_delivery_var.set(coffee_delivery_text(
+            self._coffee_pass_requests,self._coffee_carry_observations,
+            self._coffee_target_room_index))
         self.coffee_status_var.set(f'Coffee pass ON — action 1/{len(sequence)}. Sent: 0; cycles: 0.')
         self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
                                                  self._coffee_loop_tick(generation))
@@ -1874,6 +1882,14 @@ class ChatOverlayApp:
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
+        # Odd steps are PassCarryItem. Counting a successful local send
+        # does NOT establish that Habbo accepted the handoff.
+        if self._coffee_index%2==1:
+            self._coffee_pass_requests+=1
+            self._coffee_last_pass_at=time.time()
+            self.coffee_delivery_var.set(coffee_delivery_text(
+                self._coffee_pass_requests,self._coffee_carry_observations,
+                self._coffee_target_room_index))
         self._coffee_index=(self._coffee_index+1)%len(self._coffee_sequence)
         if self._coffee_index==0:
             self._coffee_completed+=1
@@ -3008,6 +3024,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             profile=profile_recipient_from_packet(msg.packet)
                             if profile is not None:
                                 self._packet_put(('coffee_profile',profile[0],profile[1]))
+                        elif kind=='CarryObject':
+                            carry=carry_object_from_packet(msg.packet)
+                            if carry is not None:
+                                self._packet_put(('coffee_carry_observed',carry[0],
+                                                  carry[1],time.time()))
                         elif kind=='Users':
                             # g_string() is the legacy raw rendering. Use
                             # g_expression() for {i:ID}{s:"username"} fields,
@@ -3112,12 +3133,25 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='coffee_profile':
                 self._accept_coffee_profile(item[1],item[2])
                 continue
+            if item[0]=='coffee_carry_observed':
+                _,room_index,item_type,seen_at=item
+                if (self._coffee_pass_requests>0
+                    and self._coffee_target_room_index is not None
+                    and room_index==self._coffee_target_room_index
+                    and item_type>0 and 0<=seen_at-self._coffee_last_pass_at<=4):
+                    self._coffee_carry_observations+=1
+                    self.coffee_delivery_var.set(coffee_delivery_text(
+                        self._coffee_pass_requests,self._coffee_carry_observations,
+                        self._coffee_target_room_index))
+                continue
             if item[0]=='room_users_reset':
                 self._room_users.clear()
                 self._room_chat_names.clear()
                 self._room_profile_cache.clear()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
+                self._coffee_target_room_index=None
+                self._coffee_last_pass_at=0.0
                 self._room_lookup_pending=False
                 self._room_lookup_generation+=1
                 self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
