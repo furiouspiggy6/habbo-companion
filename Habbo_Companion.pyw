@@ -227,7 +227,7 @@ def classify_room_packet(extension,direction,packet,description=''):
             if isinstance(name,str):names.add(name.casefold())
     except (ValueError,TypeError,AttributeError):
         pass
-    for name in ('Users','RoomReady','UserRemove'):
+    for name in ('Users','RoomReady','UserRemove','ExtendedProfile'):
         if name.casefold() in names or incoming_packet_is(description,name):
             return name
     return None
@@ -247,6 +247,38 @@ def first_room_user_from_raw_packet(packet):
         return {name.casefold():(name,user_id,None)}
     except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
         return {}
+
+
+def profile_recipient_from_packet(packet):
+    """Read server-confirmed [account ID, username] from ExtendedProfile."""
+    try:
+        user_id=packet.read_int(6)
+        name=packet.read_string(10)
+        if not isinstance(name,str) or not 1<=user_id<2147483648:
+            return None
+        if not 1<=len(name.strip())<=80 or any(ch in name for ch in '\r\n\x00'):
+            return None
+        return name,user_id
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return None
+
+
+def remove_room_user_by_index(users,index):
+    """Keep unaffected entries when an entity leaves, even if indexes are unknown."""
+    if not isinstance(index,int) or index<0:
+        return dict(users),()
+    removed=tuple(name for name,record in users.items()
+                  if record[2] is not None and record[2]==index)
+    return ({name:record for name,record in users.items() if name not in removed},
+            removed)
+
+
+def coffee_profile_request_expression(username):
+    """Encode username as a quoted Habbo packet string, never raw syntax."""
+    username=str(username).strip()
+    if not 1<=len(username)<=80 or any(c in username for c in '\r\n\x00{}'):
+        raise ValueError('Enter a valid username (1-80 characters).')
+    return '{out:GetExtendedProfileByName}{s:'+json.dumps(username,ensure_ascii=True)+'}'
 
 
 def validate_manipulation_rule(candidate):
@@ -928,6 +960,10 @@ class ChatOverlayApp:
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
         self._room_users={}
+        self._room_chat_names=set()
+        self._room_profile_cache={}
+        self._coffee_profile_pending=None
+        self._coffee_profile_generation=0
         self._room_lookup_pending=False
         self._room_lookup_generation=0
         self._room_lookup_seen=False
@@ -1543,7 +1579,8 @@ class ChatOverlayApp:
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
-        ttk.Label(holder,text='Username targeting requires a detected player in the same room. '
+        ttk.Label(holder,text='If room packets miss a username, Give 1 cup checks its Habbo profile. '
+                   'The target must have chatted in this room before sending. '
                   'No ID is guessed if the name cannot be found. '
                   'One cup sends Cup 1 + Pass once; the loop alternates both cups. '
                   'G-Earth must be connected. The server can ignore or rate-limit requests.',
@@ -1561,6 +1598,58 @@ class ChatOverlayApp:
             raise ValueError('Player "'+username+'" not found in this room. '
                              'Join the same room and click Refresh room players.')
         return str(user[1]),user[0]
+
+    def _lookup_coffee_profile(self,username,single_cup=False):
+        """Get the exact numeric ID from Habbo without guessing a recipient."""
+        if self._coffee_profile_pending is not None:
+            self.coffee_status_var.set('Already checking a Habbo username. No coffee sent yet.')
+            return
+        try:
+            expression=coffee_profile_request_expression(username)
+            packet=self.packet_extension.string_to_packet(expression)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not resolve GetExtendedProfileByName.')
+            self._coffee_profile_generation+=1
+            gen=self._coffee_profile_generation
+            self._coffee_profile_pending=(username.casefold(),bool(single_cup),gen)
+            if self.packet_extension.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth rejected the profile request.')
+            self.coffee_status_var.set(
+                'Checking Habbo profile for "'+username+'"... no coffee sent yet (8s timeout).')
+            self.root.after(8000,lambda generation=gen:self._coffee_profile_timeout(generation))
+        except (ValueError,TypeError,AttributeError,RuntimeError) as exc:
+            self._coffee_profile_pending=None
+            self.coffee_status_var.set('Could not look up username: '+str(exc)[:160])
+
+    def _coffee_profile_timeout(self,generation):
+        pending=self._coffee_profile_pending
+        if pending is None or pending[2]!=generation:
+            return
+        self._coffee_profile_pending=None
+        self.coffee_status_var.set(
+            'No matching Habbo profile returned within 8 seconds. No coffee sent. '
+            'Check G-Earth connection or leave and re-enter the room.')
+
+    def _accept_coffee_profile(self,name,user_id):
+        pending=self._coffee_profile_pending
+        if pending is None or name.casefold()!=pending[0]:
+            return
+        self._coffee_profile_pending=None
+        if (not self._habbo_session_connected or
+                self.coffee_username_var.get().strip().casefold()!=name.casefold()):
+            self.coffee_status_var.set('Profile lookup cancelled: session or username changed.')
+            return
+        if name.casefold() not in self._room_chat_names:
+            self._room_profile_cache[name.casefold()]=(name,user_id)
+            self.coffee_status_var.set(
+                f'Habbo confirmed {name} (ID {user_id}), but this player has not spoken '
+                'in the current room. Ask them to chat once and press Give 1 cup again.')
+            return
+        self._room_users[name.casefold()]=(name,user_id,None)
+        self.coffee_users_status_var.set(
+            f'{name} confirmed in room chat and by Habbo profile (ID {user_id}).')
+        self.coffee_status_var.set('Username verified; checking cup actions...')
+        self.root.after(0,lambda once=pending[1]:self._start_coffee_loop(single_cup=once))
 
     def _refresh_room_players(self):
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
