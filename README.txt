@@ -1,57 +1,30 @@
-HABBO COMPANION v1.1.10 — AUTOMATIC G-EARTH PACKET CONNECTION
-===============================================================
-Coffee Pass Loop no longer requires opening Packet Viewer or clicking its
-Connect button to attach Companion's own G-Python packet extension.
+HABBO COMPANION v1.1.13 — GIVE A CUP BY USERNAME
+================================================
 
-New connection behaviour:
-- G-Earth remains the engine; G-Manipulate and Packet Logger remain independent.
-- Companion attaches its packet tools to the local G-Earth extension port
-  automatically when the backend is online and Habbo has not yet launched.
-- If Habbo is already open, Companion waits for room evidence from the local
-  chat bridge so it does not attach during the AIR loading screen.
-- You can instead press Start in Coffee Pass Loop after you enter the room.
-  Companion will attach directly and wait for the active room connection,
-  then ask for confirmation before sending any coffee packets.
-- The Coffee Pass Loop tab now shows the packet connection status.
-- Automatic packet-tool attachment does NOT enable packet logging,
-  manipulation rules, or any automated sending.
-- If auto-connection fails, the tool reports the error and can retry later.
-- STOP cancels both a pending coffee-loop start and a running loop.
-- Connection loss stops running loops; it never silently resumes them.
-
-
-WIDE CHAT / WHISPERS
---------------------
-In View Chat the new settings are enabled by default:
-- "Single-line chat bubbles (auto width)": messages stay on a single row
-  and expand across the Habbo window rather than wrapping in the old
-  narrow bubble column.
-- "Whispers on the right": Habbo ChatItem type 2 chat is right-aligned
-  while regular speech remains left-aligned.
-- Native Habbo PNG artwork is kept for short, already single-line
-  bubbles. PNGs that contain multiple rows are replaced with a one-line
-  rendering (style colours retained, avatar represented with an initial).
-- Long text may shrink to a 9-point font; if still wider than the
-  actual Habbo window, it displays an ellipsis. No content is drawn
-  beyond the window boundary.
-- One shared vertical chat stack preserves chronological order and avoids
-  collisions between normal chat and whispers.
-- Both settings can be disabled to restore the previous wrapped layout.
-- The overlay grows to the game width in this mode, remaining click-through.
-
-Existing features preserved:
-- Packet Viewer remains available for optional troubleshooting.
-- Rules & Replay, manual injection, coffee IDs, target ID, and interval.
-- Engine launch, network safeguards, updater, and local user settings.
-- Minimum coffee-loop interval remains 0.1 seconds; server rate limits
-  or unavailable items can prevent a sent packet from working in Habbo.
+New in Packet Manipulator > Coffee Pass:
+- Enter the exact Habbo username of someone in the same room.
+- Click "Give 1 cup" to use Cup 1 furniture and pass it to that player once.
+- Or click "Start coffee pass loop" to repeat Cup 1/Pass/Cup 2/Pass.
+- The existing numeric recipient ID is used only if username is blank.
+- Names are resolved from incoming room Users packets through G-Earth.
+- If a name is not found, no cup packets are sent to an old or guessed ID.
+  Click "Refresh room players", or leave and re-enter the room.
+- On disconnect, room changes, or target removal, automation stops.
 
 Instructions:
-1. Start Companion (with G-Earth enabled), then start Habbo and enter a room.
-2. Open Packet Manipulator -> Coffee Pass Loop. No Packet Viewer step needed.
-3. Check that connection status reads READY.
-4. Select cups/recipient, then press Start and approve the confirmation.
-5. If Habbo was already running before Companion, press Start once; the
-   extension can connect there and will confirm before it begins sending.
+1. Open Habbo Companion, then enter a Habbo room with the target.
+2. Open Packet Manipulator > Coffee Pass.
+3. Wait for detected player names (or click Refresh room players).
+4. Enter the username and click Give 1 cup or Start coffee pass loop.
+5. Confirm the shown username and ID before sending.
 
-To update: Updates -> Check online -> approve v1.1.10.
+The parser uses only the early ID/name fields of Habbo's Users packet.
+These may change in future clients: actual in-game behaviour still needs
+testing. Server rules and rate limits can prevent successful transfers.
+
+Existing chat overlay, G-Earth management, packet viewer, manipulation
+rules, local settings and 0.1s minimum interval are unchanged.
+No sending starts automatically at launch; each run requires a click
+and confirmation.
+
+To update: Habbo Companion > Updates > Check online.

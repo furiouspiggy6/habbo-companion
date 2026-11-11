@@ -75,6 +75,7 @@ DEFAULT = dict(
     coffee_cup_one='476989081',
     coffee_cup_two='476989024',
     coffee_recipient='68808036',
+    coffee_username='',
     coffee_interval='0.1',
     coffee_cycles='0',
     habbo_launcher_path='',
@@ -139,7 +140,7 @@ def validate_replay_interval(value):
 
 
 
-def build_coffee_pass_sequence(cup_one, cup_two, recipient):
+def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
     """Build one two-cup/two-pass outgoing cycle from captured action IDs."""
     def positive_id(raw, label):
         value=str(raw).strip()
@@ -151,8 +152,11 @@ def build_coffee_pass_sequence(cup_one, cup_two, recipient):
         return number
 
     first=positive_id(cup_one,'Cup 1')
-    second=positive_id(cup_two,'Cup 2')
+    second=positive_id(cup_two,'Cup 2') if not single_cup else None
     target=positive_id(recipient,'Recipient')
+    if single_cup:
+        return (f'{{out:UseFurniture}}{{i:{first}}}{{i:0}}',
+                f'{{out:PassCarryItem}}{{i:{target}}}')
     if first==second:
         raise ValueError('Cup 1 and Cup 2 must have different furniture IDs.')
     return (
@@ -161,6 +165,51 @@ def build_coffee_pass_sequence(cup_one, cup_two, recipient):
         f'{{out:UseFurniture}}{{i:{second}}}{{i:0}}',
         f'{{out:PassCarryItem}}{{i:{target}}}',
     )
+
+
+
+# Read the ID/name prefix of Users entries without relying on the full entity
+# parser (whose optional fields changed in the 2026 client update).
+ROOM_USER_PAIR_RE=re.compile(r'\{i:([0-9]{1,10})\}\{s:"((?:\\.|[^"\\])*)"\}')
+ROOM_USER_INDEX_RE=re.compile(
+    r'^\{s:"(?:\\.|[^"\\])*"\}\{s:"(?:\\.|[^"\\])*"\}\{i:([0-9]{1,10})\}')
+
+
+def incoming_packet_is(description,name):
+    if not isinstance(description,str):
+        return False
+    value=description.lstrip().lower()
+    return value.startswith('{in:'+name.lower()+'}') or value.startswith('['+name.lower()+']')
+
+
+def room_user_ids_from_packet(description):
+    """Read only named incoming Users packets. Never infer a missing user ID."""
+    if not incoming_packet_is(description,'Users'):
+        return {}
+    found={}
+    for match in ROOM_USER_PAIR_RE.finditer(description):
+        try:
+            user_id=int(match.group(1))
+            name=json.loads('"'+match.group(2)+'"')
+        except (ValueError,TypeError):
+            continue
+        if not 1<=user_id<2147483648 or not isinstance(name,str):
+            continue
+        if not name.strip() or len(name)>80 or any(ch in name for ch in '\r\n\x00'):
+            continue
+        # Older prefix: id, name, motto, figure, room index.
+        # The index is optional because newer fields may have moved.
+        index_match=ROOM_USER_INDEX_RE.match(description[match.end():])
+        room_index=int(index_match.group(1)) if index_match else None
+        found[name.casefold()]=(name,user_id,room_index)
+    return found
+
+
+def removed_room_user_index(description):
+    if not incoming_packet_is(description,'UserRemove'):
+        return None
+    match=re.search(r'\{s:"([0-9]{1,10})"\}',description)
+    return int(match.group(1)) if match else None
 
 
 def validate_manipulation_rule(candidate):
@@ -830,6 +879,11 @@ class ChatOverlayApp:
         self.coffee_cup_one_var=tk.StringVar(value=str(self.config.get('coffee_cup_one','476989081')))
         self.coffee_cup_two_var=tk.StringVar(value=str(self.config.get('coffee_cup_two','476989024')))
         self.coffee_recipient_var=tk.StringVar(value=str(self.config.get('coffee_recipient','68808036')))
+        self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
+        self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
+        self._room_users={}
+        self._coffee_target_name=''
+        self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
@@ -1407,41 +1461,70 @@ class ChatOverlayApp:
     def _make_coffee_loop_panel(self,parent):
         holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
         holder.pack(fill='both',expand=True)
-        tk.Label(holder,text='COFFEE PASS LOOP',font=('Segoe UI Semibold',18),
+        tk.Label(holder,text='COFFEE PASS',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w')
-        ttk.Label(holder,
-                  text='Pick up from Cup 1, pass to one person, pick up from Cup 2, then pass to the same person. Repeat in that order.',
+        ttk.Label(holder,text='Give a cup to a player by Habbo username. '
+                  'The existing alternating two-cup loop is also available.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,14))
 
         def entry(label,var,note):
             row=ttk.Frame(holder,style='Panel.TFrame');row.pack(fill='x',pady=(0,9))
-            ttk.Label(row,text=label,style='Panel.TLabel',width=20).pack(side='left')
+            ttk.Label(row,text=label,style='Panel.TLabel',width=21).pack(side='left')
             ttk.Entry(row,textvariable=var,width=18).pack(side='left',padx=(4,10))
             ttk.Label(row,text=note,style='Panel.TLabel').pack(side='left')
 
-        entry('Cup 1 furniture ID',self.coffee_cup_one_var,'UseFurniture')
-        entry('Cup 2 furniture ID',self.coffee_cup_two_var,'UseFurniture')
-        entry('Recipient target ID',self.coffee_recipient_var,'PassCarryItem')
+        entry('Recipient username',self.coffee_username_var,'Exact name in the current room')
+        entry('Recipient ID (fallback)',self.coffee_recipient_var,'Used only when username is blank')
+        entry('Cup 1 furniture ID',self.coffee_cup_one_var,'One-cup action starts here')
+        entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
-        entry('Complete cycles',self.coffee_cycles_var,'0 = until stopped')
+        entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
+
         ttk.Label(holder,textvariable=self.packet_connection_status,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,11))
-        ttk.Label(holder,
-                  text='Each cycle sends 4 packets: Cup 1 → pass → Cup 2 → pass. '
-                       'Recipient IDs come from your captured PassCarryItem action; re-check the ID after rejoining a room.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(12,12))
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,5))
+        ttk.Label(holder,textvariable=self.coffee_users_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
+        ttk.Button(holder,text='Refresh room players',command=self._refresh_room_players).pack(anchor='w',pady=(0,9))
         buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
+        ttk.Button(buttons,text='Give 1 cup',command=lambda:self._start_coffee_loop(single_cup=True)).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
-        ttk.Label(holder,
-                  text='OFF by default. Requires a connected Habbo room and G-Earth. '
-                       'The client sends packets in sequence but cannot confirm the game accepted an item. '
-                       'Too-fast actions can be ignored or rate-limited. STOP or disconnect cancels the loop.',
+        ttk.Label(holder,text='Username targeting requires a detected player in the same room. '
+                  'No ID is guessed if the name cannot be found. '
+                  'One cup sends Cup 1 + Pass once; the loop alternates both cups. '
+                  'G-Earth must be connected. The server can ignore or rate-limit requests.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,0))
 
-    def _start_coffee_loop(self):
+    def _resolve_coffee_recipient(self):
+        """Resolve the exact in-room Habbo username, or use manual ID only if blank."""
+        username=self.coffee_username_var.get().strip()
+        if not username:
+            return self.coffee_recipient_var.get().strip(),''
+        if len(username)>80 or any(ch in username for ch in '\r\n\x00'):
+            raise ValueError('Enter a valid Habbo username.')
+        user=self._room_users.get(username.casefold())
+        if user is None:
+            raise ValueError('Player "'+username+'" not found in this room. '
+                             'Join the same room and click Refresh room players.')
+        return str(user[1]),user[0]
+
+    def _refresh_room_players(self):
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.coffee_users_status_var.set('Connect G-Earth and join the Habbo room before refreshing.')
+            return
+        try:
+            packet=self.packet_extension.string_to_packet('{out:GetHeightMap}')
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not resolve GetHeightMap.')
+            if self.packet_extension.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth rejected the room refresh request.')
+            self.coffee_users_status_var.set('Room refresh requested; checking for player names...')
+        except Exception as exc:
+            self.coffee_users_status_var.set('Could not refresh room players: '+str(exc)[:145])
+
+    def _start_coffee_loop(self,single_cup=False):
         if self._coffee_running:
             self.coffee_status_var.set('Coffee pass loop already running. Click STOP first.')
             return
@@ -1463,21 +1546,26 @@ class ChatOverlayApp:
                 self.coffee_status_var.set('Could not attach packet tools. See connection status above.')
                 return
             self._coffee_start_queued=True
+            self._coffee_queued_single=bool(single_cup)
             self._coffee_queue_deadline=time.monotonic()+20
             self.coffee_status_var.set('Waiting for G-Earth and the Habbo room connection. No coffee packets sent yet.')
             self._coffee_queue_after_id=self.root.after(
                 350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
         try:
+            target_id,target_name=self._resolve_coffee_recipient()
             sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
                                                 self.coffee_cup_two_var.get(),
-                                                self.coffee_recipient_var.get())
+                                                target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
             cycles_text=self.coffee_cycles_var.get().strip()
-            if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
-                raise ValueError('Cycles must be an integer from 0 to 10000.')
-            cycles=int(cycles_text)
-            if cycles>10000:raise ValueError('Cycles must be 0 to 10000.')
+            if single_cup:
+                cycles=1
+            else:
+                if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
+                    raise ValueError('Cycles must be an integer from 0 to 10000.')
+                cycles=int(cycles_text)
+                if cycles>10000:raise ValueError('Cycles must be 0 to 10000.')
             for expr in sequence:
                 packet=self.packet_extension.string_to_packet(expr)
                 if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
@@ -1485,10 +1573,11 @@ class ChatOverlayApp:
         except (ValueError,TypeError,AttributeError) as exc:
             self.coffee_status_var.set('Cannot start: '+str(exc)[:170])
             return
-        duration='continuously until STOP' if cycles==0 else f'for {cycles} complete cycles'
-        if not messagebox.askyesno('Start coffee pass loop',
-            f'Send alternating cup/pass actions {duration}?\n'
-            f'Target ID: {self.coffee_recipient_var.get().strip()}\n'
+        duration=('one cup' if single_cup else
+                  'continuously until STOP' if cycles==0 else f'for {cycles} complete cycles')
+        if not messagebox.askyesno('Give cup' if single_cup else 'Start coffee pass loop',
+            f'Send coffee actions {duration}?\n'
+            f'Recipient: {target_name or target_id} (ID {target_id})\n'
             f'Delay between each packet: {interval:g} seconds\n\n'
             'Only proceed if you are permitted to automate these actions. '
             'Habbo may reject actions or rate-limit them.',
@@ -1498,17 +1587,19 @@ class ChatOverlayApp:
         self.config.update(coffee_cup_one=self.coffee_cup_one_var.get().strip(),
                            coffee_cup_two=self.coffee_cup_two_var.get().strip(),
                            coffee_recipient=self.coffee_recipient_var.get().strip(),
+                           coffee_username=self.coffee_username_var.get().strip(),
                            coffee_interval=str(interval),coffee_cycles=str(cycles))
         self.save()
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
+        self._coffee_target_name=target_name.casefold()
         self._coffee_interval=interval
         self._coffee_limit=cycles
         self._coffee_index=0
         self._coffee_sent=0
         self._coffee_completed=0
-        self.coffee_status_var.set('Coffee loop ON — packet 1/4. Sent: 0; cycles: 0.')
+        self.coffee_status_var.set(f'Coffee pass ON — action 1/{len(sequence)}. Sent: 0; cycles: 0.')
         self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
                                                  self._coffee_loop_tick(generation))
 
@@ -1520,7 +1611,10 @@ class ChatOverlayApp:
             self._coffee_start_queued=False
             # Still asks permission before sending. Nothing runs in the background
             # simply because Habbo or G-Earth connects later.
-            self._start_coffee_loop()
+            if getattr(self,'_coffee_queued_single',False):
+                self._start_coffee_loop(single_cup=True)
+            else:
+                self._start_coffee_loop()
             return
         if time.monotonic()>self._coffee_queue_deadline or not self.packet_started:
             self._coffee_start_queued=False
@@ -1548,7 +1642,7 @@ class ChatOverlayApp:
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
-        self._coffee_index=(self._coffee_index+1)%4
+        self._coffee_index=(self._coffee_index+1)%len(self._coffee_sequence)
         if self._coffee_index==0:
             self._coffee_completed+=1
             if self._coffee_limit and self._coffee_completed>=self._coffee_limit:
@@ -1564,6 +1658,8 @@ class ChatOverlayApp:
     def _stop_coffee_loop(self,reason=None):
         self._coffee_running=False
         self._coffee_start_queued=False
+        self._coffee_queued_single=False
+        self._coffee_target_name=''
         self._coffee_generation+=1
         queued=self._coffee_queue_after_id
         self._coffee_queue_after_id=None
@@ -2646,6 +2742,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             def connected():
                 self._habbo_session_connected=True
                 self._packet_put(('session_connection',True))
+                self._packet_put(('room_users_reset',))
                 event('Habbo AIR connected; capturing packets in Habbo Companion.')
             ext.on_event('connection_start',connected)
             def disconnected():
@@ -2659,10 +2756,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             def hook(direction):
                 def on_message(msg):
                     if not (self.packet_active or self.manipulation_enabled or
-                            self.config.get('whispers_right',True)):
+                            self.config.get('whispers_right',True) or direction=='Incoming'):
                         return
-                    try:detail=str(msg.packet.g_string(ext))[:4000]
+                    try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    if direction=='Incoming':
+                        if incoming_packet_is(detail,'RoomReady'):
+                            self._packet_put(('room_users_reset',))
+                        elif incoming_packet_is(detail,'UserRemove'):
+                            self._packet_put(('room_user_removed',removed_room_user_index(detail)))
+                        else:
+                            users=room_user_ids_from_packet(detail)
+                            if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
                         whisper_body=whisper_packet_text(detail)
                         if whisper_body is not None:
@@ -2678,7 +2783,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         except Exception as exc:
                             self._packet_put(('manip_status',f'Rule error; packet unchanged: {str(exc)[:160]}'))
                     if self.packet_active:
-                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail))
+                        self._packet_put(('packet',datetime.now().strftime('%H:%M:%S'),direction,detail[:4000]))
                 return on_message
             ext.intercept(Direction.TO_CLIENT,hook('Incoming'))
             ext.intercept(Direction.TO_SERVER,hook('Outgoing'))
@@ -2745,11 +2850,36 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.whisper_hints.append((occurred,body))
                         self.whisper_hints=self.whisper_hints[-32:]
                 continue
+            if item[0]=='room_users_reset':
+                self._room_users.clear()
+                self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
+                if self._coffee_running:
+                    self._stop_coffee_loop('Room changed; coffee pass stopped for safety.')
+                continue
+            if item[0]=='room_users':
+                self._room_users.update(item[1])
+                self.coffee_users_status_var.set(
+                    f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
+                continue
+            if item[0]=='room_user_removed':
+                index=item[1]
+                if index is None or any(v[2] is None for v in self._room_users.values()):
+                    self._room_users.clear()  # fail closed rather than guessing room index
+                else:
+                    self._room_users={name:v for name,v in self._room_users.items() if v[2]!=index}
+                if (self._coffee_running and self._coffee_target_name
+                    and self._coffee_target_name not in self._room_users):
+                    self._stop_coffee_loop('Recipient left or room identity changed; coffee pass stopped.')
+                self.coffee_users_status_var.set(
+                    f'{len(self._room_users)} player(s) currently mapped. Refresh if a name is missing.')
+                continue
             if item[0]=='session_connection':
                 self.packet_connection_status.set(
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._room_users.clear()
+                    self.coffee_users_status_var.set('Disconnected. Room users cleared.')
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
                 continue
@@ -3026,6 +3156,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             room=item.get('room')
             if room is not None and self.room_id is not None and room!=self.room_id:
                 self.clear_msgs()
+                self._room_users.clear()
+                self.coffee_users_status_var.set('Room changed. Waiting for player IDs...')
+                if self._coffee_running:self._stop_coffee_loop('Room changed; coffee pass stopped.')
             if room is not None:self.room_id=room
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
