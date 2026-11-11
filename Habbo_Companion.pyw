@@ -3326,8 +3326,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 for name in removed:
                     self._room_chat_names.discard(name)
                     self._room_profile_cache.pop(name,None)
-                if (self._coffee_running and self._coffee_target_name
-                    and (self._coffee_target_name in removed or index is None)):
+                if self._coffee_running and self._coffee_group_active:
+                    # A server-confirmed departure is an automatic exclusion,
+                    # not evidence of a block. Never retry that recipient.
+                    for departed in removed:
+                        if any(n.casefold()==departed
+                               for n,_ in self._coffee_group_targets):
+                            self.coffee_group_exclude_var.set(departed)
+                            self._exclude_coffee_group_recipient()
+                    if index is None and self._coffee_running:
+                        self._stop_coffee_loop(
+                            'Player departure could not be identified; group stopped.')
+                elif (self._coffee_running and self._coffee_target_name
+                      and (self._coffee_target_name in removed or index is None)):
                     self._stop_coffee_loop(
                         'Recipient may have left; coffee pass stopped pending re-verification.')
                 self.coffee_users_status_var.set(
