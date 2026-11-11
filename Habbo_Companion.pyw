@@ -78,6 +78,8 @@ DEFAULT = dict(
     coffee_username='',
     coffee_interval='0.1',
     coffee_cycles='0',
+    coffee_group_names='',
+    coffee_group_enabled=False,
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -138,6 +140,37 @@ def validate_replay_interval(value):
         raise ValueError('Repeat delay must be between 0.1 and 120 seconds.')
     return interval
 
+
+
+def parse_coffee_group_names(raw):
+    """Opt-in room activity list; never silently add people."""
+    if not isinstance(raw,str):
+        raise ValueError('Enter comma-separated participant usernames.')
+    names=[n.strip() for n in re.split(r'[,\n]+',raw)]
+    names=[n for n in names if n]
+    if not 2<=len(names)<=8:
+        raise ValueError('Group rotation requires 2 to 8 willing participants.')
+    if len({n.casefold() for n in names})!=len(names):
+        raise ValueError('Remove duplicate group usernames.')
+    if any(len(n)>80 or any(c in n for c in '{}\r\x00') for n in names):
+        raise ValueError('An invalid username is present in the participant list.')
+    return tuple(names)
+
+
+def build_coffee_group_sequence(cup_one,cup_two,recipients):
+    """Rotate 2 rounds per cycle; each participant gets a different cup.
+
+    recipients: ordered (username, numeric account ID) pairs.
+    """
+    if not 2<=len(recipients)<=8:
+        raise ValueError('Group rotation needs 2 to 8 participants.')
+    sequence=[]
+    for round_number in range(2):
+        for i,(_,account_id) in enumerate(recipients):
+            cup=cup_one if (round_number+i)%2==0 else cup_two
+            sequence.extend(build_coffee_pass_sequence(
+                cup,'',account_id,single_cup=True))
+    return tuple(sequence)
 
 
 def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
@@ -1000,6 +1033,11 @@ class ChatOverlayApp:
         self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
+        self.coffee_group_names_var=tk.StringVar(value=str(self.config.get('coffee_group_names','')))
+        self.coffee_group_enabled_var=tk.BooleanVar(value=bool(self.config.get('coffee_group_enabled',False)))
+        self.coffee_group_exclude_var=tk.StringVar(value='')
+        self._coffee_group_targets=[]
+        self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
         self._coffee_pass_requests=0
@@ -1603,6 +1641,19 @@ class ChatOverlayApp:
         entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Checkbutton(holder,text='Rotate between willing participants (group mode)',
+                        variable=self.coffee_group_enabled_var).pack(anchor='w',pady=(4,8))
+        entry('Group usernames',self.coffee_group_names_var,
+              'Comma-separated, 2-8; checked only in group mode')
+        group_actions=ttk.Frame(holder,style='Panel.TFrame')
+        group_actions.pack(anchor='w',pady=(0,8))
+        ttk.Label(group_actions,text='Exclude participant',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(group_actions,textvariable=self.coffee_group_exclude_var,width=18).pack(side='left',padx=(8,8))
+        ttk.Button(group_actions,text='Remove from rotation',
+                   command=self._exclude_coffee_group_recipient).pack(side='left')
+        ttk.Label(holder,text='Group mode: consenting users only; at least 10 seconds '
+                  'between packet actions. No automatic retry of blocked or excluded users.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(1,8))
 
         ttk.Label(holder,textvariable=self.packet_connection_status,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,5))
@@ -1744,48 +1795,115 @@ class ChatOverlayApp:
                 'No Users packet arrived within 12 seconds. GetHeightMap does not guarantee '
                 'a player-list response. Leave and re-enter the room while Companion is connected.')
 
+    def _exclude_coffee_group_recipient(self):
+        """Immediate opt-out; excludes are never auto-probed or re-added."""
+        name=self.coffee_group_exclude_var.get().strip()
+        if not name:
+            self.coffee_status_var.set('Enter a username to exclude.')
+            return
+        current=[n.strip() for n in self.coffee_group_names_var.get().split(',') if n.strip()]
+        remaining=[n for n in current if n.casefold()!=name.casefold()]
+        if len(remaining)==len(current):
+            self.coffee_status_var.set(f'{name} is not in the participant list.')
+            return
+        self.coffee_group_names_var.set(', '.join(remaining))
+        self.config['coffee_group_names']=self.coffee_group_names_var.get()
+        self.save()
+        if self._coffee_running and self._coffee_group_active:
+            targets=[v for v in self._coffee_group_targets
+                     if v[0].casefold()!=name.casefold()]
+            if len(targets)<2:
+                self._stop_coffee_loop('Fewer than 2 group participants remain; stopped.')
+                return
+            try:
+                seq=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
+                                               self.coffee_cup_two_var.get(),targets)
+            except ValueError as exc:
+                self._stop_coffee_loop('Group rotation update failed: '+str(exc))
+                return
+            self._coffee_generation+=1
+            previous=self._coffee_after_id
+            self._coffee_after_id=None
+            if previous is not None:
+                try:self.root.after_cancel(previous)
+                except (tk.TclError,AttributeError):pass
+            self._coffee_group_targets=targets
+            self._coffee_sequence=seq
+            self._coffee_index=0
+            self._coffee_target_name=''
+            self._coffee_target_room_index=None
+            self._coffee_after_id=self.root.after(
+                round(self._coffee_interval*1000),
+                lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
+        self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
+
     def _start_coffee_loop(self,single_cup=False):
         if self._coffee_running:
-            self.coffee_status_var.set('Coffee pass loop already running. Click STOP first.')
+            self.coffee_status_var.set('Coffee loop already running. Click STOP first.')
             return
         if self._replay_running:
-            self.coffee_status_var.set('Stop the single-packet repeater before starting this loop.')
+            self.coffee_status_var.set('Stop the single-packet repeater before starting.')
             return
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             if self._coffee_start_queued:
-                self.coffee_status_var.set('Preparing the G-Earth connection; the loop has not started yet.')
+                self.coffee_status_var.set('Preparing G-Earth; the loop has not started yet.')
                 return
             try:port=int(self.gearth_port_var.get())
-            except (TypeError,ValueError):port=0
+            except (ValueError,TypeError):port=0
             if not self._gearth_extension_port_responds(port):
-                self.coffee_status_var.set('G-Earth backend is offline. Start the engine first.')
+                self.coffee_status_var.set('G-Earth backend is offline. Start the engine.')
                 return
+            if not self.packet_started:self._connect_gearth(capture=False)
             if not self.packet_started:
-                self._connect_gearth(capture=False)
-            if not self.packet_started:
-                self.coffee_status_var.set('Could not attach packet tools. See connection status above.')
+                self.coffee_status_var.set('Could not attach packet tools.')
                 return
             self._coffee_start_queued=True
             self._coffee_queued_single=bool(single_cup)
             self._coffee_queue_deadline=time.monotonic()+20
-            self.coffee_status_var.set('Waiting for G-Earth and the Habbo room connection. No coffee packets sent yet.')
+            self.coffee_status_var.set('Waiting for G-Earth and Habbo room connection.')
             self._coffee_queue_after_id=self.root.after(
                 350,lambda gen=self._coffee_generation:self._check_queued_coffee_start(gen))
             return
+
+        group_mode=bool(not single_cup and self.coffee_group_enabled_var.get())
         username=self.coffee_username_var.get().strip()
-        if (username and username.casefold() not in self._room_users
-            and username.casefold() not in self._room_profile_cache):
+        if group_mode:
+            try:
+                group_names=parse_coffee_group_names(self.coffee_group_names_var.get())
+            except ValueError as exc:
+                self.coffee_status_var.set('Cannot start group: '+str(exc))
+                return
+            missing=next((n for n in group_names
+                          if n.casefold() not in self._room_users
+                          and n.casefold() not in self._room_profile_cache),None)
+            if missing:
+                self._lookup_coffee_profile(missing,single_cup=False)
+                return
+        elif (username and username.casefold() not in self._room_users
+              and username.casefold() not in self._room_profile_cache):
             self._lookup_coffee_profile(username,single_cup=single_cup)
             return
+        targets=[]
         try:
-            target_id,target_name=self._resolve_coffee_recipient()
-            sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
-                                                self.coffee_cup_two_var.get(),
-                                                target_id,single_cup=single_cup)
+            if group_mode:
+                for n in group_names:
+                    record=self._room_users.get(n.casefold())
+                    if record is None:record=self._room_profile_cache[n.casefold()]
+                    targets.append((record[0],str(record[1])))
+                target_name='Group rotation'
+                target_id=targets[0][1]
+                sequence=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
+                                                    self.coffee_cup_two_var.get(),targets)
+            else:
+                target_id,target_name=self._resolve_coffee_recipient()
+                sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
+                                                    self.coffee_cup_two_var.get(),
+                                                    target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
+            if group_mode and interval<10:
+                raise ValueError('Group mode requires at least 10 seconds per packet action.')
             cycles_text=self.coffee_cycles_var.get().strip()
-            if single_cup:
-                cycles=1
+            if single_cup:cycles=1
             else:
                 if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
                     raise ValueError('Cycles must be an integer from 0 to 10000.')
@@ -1794,25 +1912,30 @@ class ChatOverlayApp:
             for expr in sequence:
                 packet=self.packet_extension.string_to_packet(expr)
                 if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
-                    raise ValueError('G-Earth could not parse a generated packet; check its headers.')
-        except (ValueError,TypeError,AttributeError) as exc:
+                    raise ValueError('G-Earth could not parse a generated packet.')
+        except (ValueError,TypeError,AttributeError,KeyError) as exc:
             self.coffee_status_var.set('Cannot start: '+str(exc)[:170])
             return
+
         duration=('one cup' if single_cup else
                   'continuously until STOP' if cycles==0 else f'for {cycles} complete cycles')
-        profile_only=(bool(username)
-                      and username.casefold() in self._room_profile_cache
-                      and username.casefold() not in self._room_users)
-        presence_note=('This ID is from Habbo profile lookup, not a verified room '
-                       'player list. Check the recipient is in your room.\n'
-                       if profile_only else '')
+        if group_mode:
+            recipient_display=', '.join(n for n,_ in targets)
+            presence_note=('Group mode is for people who agreed to participate. '
+                           'A Habbo profile does not verify room presence. '
+                           'Do not include anyone who has blocked or opted out.\n')
+        else:
+            recipient_display=f'{target_name or target_id} (ID {target_id})'
+            profile_only=(bool(username) and username.casefold() in self._room_profile_cache
+                          and username.casefold() not in self._room_users)
+            presence_note=('Profile lookup confirms identity, not room presence.\n'
+                           if profile_only else '')
         if not messagebox.askyesno('Give cup' if single_cup else 'Start coffee pass loop',
             f'Send coffee actions {duration}?\n'
-            f'Recipient: {target_name or target_id} (ID {target_id})\n'
+            f'Recipient(s): {recipient_display}\n'
             f'{presence_note}'
-            f'Delay between each packet: {interval:g} seconds\n\n'
-            'Only proceed if you are permitted to automate these actions. '
-            'Habbo may reject actions or rate-limit them.',
+            f'Delay between actions: {interval:g} seconds\n\n'
+            'Only proceed with willing recipients. Habbo may reject or rate-limit actions.',
             parent=self.root):
             self.coffee_status_var.set('Coffee loop cancelled.')
             return
@@ -1820,12 +1943,16 @@ class ChatOverlayApp:
                            coffee_cup_two=self.coffee_cup_two_var.get().strip(),
                            coffee_recipient=self.coffee_recipient_var.get().strip(),
                            coffee_username=self.coffee_username_var.get().strip(),
-                           coffee_interval=str(interval),coffee_cycles=str(cycles))
+                           coffee_interval=str(interval),coffee_cycles=str(cycles),
+                           coffee_group_names=self.coffee_group_names_var.get().strip(),
+                           coffee_group_enabled=bool(self.coffee_group_enabled_var.get()))
         self.save()
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
-        self._coffee_target_name=target_name.casefold()
+        self._coffee_group_active=group_mode
+        self._coffee_group_targets=list(targets) if group_mode else []
+        self._coffee_target_name='' if group_mode else target_name.casefold()
         self._coffee_interval=interval
         self._coffee_limit=cycles
         self._coffee_index=0
@@ -1834,14 +1961,16 @@ class ChatOverlayApp:
         self._coffee_pass_requests=0
         self._coffee_carry_observations=0
         self._coffee_last_pass_at=0.0
-        user=self._room_users.get(target_name.casefold()) if target_name else None
-        self._coffee_target_room_index=(user[2] if user and user[2] is not None else None)
+        record=self._room_users.get(target_name.casefold()) if target_name and not group_mode else None
+        self._coffee_target_room_index=(record[2] if record and record[2] is not None else None)
         self.coffee_delivery_var.set(coffee_delivery_text(
             self._coffee_pass_requests,self._coffee_carry_observations,
             self._coffee_target_room_index))
-        self.coffee_status_var.set(f'Coffee pass ON — action 1/{len(sequence)}. Sent: 0; cycles: 0.')
-        self._coffee_after_id=self.root.after(0,lambda generation=self._coffee_generation:
-                                                 self._coffee_loop_tick(generation))
+        self.coffee_status_var.set(
+            f'Coffee loop ON — {len(targets) if group_mode else 1} recipient(s). '
+            f'Sent: 0; cycles: 0.')
+        self._coffee_after_id=self.root.after(0,lambda gen=self._coffee_generation:
+                                                 self._coffee_loop_tick(gen))
 
     def _check_queued_coffee_start(self,generation):
         self._coffee_queue_after_id=None
@@ -1870,6 +1999,16 @@ class ChatOverlayApp:
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             self._stop_coffee_loop('Habbo or G-Earth disconnected. Coffee loop stopped.')
             return
+        if self._coffee_group_active:
+            if len(self._coffee_group_targets)<2:
+                self._stop_coffee_loop('No active group rotation; stopped.')
+                return
+            recipient=self._coffee_group_targets[
+                (self._coffee_index//2)%len(self._coffee_group_targets)]
+            self._coffee_target_name=recipient[0].casefold()
+            record=self._room_users.get(self._coffee_target_name)
+            self._coffee_target_room_index=(
+                record[2] if record and record[2] is not None else None)
         try:
             expression=self._coffee_sequence[self._coffee_index]
             ext=self.packet_extension
@@ -1896,9 +2035,16 @@ class ChatOverlayApp:
             if self._coffee_limit and self._coffee_completed>=self._coffee_limit:
                 self._stop_coffee_loop('Requested cycles finished.')
                 return
-        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index]
-        self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
-                                   f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index%4]
+        if self._coffee_group_active:
+            next_recipient=self._coffee_group_targets[
+                (self._coffee_index//2)%len(self._coffee_group_targets)][0]
+            self.coffee_status_var.set(
+                f'Group ON — next: {next_recipient} ({label}). '
+                f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+        else:
+            self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
+                                       f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
         if self._coffee_running and generation==self._coffee_generation:
             self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
                 lambda gen=generation:self._coffee_loop_tick(gen))
@@ -1908,6 +2054,8 @@ class ChatOverlayApp:
         self._coffee_start_queued=False
         self._coffee_queued_single=False
         self._coffee_target_name=''
+        self._coffee_group_active=False
+        self._coffee_group_targets=[]
         self._coffee_profile_pending=None
         self._coffee_profile_generation=getattr(self,'_coffee_profile_generation',0)+1
         self._coffee_generation+=1
@@ -3178,8 +3326,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 for name in removed:
                     self._room_chat_names.discard(name)
                     self._room_profile_cache.pop(name,None)
-                if (self._coffee_running and self._coffee_target_name
-                    and (self._coffee_target_name in removed or index is None)):
+                if self._coffee_running and self._coffee_group_active:
+                    # A server-confirmed departure is an automatic exclusion,
+                    # not evidence of a block. Never retry that recipient.
+                    for departed in removed:
+                        if any(n.casefold()==departed
+                               for n,_ in self._coffee_group_targets):
+                            self.coffee_group_exclude_var.set(departed)
+                            self._exclude_coffee_group_recipient()
+                    if index is None and self._coffee_running:
+                        self._stop_coffee_loop(
+                            'Player departure could not be identified; group stopped.')
+                elif (self._coffee_running and self._coffee_target_name
+                      and (self._coffee_target_name in removed or index is None)):
                     self._stop_coffee_loop(
                         'Recipient may have left; coffee pass stopped pending re-verification.')
                 self.coffee_users_status_var.set(
