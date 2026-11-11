@@ -75,6 +75,34 @@ class WideChatTests(unittest.TestCase):
         self.assertIn('fnt,bold=self.canvas_font,self.canvas_bold',source)
         self.assertIn('fit_line_ellipsis',source)
 
+    def test_toggle_labels_make_both_behaviours_obvious(self):
+        label=next(node for node in TREE.body
+                   if isinstance(node,ast.FunctionDef) and node.name=='chat_line_mode_label')
+        ns={}
+        exec(compile(ast.Module(body=[label],type_ignores=[]),str(APP),'exec'),ns)
+        self.assertIn('ON',ns['chat_line_mode_label'](True))
+        self.assertIn('one long line',ns['chat_line_mode_label'](True))
+        self.assertIn('OFF',ns['chat_line_mode_label'](False))
+        self.assertIn('multiple lines',ns['chat_line_mode_label'](False))
+
+    def test_wrapped_mode_does_not_use_original_png_embedded_font_sizes(self):
+        start=CODE.index('            # Legacy wrapped-mode:')
+        end=CODE.index('        self.visible_count_current=rendered_count',start)
+        segment=CODE[start:end]
+        self.assertNotIn('create_image(bx,top,image=original',segment)
+        self.assertIn("font=self.canvas_bold",segment)
+        self.assertIn("font=self.canvas_font",segment)
+        self.assertIn("wrap_message(' '.join(words)",segment)
+
+    def test_line_toggle_does_not_mutate_font_size(self):
+        start=CODE.index('    def _chat_line_toggle(self,parent):')
+        end=CODE.index('    def _check(self,parent,label,key,invert=False):',start)
+        segment=CODE[start:end]
+        self.assertIn("key='single_line_bubbles'",segment)
+        self.assertIn('self.save()',segment)
+        self.assertNotIn("self.config['font_size']",segment)
+        self.assertIn('self._chat_line_toggle(f)',CODE)
+
     def test_short_widths_are_safe(self):
         self.assertEqual(namespace['fit_line_ellipsis']('hello',FixedFont(),0),'')
         self.assertEqual(namespace['fit_line_ellipsis']('hello',FixedFont(),8),'…')

@@ -1,31 +1,30 @@
-HABBO COMPANION v1.1.14 — ROOM PLAYER LOOKUP FIX
-================================================
+HABBO COMPANION v1.1.15 — ONE-LINE TEXT ON/OFF TOGGLE
+==========================================================
 
-FIXED:
-- "Refresh room players" no longer displays an indefinite waiting message.
-  After 12 seconds it says whether a Users packet was received.
-- Room user identification now checks G-Earth's packet-name metadata
-  instead of assuming a name is present in the legacy packet rendering.
-- Reads G-Earth's decoded packet expression for player IDs/usernames.
-- If expression detection is incomplete, tries reading the stable
-  user-count / first-ID / first-username binary prefix.
-- Clearly reports if a Users packet arrived but could not be decoded.
-- No username is guessed. The existing manual numeric fallback remains.
+In View Chat there is now a plainly labelled, persistent switch:
 
-INSTRUCTIONS:
-1. Open Habbo Companion, then enter the Habbo room with the person.
-2. Open Packet Manipulator > Coffee Pass.
-3. Enter exact username, or click Refresh room players.
-4. If the refresh says no Users response after 12 seconds, leave the room
-   and re-enter while Companion and G-Earth are connected.
-5. Click Give 1 cup and confirm the recipient's name and ID.
+  One-line chat text: ON  (one long line)
+  One-line chat text: OFF  (wrap onto multiple lines)
 
-The G-Earth GetHeightMap request does not guarantee that Habbo will resend
-the player list. Re-entering a room is a more reliable way to receive
-the initial room Users packet if the player-name cache is empty.
+When ON, messages appear on a single row. Very long messages can
+be shortened at the room edge, as before.
 
-The existing chat overlay, one-cup transfer, two-cup loop, native packet
-viewer, and updater are preserved. Success in an actual Habbo room has
-not yet been verified. Server restrictions can reject sent actions.
+When OFF, messages return to the multi-line / narrow-column arrangement.
+They wrap at your configured "Bubble width (wrapped mode)" and display
+the full text rather than truncating at the room edge.
 
-Update using Habbo Companion > Updates > Check online.
+IMPORTANT: Both settings use exactly the same Font size slider. Turning
+the switch OFF does not restore the inconsistent font sizes embedded in
+original Habbo bubble PNGs. With original bubble colours/avatars enabled,
+Companion can retain a speaker's image details while drawing the text
+at your chosen uniform font size.
+
+You can toggle while Habbo is open, without restarting Companion. Your
+choice is saved across launches. Whisper-right positioning is independent.
+
+OTHER FEATURES PRESERVED:
+- Username-based Give 1 cup, coffee loop and room player refresh diagnostics.
+- G-Earth integrated packet tools, settings and chat scrolling.
+- One-line bubbles and native image-derived colour/avatars.
+
+Update by opening Habbo Companion > Updates > Check online.
