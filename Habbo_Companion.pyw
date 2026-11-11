@@ -3469,6 +3469,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 cursor=top-gap
                 rendered_count+=1
                 continue
+            # Legacy wrapped-mode: keep uniform font size and reflow the whole message.
             # Wrapped mode uses the same user-selected Tk font sizes as one-line
             # mode. Never blit the original PNG's embedded text, because Habbo's
             # native text sizes can differ between bubble types and speakers.
