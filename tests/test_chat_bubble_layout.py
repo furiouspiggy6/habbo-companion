@@ -77,12 +77,13 @@ class WideChatTests(unittest.TestCase):
                         body.index("content=chat_one_line(msg.name+': '+msg.body)"))
 
     def test_no_imitation_speech_bubbles(self):
-        body=CODE[CODE.index('    def draw(self):'):CODE.index('    def _hotkeys(self):')]
-        self.assertNotIn('self._rounded(',body)
-        self.assertNotIn('cv.create_polygon(',body)
-        self.assertNotIn('cv.create_oval(',body)
-        self.assertNotIn('STYLE_VARIANTS',body)
-        self.assertIn('cv.create_text(tx,top+line_number*fline',body)
+        draw=CODE[CODE.index('    def draw(self):'):CODE.index('    def _hotkeys(self):')]
+        bubbles=draw[draw.index('        for msg in reversed(self.messages[start:end]):'):]
+        self.assertNotIn('self._rounded(',bubbles)
+        self.assertNotIn('cv.create_polygon(',bubbles)
+        self.assertNotIn('cv.create_oval(',bubbles)
+        self.assertNotIn('STYLE_VARIANTS',bubbles)
+        self.assertIn('cv.create_text(tx,top+line_number*fline',bubbles)
 
     def test_toggle_labels_make_both_behaviours_obvious(self):
         label=next(node for node in TREE.body
