@@ -212,6 +212,43 @@ def removed_room_user_index(description):
     return int(match.group(1)) if match else None
 
 
+
+def classify_room_packet(extension,direction,packet,description=''):
+    """Trust G-Earth's header metadata before inspecting packet data.
+
+    g_string() is a legacy byte string, not a parsed {in:Users} expression.
+    Packet headers can change, so never hardcode a numeric Users header.
+    """
+    names=set()
+    try:
+        records=(getattr(extension,'packet_infos',None) or {}).get(direction,{}).get(packet.header_id(),())
+        for rec in records:
+            name=rec.get('Name')
+            if isinstance(name,str):names.add(name.casefold())
+    except (ValueError,TypeError,AttributeError):
+        pass
+    for name in ('Users','RoomReady','UserRemove'):
+        if name.casefold() in names or incoming_packet_is(description,name):
+            return name
+    return None
+
+
+def first_room_user_from_raw_packet(packet):
+    """Decode only the stable [count, id, name] prefix, no outdated entity tail."""
+    try:
+        if not 1<=packet.read_int(6)<=500:
+            return {}
+        user_id=packet.read_int(10)
+        name=packet.read_string(14)
+        if not 1<=user_id<2147483648 or not isinstance(name,str):
+            return {}
+        if not 1<=len(name.strip())<=80 or any(c in name for c in '\r\n\x00'):
+            return {}
+        return {name.casefold():(name,user_id,None)}
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return {}
+
+
 def validate_manipulation_rule(candidate):
     if not isinstance(candidate,dict):raise ValueError('Invalid rule')
     direction=str(candidate.get('direction','Both'))
@@ -882,6 +919,10 @@ class ChatOverlayApp:
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
         self._room_users={}
+        self._room_lookup_pending=False
+        self._room_lookup_generation=0
+        self._room_lookup_seen=False
+        self._room_lookup_parse_failed=False
         self._coffee_target_name=''
         self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
@@ -1514,15 +1555,43 @@ class ChatOverlayApp:
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             self.coffee_users_status_var.set('Connect G-Earth and join the Habbo room before refreshing.')
             return
+        self._room_lookup_generation+=1
+        gen=self._room_lookup_generation
+        self._room_lookup_pending=True
+        self._room_lookup_seen=False
+        self._room_lookup_parse_failed=False
         try:
             packet=self.packet_extension.string_to_packet('{out:GetHeightMap}')
             if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
-                raise ValueError('G-Earth could not resolve GetHeightMap.')
+                raise ValueError('GetHeightMap cannot be resolved by G-Earth.')
             if self.packet_extension.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the room refresh request.')
-            self.coffee_users_status_var.set('Room refresh requested; checking for player names...')
+            self.coffee_users_status_var.set(
+                f'Room request sent. {len(self._room_users)} player(s) known; '
+                'checking for a Users reply (12 second timeout)...')
+            self.root.after(12000,lambda generation=gen:self._room_refresh_timeout(generation))
         except Exception as exc:
+            self._room_lookup_pending=False
             self.coffee_users_status_var.set('Could not refresh room players: '+str(exc)[:145])
+
+    def _room_refresh_timeout(self,generation):
+        if not self._room_lookup_pending or generation!=self._room_lookup_generation:
+            return
+        self._room_lookup_pending=False
+        if not self._habbo_session_connected:
+            self.coffee_users_status_var.set('Connection lost. Rejoin the Habbo room with Companion running.')
+        elif self._room_lookup_parse_failed:
+            self.coffee_users_status_var.set(
+                'A Users packet arrived but player names could not be decoded. '
+                'The room packet layout may have changed; try a manual numeric target ID.')
+        elif self._room_lookup_seen:
+            self.coffee_users_status_var.set(
+                'A Users packet arrived without valid player IDs. '
+                'Try leaving and re-entering the room with Companion connected.')
+        else:
+            self.coffee_users_status_var.set(
+                'No Users packet arrived within 12 seconds. GetHeightMap does not guarantee '
+                'a player-list response. Leave and re-enter the room while Companion is connected.')
 
     def _start_coffee_loop(self,single_cup=False):
         if self._coffee_running:
