@@ -75,6 +75,7 @@ DEFAULT = dict(
     coffee_cup_one='476989081',
     coffee_cup_two='476989024',
     coffee_recipient='68808036',
+    coffee_username='',
     coffee_interval='0.1',
     coffee_cycles='0',
     habbo_launcher_path='',
@@ -139,7 +140,7 @@ def validate_replay_interval(value):
 
 
 
-def build_coffee_pass_sequence(cup_one, cup_two, recipient):
+def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
     """Build one two-cup/two-pass outgoing cycle from captured action IDs."""
     def positive_id(raw, label):
         value=str(raw).strip()
@@ -151,8 +152,11 @@ def build_coffee_pass_sequence(cup_one, cup_two, recipient):
         return number
 
     first=positive_id(cup_one,'Cup 1')
-    second=positive_id(cup_two,'Cup 2')
+    second=positive_id(cup_two,'Cup 2') if not single_cup else None
     target=positive_id(recipient,'Recipient')
+    if single_cup:
+        return (f'{{out:UseFurniture}}{{i:{first}}}{{i:0}}',
+                f'{{out:PassCarryItem}}{{i:{target}}}')
     if first==second:
         raise ValueError('Cup 1 and Cup 2 must have different furniture IDs.')
     return (
@@ -161,6 +165,51 @@ def build_coffee_pass_sequence(cup_one, cup_two, recipient):
         f'{{out:UseFurniture}}{{i:{second}}}{{i:0}}',
         f'{{out:PassCarryItem}}{{i:{target}}}',
     )
+
+
+
+# Read the ID/name prefix of Users entries without relying on the full entity
+# parser (whose optional fields changed in the 2026 client update).
+ROOM_USER_PAIR_RE=re.compile(r'\{i:([0-9]{1,10})\}\{s:"((?:\\.|[^"\\])*)"\}')
+ROOM_USER_INDEX_RE=re.compile(
+    r'^\{s:"(?:\\.|[^"\\])*"\}\{s:"(?:\\.|[^"\\])*"\}\{i:([0-9]{1,10})\}')
+
+
+def incoming_packet_is(description,name):
+    if not isinstance(description,str):
+        return False
+    value=description.lstrip().lower()
+    return value.startswith('{in:'+name.lower()+'}') or value.startswith('['+name.lower()+']')
+
+
+def room_user_ids_from_packet(description):
+    """Read only named incoming Users packets. Never infer a missing user ID."""
+    if not incoming_packet_is(description,'Users'):
+        return {}
+    found={}
+    for match in ROOM_USER_PAIR_RE.finditer(description):
+        try:
+            user_id=int(match.group(1))
+            name=json.loads('"'+match.group(2)+'"')
+        except (ValueError,TypeError):
+            continue
+        if not 1<=user_id<2147483648 or not isinstance(name,str):
+            continue
+        if not name.strip() or len(name)>80 or any(ch in name for ch in '\r\n\x00'):
+            continue
+        # Older prefix: id, name, motto, figure, room index.
+        # The index is optional because newer fields may have moved.
+        index_match=ROOM_USER_INDEX_RE.match(description[match.end():])
+        room_index=int(index_match.group(1)) if index_match else None
+        found[name.casefold()]=(name,user_id,room_index)
+    return found
+
+
+def removed_room_user_index(description):
+    if not incoming_packet_is(description,'UserRemove'):
+        return None
+    match=re.search(r'\{s:"([0-9]{1,10})"\}',description)
+    return int(match.group(1)) if match else None
 
 
 def validate_manipulation_rule(candidate):
@@ -830,6 +879,11 @@ class ChatOverlayApp:
         self.coffee_cup_one_var=tk.StringVar(value=str(self.config.get('coffee_cup_one','476989081')))
         self.coffee_cup_two_var=tk.StringVar(value=str(self.config.get('coffee_cup_two','476989024')))
         self.coffee_recipient_var=tk.StringVar(value=str(self.config.get('coffee_recipient','68808036')))
+        self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
+        self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
+        self._room_users={}
+        self._coffee_target_name=''
+        self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
