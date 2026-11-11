@@ -122,7 +122,7 @@ class ProfileLookupTests(unittest.TestCase):
         obj.coffee_recipient_var=Value('999')  # fallback ID must not be used
         self.assertEqual(resolve(obj),('381423','Cheesecake'))
         obj.coffee_username_var=Value('SomeoneElse')
-        with self.assertRaisesRegex(ValueError,'not mapped'):
+        with self.assertRaisesRegex(ValueError,'not found'):
             resolve(obj)
         obj.coffee_username_var=Value('')
         self.assertEqual(resolve(obj),('999',''))
