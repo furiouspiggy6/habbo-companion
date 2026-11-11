@@ -1865,6 +1865,54 @@ class ChatOverlayApp:
                   'G-Earth must be connected. The server can ignore or rate-limit requests.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,0))
 
+    def _arm_coffee_furniture_capture(self):
+        """Capture one outgoing manual furniture use, not every room interaction."""
+        if self._coffee_running:
+            self.coffee_furniture_capture_var.set(
+                'Press STOP before capturing a furniture source.')
+            return
+        if (not self.packet_started or self.packet_extension is None
+            or not self._habbo_session_connected):
+            self.coffee_furniture_capture_var.set(
+                'Connect Habbo and G-Earth before capturing the bookcase ID.')
+            return
+        self._coffee_furniture_capture_generation+=1
+        generation=self._coffee_furniture_capture_generation
+        self._coffee_furniture_capture_pending=True
+        self.coffee_furniture_capture_var.set(
+            'Capture armed: double-click your bookcase (or other dispenser) in Habbo.')
+        self.root.after(15000,lambda gen=generation:self._coffee_capture_timeout(gen))
+
+    def _coffee_capture_timeout(self,generation):
+        if (generation!=self._coffee_furniture_capture_generation
+            or not self._coffee_furniture_capture_pending):
+            return
+        self._coffee_furniture_capture_pending=False
+        self.coffee_furniture_capture_var.set(
+            'No UseFurniture packet captured in 15 seconds. '
+            'Try Capture again and double-click the dispenser.')
+
+    def _receive_captured_furniture(self,furniture_id):
+        """Add the validated room-instance ID only once."""
+        furniture=str(furniture_id)
+        try:
+            existing=parse_extra_furniture_sources(
+                self.coffee_extra_furniture_var.get(),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get())
+            updated=parse_extra_furniture_sources(
+                ', '.join((*existing,furniture)),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get())
+        except ValueError as exc:
+            self.coffee_furniture_capture_var.set(
+                'Cannot add captured furniture: '+str(exc))
+            return
+        self.coffee_extra_furniture_var.set(', '.join(updated))
+        self.config['coffee_extra_furniture']=self.coffee_extra_furniture_var.get()
+        self.save()
+        self.coffee_furniture_capture_var.set(
+            f'Captured furniture instance {furniture}. Included in cup/book rotation. '
+            'Only works if the furniture actually gives a hand item.')
+
     def _resolve_coffee_recipient(self):
         """Resolve the exact in-room Habbo username, or use manual ID only if blank."""
         username=self.coffee_username_var.get().strip()
@@ -3488,6 +3536,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         return
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    if direction=='Outgoing' and self._coffee_furniture_capture_pending:
+                        captured=outgoing_furniture_id_from_packet(
+                            ext,Direction.TO_SERVER,msg.packet)
+                        if captured is not None:
+                            self._coffee_furniture_capture_pending=False
+                            self._packet_put(('coffee_source_captured',captured))
                     if direction=='Incoming':
                         kind=classify_room_packet(ext,Direction.TO_CLIENT,msg.packet,detail)
                         if kind=='RoomReady':
@@ -3613,6 +3667,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.whisper_hints.append((occurred,body))
                         self.whisper_hints=self.whisper_hints[-32:]
                 continue
+            if item[0]=='coffee_source_captured':
+                self._receive_captured_furniture(item[1])
+                continue
             if item[0]=='coffee_profile':
                 self._accept_coffee_profile(item[1],item[2])
                 continue
@@ -3725,6 +3782,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._coffee_furniture_capture_pending=False
                     self._own_account_id=None
                     self._own_name=''
                     self._own_room_index=None
