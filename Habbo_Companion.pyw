@@ -404,8 +404,8 @@ def clamp(x, lo, hi):
 
 
 def is_whisper_chat(chat_type):
-    """Habbo ChatItem type 2 is a whisper."""
-    try:return int(chat_type)==2
+    """Habbo AIR: 0=speak, 1=whisper, 2=shout; bot whisper=12."""
+    try:return int(chat_type) in (1,12)
     except (ValueError,TypeError):return False
 
 
@@ -490,6 +490,7 @@ class Message:
     chat_type: int=0
     forced_color: int | None=None
     bubble_image: Path | None=None
+    chat_type_explicit: bool=False  # protect source chat type from packet hints
 
 
 class WinTracker:
@@ -3041,8 +3042,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 for msg in reversed(self.messages[-24:]):
                     if abs(msg.arrived-occurred)>8:
                         continue
-                    if chat_one_line(msg.body)==body:
-                        msg.chat_type=2
+                    if not msg.chat_type_explicit and chat_one_line(msg.body)==body:
+                        msg.chat_type=1
                         break
                 else:
                     if not any(t==body and abs(at-occurred)<0.4
@@ -3411,9 +3412,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     f'{cached[0]} verified from current room chat and profile (ID {cached[1]}).')
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
+            chat_type_explicit=('chatType' in item or 'chat_type' in item)
             chat_type=int(item.get('chatType',item.get('chat_type',0)) or 0)
             if item.get('isWhisper') is True or item.get('whisper') is True:
-                chat_type=2
+                chat_type=1
+                chat_type_explicit=True
             raw_color=item.get('forcedColor')
             forced_color=int(raw_color) if isinstance(raw_color,(float,int)) else None
             image_path=None
@@ -3429,11 +3432,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # incoming messages arrive instead of snapping back to the bottom.
             if self.scroll_offset>0:self.scroll_offset+=1
             arrived=time.time()
-            if not is_whisper_chat(chat_type) and match_recent_whisper(
+            # G-Earth text-only hints are a fallback ONLY when the AIR feed
+            # did not provide an explicit chat type. Never reclassify shouts.
+            if not chat_type_explicit and match_recent_whisper(
                     self.whisper_hints,body,arrived):
-                chat_type=2
+                chat_type=1
             self.messages.append(Message(name,body,arrived,within,room,
-                                         style_id,chat_type,forced_color,image_path))
+                                         style_id,chat_type,forced_color,image_path,
+                                         chat_type_explicit))
             self._trim_history()
             if image_path:
                 self.native_image_count+=1
