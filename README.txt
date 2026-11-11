@@ -1,47 +1,49 @@
-HABBO COMPANION v1.1.20 — COFFEE DELIVERY MONITOR & STEADIER CURSOR
-===================================================================
+HABBO COMPANION v1.1.21 — OPT-IN MULTI-PLAYER COFFEE ROTATION
+==============================================================
 
-COFFEE DELIVERY MONITOR
------------------------
-The Coffee Pass panel now reports:
-- Pass requests sent: number of PassCarryItem packets accepted by the
-  local G-Earth send interface. This does NOT prove the recipient got one.
-- Recipient carrying-item updates observed: the number of incoming
-  CarryObject notifications with a nonzero item type and a matching ROOM
-  AVATAR INDEX received within four seconds of a pass request.
-- When no room avatar index is known (for example, when resolving the
-  username only from a Habbo public profile), it clearly says receipt
-  cannot be verified from this connection.
+MULTI-PERSON ROTATION
+---------------------
+A new Group mode checkbox in Packet Manipulator > Coffee Pass Loop lets
+you list two to eight willing participants, separated by commas.
+The loop hands a cup to each in list order, then reverses which cup each
+participant receives on the next round. Each participant receives both
+Cup 1 and Cup 2 per complete group cycle. The option is disabled by
+default and never changes the existing single-recipient coffee loop
+or Give 1 cup action.
 
-These are separate counts. A server carry-state update suggests the
-recipient was holding an item, but it is NOT a per-cup delivery receipt.
-Habbo sends HandItemReceived directly to the recipient; the giver's
-client cannot generally see that private notification. Sending a cup
-can fail because the recipient is absent, too far away, or blocked by
-server rules.
+Start coffee pass loop resolves each username using the room user list
+or an exact Habbo profile reply before offering the existing confirmation
+dialog. All names appear in the confirmation. A profile confirms an
+account ID but does not prove their room presence or consent. A missing,
+unknown or mismatched account stops group setup.
 
-The monitor always shows the difference between requests attempted and
-available server-side activity. It never labels a sent packet alone
-as delivered. If you're using a profile ID without a room avatar index,
-you can ask the recipient to confirm they see the cup.
+To reduce rapid unsolicited handoffs, group mode requires at least
+10 seconds between individual packet actions. Set Delay per action to
+10 or more when Group mode is enabled. Set Complete loop cycles to
+0 to run until stopped, or enter a finite number.
 
-CURSOR / OVERLAY STABILITY
---------------------------
-Companion previously redrew the entire full-screen, transparent chat
-canvas at each 120ms update, even when messages and settings did not
-change. It now draws immediately on new messages, scrolling, game
-window motion, and settings changes; otherwise it refreshes about
-every 600ms. Full-screen click-through and window-stacking checks
-are also less frequent when nothing changed.
+EXCLUSIONS AND BLOCKS
+---------------------
+Type a username in "Exclude participant" and click "Remove from rotation".
+The recipient is excluded immediately; if fewer than two participants
+remain, the group loop stops. A known room departure also excludes
+that player. Nobody excluded is automatically re-added.
 
-This reduces unnecessary layered-window activity that can contribute
-to cursor flicker. It does NOT programmatically move or click the
-mouse. If the cursor still flickers, press STOP in Coffee Pass to test
-whether rapid Habbo furniture interactions are responsible, and
-try a higher delay per action.
+This version deliberately does NOT probe whether another Habbo has
+blocked or ignored you and does NOT periodically retry sending to a
+player who has blocked or opted out. A rejected handoff is not
+reliable proof of a block: a recipient could be out of range, absent,
+or otherwise unable to accept a hand item.
 
-All original native Habbo bubble PNGs, whisper-right settings,
-username-based coffee targeting and unlimited loop cycles (0)
-remain in place.
+DELIVERY STATUS
+---------------
+The monitor continues to separate pass requests from CarryObject room
+updates, which are evidence of carrying an item but not a definitive
+per-cup receipt. Profile-based IDs without a room index cannot be
+independently verified. No success is claimed merely from a sent packet.
 
-INSTALL: Habbo Companion > Updates > Check online.
+All previous features remain: original Habbo PNG chat bubbles, whisper
+alignment, G-Earth integration, one-cup gifting, single-recipient
+alternating cup loop, saved settings and in-app updater.
+
+UPDATE: Habbo Companion > Updates > Check online.
