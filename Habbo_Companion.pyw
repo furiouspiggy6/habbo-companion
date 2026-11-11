@@ -227,7 +227,7 @@ def classify_room_packet(extension,direction,packet,description=''):
             if isinstance(name,str):names.add(name.casefold())
     except (ValueError,TypeError,AttributeError):
         pass
-    for name in ('Users','RoomReady','UserRemove','ExtendedProfile'):
+    for name in ('Users','RoomReady','UserRemove','ExtendedProfile','CarryObject'):
         if name.casefold() in names or incoming_packet_is(description,name):
             return name
     return None
@@ -279,6 +279,33 @@ def coffee_profile_request_expression(username):
     if not 1<=len(username)<=80 or any(c in username for c in '\r\n\x00{}'):
         raise ValueError('Enter a valid username (1-80 characters).')
     return '{out:GetExtendedProfileByName}{s:'+json.dumps(username,ensure_ascii=True)+'}'
+
+
+def carry_object_from_packet(packet):
+    """Read the incoming CarryObject [room avatar index, hand-item type].
+
+    An avatar index is NOT a Habbo account ID, and a carrying update
+    is not a receipt confirmation for a particular PassCarryItem request.
+    """
+    try:
+        room_index=packet.read_int(6)
+        item_type=packet.read_int(10)
+        if not (0<=room_index<=1000000 and 0<=item_type<=100000):
+            return None
+        return room_index,item_type
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return None
+
+
+def coffee_delivery_text(pass_requests,carry_observations,target_index):
+    """Report observable facts only. A sent packet does not prove receipt."""
+    sent=max(0,int(pass_requests))
+    seen=max(0,int(carry_observations))
+    if target_index is None:
+        return (f'Pass requests sent: {sent}. Recipient room index unavailable: '
+                'cannot verify receipt from this connection.')
+    return (f'Pass requests sent: {sent}. Recipient carrying-item updates '
+            f'observed: {seen}. An item update is not proof each cup arrived.')
 
 
 def validate_manipulation_rule(candidate):
@@ -974,6 +1001,11 @@ class ChatOverlayApp:
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
+        self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self._coffee_pass_requests=0
+        self._coffee_carry_observations=0
+        self._coffee_target_room_index=None
+        self._coffee_last_pass_at=0.0
         self._coffee_running=False
         self._coffee_sequence=()
         self._coffee_interval=0.1
@@ -1043,6 +1075,9 @@ class ChatOverlayApp:
         self.last_rect=None
         self.last_overlay_geometry=None
         self.last_clickthrough_check=0
+        self.last_stack_check=0.0
+        self.last_overlay_draw_at=0.0
+        self.last_overlay_draw_signature=None
         self.clickthrough_failed=False
         self.last_hotkeys=set()
         self.settings_open=True
@@ -1579,7 +1614,11 @@ class ChatOverlayApp:
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,10))
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,7))
+        ttk.Label(holder,text='DELIVERY MONITOR (server activity, not a guarantee)',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,3))
+        ttk.Label(holder,textvariable=self.coffee_delivery_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
                    'Confirm the ID and ensure the recipient is in your room. '
