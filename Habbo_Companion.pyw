@@ -2102,7 +2102,8 @@ class ChatOverlayApp:
                 return
             try:
                 seq=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
-                                               self.coffee_cup_two_var.get(),targets)
+                                               self.coffee_cup_two_var.get(),targets,
+                                               self._coffee_active_extra_sources)
             except ValueError as exc:
                 self._stop_coffee_loop('Group rotation update failed: '+str(exc))
                 return
@@ -2122,7 +2123,27 @@ class ChatOverlayApp:
                 lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
         self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
 
-    def _start_coffee_loop(self,single_cup=False):
+    def _run_coffee_speed_test(self):
+        """One finite measurement for one willing recipient, no automatic speed ramp."""
+        if self.coffee_group_enabled_var.get():
+            self.coffee_speed_var.set(
+                'Speed testing is single-recipient only. Disable group mode first.')
+            return
+        if self._own_room_index is None:
+            self._request_own_identity()
+            self.coffee_speed_var.set(
+                'Cannot measure actual pickups until your avatar room index is known. '
+                'Use Detect my avatar and re-enter the room if necessary.')
+            return
+        if self._coffee_running:
+            self.coffee_speed_var.set('Press STOP before running a separate speed test.')
+            return
+        if not self.packet_started or not self._habbo_session_connected:
+            self.coffee_speed_var.set('Connect Habbo and G-Earth before testing.')
+            return
+        self._start_coffee_loop(speed_test=True)
+
+    def _start_coffee_loop(self,single_cup=False,speed_test=False):
         if self._coffee_running:
             self.coffee_status_var.set('Coffee loop already running. Click STOP first.')
             return
@@ -2151,6 +2172,9 @@ class ChatOverlayApp:
             return
 
         group_mode=bool(not single_cup and self.coffee_group_enabled_var.get())
+        if speed_test and group_mode:
+            self.coffee_speed_var.set('Disable group mode for the finite speed test.')
+            return
         username=self.coffee_username_var.get().strip()
         if group_mode:
             try:
@@ -2166,10 +2190,14 @@ class ChatOverlayApp:
                 return
         elif (username and username.casefold() not in self._room_users
               and username.casefold() not in self._room_profile_cache):
-            self._lookup_coffee_profile(username,single_cup=single_cup)
+            self._lookup_coffee_profile(
+                username,single_cup=single_cup,speed_test=speed_test)
             return
         targets=[]
         try:
+            extras=(() if single_cup else parse_extra_furniture_sources(
+                self.coffee_extra_furniture_var.get(),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get()))
             if group_mode:
                 for n in group_names:
                     record=self._room_users.get(n.casefold())
@@ -2178,13 +2206,16 @@ class ChatOverlayApp:
                 target_name='Group rotation'
                 target_id=targets[0][1]
                 sequence=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
-                                                    self.coffee_cup_two_var.get(),targets)
+                                                    self.coffee_cup_two_var.get(),targets,extras)
             else:
                 target_id,target_name=self._resolve_coffee_recipient()
-                sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
-                                                    self.coffee_cup_two_var.get(),
-                                                    target_id,single_cup=single_cup)
+                sequence=build_extended_coffee_sequence(
+                    self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get(),
+                    extras,target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
+            if speed_test and self._own_room_index is None:
+                raise ValueError('Cannot test verified throughput without your own '
+                                 'avatar room index. Click Detect my avatar.')
             if self.coffee_wait_for_hand_var.get() and self._own_room_index is None:
                 self._request_own_identity()
                 use_timer=messagebox.askyesno(
@@ -2204,7 +2235,8 @@ class ChatOverlayApp:
             if group_mode and interval<10:
                 raise ValueError('Group mode requires at least 10 seconds per packet action.')
             cycles_text=self.coffee_cycles_var.get().strip()
-            if single_cup:cycles=1
+            if speed_test:cycles=3
+            elif single_cup:cycles=1
             else:
                 if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
                     raise ValueError('Cycles must be an integer from 0 to 10000.')
@@ -2218,8 +2250,10 @@ class ChatOverlayApp:
             self.coffee_status_var.set('Cannot start: '+str(exc)[:170])
             return
 
-        duration=('one cup' if single_cup else
-                  'continuously until STOP' if cycles==0 else f'for {cycles} complete cycles')
+        duration=('3-cycle verified speed test (finite)' if speed_test else
+                  'one cup' if single_cup else
+                  'continuously until STOP' if cycles==0
+                  else f'for {cycles} complete cycles')
         if group_mode:
             recipient_display=', '.join(n for n,_ in targets)
             presence_note=('Group mode is for people who agreed to participate. '
@@ -2237,7 +2271,10 @@ class ChatOverlayApp:
             f'{presence_note}'
             f'Delay between actions: {interval:g} seconds\n'
             f'Wait for own-hand server updates: '
-            f'{"ON" if self.coffee_wait_for_hand_var.get() else "OFF"}\n\n'
+            f'{"ON" if (self.coffee_wait_for_hand_var.get() or speed_test) else "OFF"}\n'
+            f'Hand-item furniture sources per cycle: {len(sequence)//2 if not group_mode else len(extras)+2}\n'
+            'The speed test measures your OWN pickup/empty-hand confirmations, '
+            'not receipt by another player.\n\n'
             'Only proceed with willing recipients. Habbo may reject or rate-limit actions.',
             parent=self.root):
             self.coffee_status_var.set('Coffee loop cancelled.')
@@ -2249,12 +2286,26 @@ class ChatOverlayApp:
                            coffee_interval=str(interval),coffee_cycles=str(cycles),
                            coffee_group_names=self.coffee_group_names_var.get().strip(),
                            coffee_group_enabled=bool(self.coffee_group_enabled_var.get()),
-                           coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()))
+                           coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()),
+                           coffee_extra_furniture=self.coffee_extra_furniture_var.get().strip())
         self.save()
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
-        self._coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get())
+        self._coffee_active_extra_sources=tuple(extras)
+        self._coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get() or speed_test)
+        self._coffee_speed_active=bool(speed_test)
+        self._coffee_speed_started=time.monotonic() if speed_test else 0.0
+        self._coffee_speed_delay=interval
+        self._coffee_speed_source_attempts={}
+        self._coffee_speed_source_confirmations={}
+        self._coffee_speed_last_source=None
+        self._coffee_speed_pickups=0
+        self._coffee_speed_releases=0
+        if speed_test:
+            self.coffee_speed_var.set(
+                f'Finite 3-cycle speed test running at {interval:g}s delay '
+                'using confirmed own-avatar CarryObject events...')
         self._coffee_ack_phase=None
         self._coffee_ack_since=0.0
         self._coffee_ack_timer=None
