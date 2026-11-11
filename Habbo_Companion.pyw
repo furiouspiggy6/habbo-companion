@@ -3313,13 +3313,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.messages.append(Message(name,body,arrived,within,room,
                                          style_id,chat_type,forced_color,image_path))
             self._trim_history()
-            if True:  # Original bubble capture is always enabled.
-                if image_path:
-                    self.native_image_count+=1
-                    if self.native_image_count==1:
-                        self.status.set('Receiving original Habbo bubble images (native client artwork).')
-                elif self.native_image_count==0:
-                    self.status.set('No original bubble images yet. Check that both updated files are installed.')
+            if image_path:
+                self.native_image_count+=1
+                if self.native_image_count==1:
+                    self.status.set('Displaying original Habbo bubble artwork from the client.')
+            elif self.native_image_count==0:
+                self.status.set('Waiting for original Habbo bubble PNGs. Missing images show text only.')
         except (ValueError,TypeError):pass
 
     def _rounded(self,canvas,x1,y1,x2,y2,r,color):
