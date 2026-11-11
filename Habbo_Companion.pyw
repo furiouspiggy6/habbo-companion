@@ -182,9 +182,9 @@ def incoming_packet_is(description,name):
     return value.startswith('{in:'+name.lower()+'}') or value.startswith('['+name.lower()+']')
 
 
-def room_user_ids_from_packet(description):
-    """Read only named incoming Users packets. Never infer a missing user ID."""
-    if not incoming_packet_is(description,'Users'):
+def room_user_ids_from_packet(description,trusted_users=False):
+    """Parse an incoming Users expression, only after checking its packet header."""
+    if not trusted_users and not incoming_packet_is(description,'Users'):
         return {}
     found={}
     for match in ROOM_USER_PAIR_RE.finditer(description):
@@ -210,6 +210,43 @@ def removed_room_user_index(description):
         return None
     match=re.search(r'\{s:"([0-9]{1,10})"\}',description)
     return int(match.group(1)) if match else None
+
+
+
+def classify_room_packet(extension,direction,packet,description=''):
+    """Trust G-Earth's header metadata before inspecting packet data.
+
+    g_string() is a legacy byte string, not a parsed {in:Users} expression.
+    Packet headers can change, so never hardcode a numeric Users header.
+    """
+    names=set()
+    try:
+        records=(getattr(extension,'packet_infos',None) or {}).get(direction,{}).get(packet.header_id(),())
+        for rec in records:
+            name=rec.get('Name')
+            if isinstance(name,str):names.add(name.casefold())
+    except (ValueError,TypeError,AttributeError):
+        pass
+    for name in ('Users','RoomReady','UserRemove'):
+        if name.casefold() in names or incoming_packet_is(description,name):
+            return name
+    return None
+
+
+def first_room_user_from_raw_packet(packet):
+    """Decode only the stable [count, id, name] prefix, no outdated entity tail."""
+    try:
+        if not 1<=packet.read_int(6)<=500:
+            return {}
+        user_id=packet.read_int(10)
+        name=packet.read_string(14)
+        if not 1<=user_id<2147483648 or not isinstance(name,str):
+            return {}
+        if not 1<=len(name.strip())<=80 or any(c in name for c in '\r\n\x00'):
+            return {}
+        return {name.casefold():(name,user_id,None)}
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return {}
 
 
 def validate_manipulation_rule(candidate):
@@ -882,6 +919,10 @@ class ChatOverlayApp:
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
         self._room_users={}
+        self._room_lookup_pending=False
+        self._room_lookup_generation=0
+        self._room_lookup_seen=False
+        self._room_lookup_parse_failed=False
         self._coffee_target_name=''
         self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
@@ -1514,15 +1555,43 @@ class ChatOverlayApp:
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             self.coffee_users_status_var.set('Connect G-Earth and join the Habbo room before refreshing.')
             return
+        self._room_lookup_generation+=1
+        gen=self._room_lookup_generation
+        self._room_lookup_pending=True
+        self._room_lookup_seen=False
+        self._room_lookup_parse_failed=False
         try:
             packet=self.packet_extension.string_to_packet('{out:GetHeightMap}')
             if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
-                raise ValueError('G-Earth could not resolve GetHeightMap.')
+                raise ValueError('GetHeightMap cannot be resolved by G-Earth.')
             if self.packet_extension.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the room refresh request.')
-            self.coffee_users_status_var.set('Room refresh requested; checking for player names...')
+            self.coffee_users_status_var.set(
+                f'Room request sent. {len(self._room_users)} player(s) known; '
+                'checking for a Users reply (12 second timeout)...')
+            self.root.after(12000,lambda generation=gen:self._room_refresh_timeout(generation))
         except Exception as exc:
+            self._room_lookup_pending=False
             self.coffee_users_status_var.set('Could not refresh room players: '+str(exc)[:145])
+
+    def _room_refresh_timeout(self,generation):
+        if not self._room_lookup_pending or generation!=self._room_lookup_generation:
+            return
+        self._room_lookup_pending=False
+        if not self._habbo_session_connected:
+            self.coffee_users_status_var.set('Connection lost. Rejoin the Habbo room with Companion running.')
+        elif self._room_lookup_parse_failed:
+            self.coffee_users_status_var.set(
+                'A Users packet arrived but player names could not be decoded. '
+                'The room packet layout may have changed; try a manual numeric target ID.')
+        elif self._room_lookup_seen:
+            self.coffee_users_status_var.set(
+                'A Users packet arrived without valid player IDs. '
+                'Try leaving and re-entering the room with Companion connected.')
+        else:
+            self.coffee_users_status_var.set(
+                'No Users packet arrived within 12 seconds. GetHeightMap does not guarantee '
+                'a player-list response. Leave and re-enter the room while Companion is connected.')
 
     def _start_coffee_loop(self,single_cup=False):
         if self._coffee_running:
@@ -2761,12 +2830,33 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
                     if direction=='Incoming':
-                        if incoming_packet_is(detail,'RoomReady'):
+                        kind=classify_room_packet(ext,Direction.TO_CLIENT,msg.packet,detail)
+                        if kind=='RoomReady':
                             self._packet_put(('room_users_reset',))
-                        elif incoming_packet_is(detail,'UserRemove'):
-                            self._packet_put(('room_user_removed',removed_room_user_index(detail)))
-                        else:
-                            users=room_user_ids_from_packet(detail)
+                        elif kind=='UserRemove':
+                            room_index=removed_room_user_index(detail)
+                            if room_index is None:
+                                try:room_index=int(msg.packet.read_string(6))
+                                except (IndexError,ValueError,TypeError,AttributeError):pass
+                            self._packet_put(('room_user_removed',room_index))
+                        elif kind=='Users':
+                            # g_string() is the legacy raw rendering. Use
+                            # g_expression() for {i:ID}{s:"username"} fields,
+                            # plus the actual binary count/id/name prefix as a
+                            # fallback when G-Earth predicts the rest incorrectly.
+                            verified_prefix=first_room_user_from_raw_packet(msg.packet)
+                            users={}
+                            try:
+                                predicted=msg.packet.g_expression(ext)
+                                if isinstance(predicted,str):
+                                    users.update(room_user_ids_from_packet(
+                                        predicted,trusted_users=True))
+                            except Exception:
+                                pass
+                            # The actual binary prefix takes precedence over
+                            # G-Earth's best-effort predicted expression.
+                            users.update(verified_prefix)
+                            self._packet_put(('room_users_observed',bool(users)))
                             if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
                         whisper_body=whisper_packet_text(detail)
@@ -2852,12 +2942,23 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='room_users_reset':
                 self._room_users.clear()
+                self._room_lookup_pending=False
+                self._room_lookup_generation+=1
                 self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
                 if self._coffee_running:
                     self._stop_coffee_loop('Room changed; coffee pass stopped for safety.')
                 continue
+            if item[0]=='room_users_observed':
+                self._room_lookup_seen=True
+                if not item[1]:
+                    self._room_lookup_parse_failed=True
+                    self.coffee_users_status_var.set(
+                        'Users packet received, but no valid usernames decoded. '
+                        'This may be a new Habbo packet layout.')
+                continue
             if item[0]=='room_users':
                 self._room_users.update(item[1])
+                self._room_lookup_pending=False
                 self.coffee_users_status_var.set(
                     f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
                 continue
@@ -2879,6 +2980,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
                     self._room_users.clear()
+                    self._room_lookup_pending=False
+                    self._room_lookup_generation+=1
                     self.coffee_users_status_var.set('Disconnected. Room users cleared.')
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')

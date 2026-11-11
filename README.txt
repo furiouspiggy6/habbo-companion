@@ -1,30 +1,31 @@
-HABBO COMPANION v1.1.13 — GIVE A CUP BY USERNAME
+HABBO COMPANION v1.1.14 — ROOM PLAYER LOOKUP FIX
 ================================================
 
-New in Packet Manipulator > Coffee Pass:
-- Enter the exact Habbo username of someone in the same room.
-- Click "Give 1 cup" to use Cup 1 furniture and pass it to that player once.
-- Or click "Start coffee pass loop" to repeat Cup 1/Pass/Cup 2/Pass.
-- The existing numeric recipient ID is used only if username is blank.
-- Names are resolved from incoming room Users packets through G-Earth.
-- If a name is not found, no cup packets are sent to an old or guessed ID.
-  Click "Refresh room players", or leave and re-enter the room.
-- On disconnect, room changes, or target removal, automation stops.
+FIXED:
+- "Refresh room players" no longer displays an indefinite waiting message.
+  After 12 seconds it says whether a Users packet was received.
+- Room user identification now checks G-Earth's packet-name metadata
+  instead of assuming a name is present in the legacy packet rendering.
+- Reads G-Earth's decoded packet expression for player IDs/usernames.
+- If expression detection is incomplete, tries reading the stable
+  user-count / first-ID / first-username binary prefix.
+- Clearly reports if a Users packet arrived but could not be decoded.
+- No username is guessed. The existing manual numeric fallback remains.
 
-Instructions:
-1. Open Habbo Companion, then enter a Habbo room with the target.
+INSTRUCTIONS:
+1. Open Habbo Companion, then enter the Habbo room with the person.
 2. Open Packet Manipulator > Coffee Pass.
-3. Wait for detected player names (or click Refresh room players).
-4. Enter the username and click Give 1 cup or Start coffee pass loop.
-5. Confirm the shown username and ID before sending.
+3. Enter exact username, or click Refresh room players.
+4. If the refresh says no Users response after 12 seconds, leave the room
+   and re-enter while Companion and G-Earth are connected.
+5. Click Give 1 cup and confirm the recipient's name and ID.
 
-The parser uses only the early ID/name fields of Habbo's Users packet.
-These may change in future clients: actual in-game behaviour still needs
-testing. Server rules and rate limits can prevent successful transfers.
+The G-Earth GetHeightMap request does not guarantee that Habbo will resend
+the player list. Re-entering a room is a more reliable way to receive
+the initial room Users packet if the player-name cache is empty.
 
-Existing chat overlay, G-Earth management, packet viewer, manipulation
-rules, local settings and 0.1s minimum interval are unchanged.
-No sending starts automatically at launch; each run requires a click
-and confirmation.
+The existing chat overlay, one-cup transfer, two-cup loop, native packet
+viewer, and updater are preserved. Success in an actual Habbo room has
+not yet been verified. Server restrictions can reject sent actions.
 
-To update: Habbo Companion > Updates > Check online.
+Update using Habbo Companion > Updates > Check online.
