@@ -1105,6 +1105,7 @@ class ChatOverlayApp:
         self._coffee_ack_phase=None
         self._coffee_ack_since=0.0
         self._coffee_ack_timer=None
+        self._coffee_finish_after_ack=False
         self._coffee_group_targets=[]
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
@@ -1975,6 +1976,10 @@ class ChatOverlayApp:
                                                     self.coffee_cup_two_var.get(),
                                                     target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
+            if self.coffee_wait_for_hand_var.get() and self._own_room_index is None:
+                raise ValueError('Your own room avatar index is unknown. '
+                                 'Join the room after Companion and G-Earth connect '
+                                 'to use server-acknowledged pickup/pass.')
             if group_mode and interval<10:
                 raise ValueError('Group mode requires at least 10 seconds per packet action.')
             cycles_text=self.coffee_cycles_var.get().strip()
@@ -2009,7 +2014,9 @@ class ChatOverlayApp:
             f'Send coffee actions {duration}?\n'
             f'Recipient(s): {recipient_display}\n'
             f'{presence_note}'
-            f'Delay between actions: {interval:g} seconds\n\n'
+            f'Delay between actions: {interval:g} seconds\n'
+            f'Wait for own-hand server updates: '
+            f'{"ON" if self.coffee_wait_for_hand_var.get() else "OFF"}\n\n'
             'Only proceed with willing recipients. Habbo may reject or rate-limit actions.',
             parent=self.root):
             self.coffee_status_var.set('Coffee loop cancelled.')
@@ -2020,11 +2027,17 @@ class ChatOverlayApp:
                            coffee_username=self.coffee_username_var.get().strip(),
                            coffee_interval=str(interval),coffee_cycles=str(cycles),
                            coffee_group_names=self.coffee_group_names_var.get().strip(),
-                           coffee_group_enabled=bool(self.coffee_group_enabled_var.get()))
+                           coffee_group_enabled=bool(self.coffee_group_enabled_var.get()),
+                           coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()))
         self.save()
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
+        self._coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get())
+        self._coffee_ack_phase=None
+        self._coffee_ack_since=0.0
+        self._coffee_ack_timer=None
+        self._coffee_finish_after_ack=False
         self._coffee_group_active=group_mode
         self._coffee_group_targets=list(targets) if group_mode else []
         self._coffee_target_name='' if group_mode else target_name.casefold()
@@ -2067,10 +2080,53 @@ class ChatOverlayApp:
         self._coffee_queue_after_id=self.root.after(
             350,lambda gen=generation:self._check_queued_coffee_start(gen))
 
+    def _coffee_ack_timeout(self,generation,phase):
+        """Stop instead of guessing when the server never confirms a hand action."""
+        if (not self._coffee_running or generation!=self._coffee_generation
+            or not self._coffee_wait_for_hand or self._coffee_ack_phase!=phase):
+            return
+        label=('pickup' if phase=='pickup' else 'pass/release')
+        self._stop_coffee_loop(
+            f'No server confirmation for your own {label} action. '
+            'Cup sequence stopped; no further passes sent.')
+
+    def _on_own_carry_update(self,room_index,item_type,observed_at):
+        """Advance only after a NEW event for the local avatar's room index."""
+        if (not self._coffee_running or not self._coffee_wait_for_hand
+            or not carry_ack_matches(self._coffee_ack_phase,self._own_room_index,
+                                     room_index,item_type,observed_at,
+                                     self._coffee_ack_since)):
+            return
+        phase=self._coffee_ack_phase
+        self._coffee_ack_phase=None
+        timer=self._coffee_ack_timer
+        self._coffee_ack_timer=None
+        if timer is not None:
+            try:self.root.after_cancel(timer)
+            except (tk.TclError,AttributeError):pass
+        if phase=='release' and self._coffee_finish_after_ack:
+            self._stop_coffee_loop(
+                'Requested cycles finished; Habbo reports your hand is empty. '
+                'Recipient receipt not independently confirmed.')
+            return
+        if phase=='pickup':
+            self.coffee_status_var.set(
+                f'Habbo confirms your avatar is holding an item ({item_type}). '
+                'Next: pass to recipient.')
+        else:
+            self.coffee_status_var.set(
+                'Habbo confirms your hand is empty after the pass request. '
+                'Next: pick up another cup. Recipient receipt not proven.')
+        self._coffee_after_id=self.root.after(
+            round(self._coffee_interval*1000),
+            lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
+
     def _coffee_loop_tick(self,generation):
         self._coffee_after_id=None
         if not self._coffee_running or generation!=self._coffee_generation:
             return
+        if self._coffee_wait_for_hand and self._coffee_ack_phase is not None:
+            return  # waiting for a matching, post-action own CarryObject update
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
             self._stop_coffee_loop('Habbo or G-Earth disconnected. Coffee loop stopped.')
             return
@@ -2104,10 +2160,13 @@ class ChatOverlayApp:
             self.coffee_delivery_var.set(coffee_delivery_text(
                 self._coffee_pass_requests,self._coffee_carry_observations,
                 self._coffee_target_room_index))
+        just_picked_up=(self._coffee_index%2==0)
         self._coffee_index=(self._coffee_index+1)%len(self._coffee_sequence)
+        limit_reached=False
         if self._coffee_index==0:
             self._coffee_completed+=1
-            if self._coffee_limit and self._coffee_completed>=self._coffee_limit:
+            limit_reached=bool(self._coffee_limit and self._coffee_completed>=self._coffee_limit)
+            if limit_reached and not self._coffee_wait_for_hand:
                 self._stop_coffee_loop('Requested cycles finished.')
                 return
         label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index%4]
@@ -2121,14 +2180,36 @@ class ChatOverlayApp:
             self.coffee_status_var.set(f'Coffee loop ON — next: {label}. '
                                        f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
         if self._coffee_running and generation==self._coffee_generation:
-            self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
-                lambda gen=generation:self._coffee_loop_tick(gen))
+            if self._coffee_wait_for_hand:
+                self._coffee_ack_phase=('pickup' if just_picked_up else 'release')
+                self._coffee_ack_since=time.time()
+                self._coffee_finish_after_ack=limit_reached
+                phase=self._coffee_ack_phase
+                self.coffee_status_var.set(
+                    f'Waiting for Habbo server to confirm your own '
+                    f'{"pickup" if phase=="pickup" else "empty hand after pass"}. '
+                    f'Sent: {self._coffee_sent}; cycles: {self._coffee_completed}.')
+                self._coffee_ack_timer=self.root.after(
+                    8000 if phase=='pickup' else 25000,
+                    lambda gen=generation,expected=phase:
+                    self._coffee_ack_timeout(gen,expected))
+            else:
+                self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
+                    lambda gen=generation:self._coffee_loop_tick(gen))
 
     def _stop_coffee_loop(self,reason=None):
         self._coffee_running=False
         self._coffee_start_queued=False
         self._coffee_queued_single=False
         self._coffee_target_name=''
+        self._coffee_wait_for_hand=False
+        self._coffee_ack_phase=None
+        self._coffee_finish_after_ack=False
+        ack_timer=getattr(self,'_coffee_ack_timer',None)
+        self._coffee_ack_timer=None
+        if ack_timer is not None:
+            try:self.root.after_cancel(ack_timer)
+            except (tk.TclError,AttributeError):pass
         self._coffee_group_active=False
         self._coffee_group_targets=[]
         self._coffee_profile_pending=None
