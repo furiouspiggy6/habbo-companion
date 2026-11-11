@@ -1,56 +1,41 @@
-HABBO COMPANION v1.1.22 — WAIT FOR PICKUP / EMPTY HAND
+HABBO COMPANION v1.1.23 — FIX UNKNOWN SELF ROOM INDEX
 =======================================================
+FIX: An avatar could be listed among 16+ room players but Companion
+would still say "Your avatar room index: unknown after room change".
 
-WHAT THIS CHANGES
------------------
-The existing coffee sequence already sends these packets IN ORDER:
-  UseFurniture Cup 1  -> PassCarryItem recipient
-  UseFurniture Cup 2  -> PassCarryItem recipient
-  ... then repeats (or rotates through willing group participants).
+In v1.1.22 the new wait-for-pickup option needed to see your own
+UserObject handshake packet, which sometimes arrived before G-Earth's
+extension subscribed. Without that, the checkbox blocked the coffee loop.
 
-However, sending an outgoing UseFurniture packet never established that
-your avatar actually RECEIVED the cup first. v1.1.22 adds an OPTIONAL
-checkbox in Packet Manipulator > Coffee Pass Loop:
+v1.1.23 now requests the current Habbo identity on demand using the
+normal, one-shot InfoRetrieve packet. When the Users roster is received
+without the player's own account ID, Companion automatically makes one
+identity request (throttled to once per five seconds). It then matches
+your real account ID to the room's own avatar index.
 
-  [ ] Wait for my avatar to receive/pass each cup
+There is also a "Detect my avatar" button next to "Refresh room players"
+for a manual retry. The status reports if identity lookup fails or if
+the account ID is known but the room index could not be decoded.
+No identity or room index is invented.
 
-When ON:
-1. Send UseFurniture for the next cup.
-2. Wait for an incoming server CarryObject notification for YOUR OWN room
-   avatar index with a positive item type, indicating you are holding it.
-3. Wait your configured action delay, then send PassCarryItem to the
-   selected recipient.
-4. Wait for an incoming CarryObject notification for YOUR OWN avatar
-   with item type 0, indicating your hand has emptied.
-5. Wait your configured delay, then pick up the other cup and repeat.
+IMPORTANT FALLBACK:
+If "Wait for my avatar to receive/pass each cup" is checked but your
+own room index is unavailable, Start now requests your identity and
+asks if you want to use the ORIGINAL fixed-delay coffee mode for
+this run. Choosing Yes turns the checkbox OFF and continues normally.
+Choosing No sends nothing, so you can retry after the room index
+appears.
 
-If either notification never arrives, the loop STOPS (8 seconds for
-pickup, 25 seconds for a pass/empty hand). It does not blindly continue.
-A release confirmation is NOT proof that the recipient received a cup:
-Habbo can drop, reject or otherwise redirect hand items.
+The original mode remains pick up Cup 1 -> pass -> pick up Cup 2 ->
+pass -> repeat at the selected delay. Its sends are not proof of
+pickup or recipient receipt.
 
-The checkbox is OFF by default. When OFF, the prior fixed-delay sequence
-is preserved unchanged, including all the existing group rotation logic.
+The optional verified mode still requires matching server CarryObject
+events for your avatar. It stops if the server does not confirm that
+you received a cup or emptied your hand after passing.
 
-OWN AVATAR DISCOVERY
---------------------
-The app detects your own account ID and username from incoming UserObject
-and matches them to your room index in the incoming Users packet. When
-possible, it uses G-Python's full room entity parser to resolve indexes,
-falling back to the previous name/ID parser if that parser fails.
-A status line under the Coffee Pass settings shows your own room index.
-
-If the index is unavailable, confirmed pickup mode cannot start.
-Connect Companion/G-Earth before starting Habbo and re-enter the room;
-this lets the app observe both your account details and room Users data.
-Do not use another avatar's room index or infer it from an account ID.
-
-Group rotation remains opt-in for willing players with a 10-second
-minimum per action, and existing exclusion controls remain immediate.
-Removing someone mid-acknowledgment stops that pending group action
-so no old target is sent a delayed cup.
-
-Native Habbo bubbles, whisper positioning, visual overlay,
-packet viewer, delivery monitor and online updater are unchanged.
+All previous features remain, including original Habbo chat PNGs,
+whisper-right, opt-in group rotation, exclusion, delivery diagnostics
+and unlimited 0-cycle loops.
 
 INSTALL: Habbo Companion > Updates > Check online.
