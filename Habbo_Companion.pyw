@@ -3243,6 +3243,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 try:room_index=int(msg.packet.read_string(6))
                                 except (IndexError,ValueError,TypeError,AttributeError):pass
                             self._packet_put(('room_user_removed',room_index))
+                        elif kind=='UserObject':
+                            identity=own_identity_from_packet(msg.packet)
+                            if identity is not None:
+                                self._packet_put(('coffee_self_identity',identity[0],identity[1]))
                         elif kind=='ExtendedProfile':
                             profile=profile_recipient_from_packet(msg.packet)
                             if profile is not None:
@@ -3269,6 +3273,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             # The actual binary prefix takes precedence over
                             # G-Earth's best-effort predicted expression.
                             users.update(verified_prefix)
+                            users.update(full_room_users_from_packet(msg.packet))
                             self._packet_put(('room_users_observed',bool(users)))
                             if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
@@ -3356,8 +3361,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='coffee_profile':
                 self._accept_coffee_profile(item[1],item[2])
                 continue
+            if item[0]=='coffee_self_identity':
+                self._own_account_id=item[1]
+                self._own_name=item[2]
+                own=self._room_users.get(self._own_name.casefold())
+                self._own_room_index=(
+                    own[2] if own is not None and own[1]==self._own_account_id
+                    else None)
+                continue
             if item[0]=='coffee_carry_observed':
                 _,room_index,item_type,seen_at=item
+                self._on_own_carry_update(room_index,item_type,seen_at)
                 if (self._coffee_pass_requests>0
                     and self._coffee_target_room_index is not None
                     and room_index==self._coffee_target_room_index
@@ -3368,6 +3382,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self._coffee_target_room_index))
                 continue
             if item[0]=='room_users_reset':
+                self._own_room_index=None
                 self._room_users.clear()
                 self._room_chat_names.clear()
                 self._room_profile_cache.clear()
@@ -3391,12 +3406,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='room_users':
                 self._room_users.update(item[1])
+                if self._own_account_id is not None:
+                    own=next((user for user in item[1].values()
+                              if user[1]==self._own_account_id
+                              and user[2] is not None),None)
+                    if own is not None:
+                        self._own_room_index=own[2]
                 self._room_lookup_pending=False
                 self.coffee_users_status_var.set(
                     f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
                 continue
             if item[0]=='room_user_removed':
                 index=item[1]
+                if self._own_room_index is not None and index==self._own_room_index:
+                    self._own_room_index=None
+                    if self._coffee_running and self._coffee_wait_for_hand:
+                        self._stop_coffee_loop('Your avatar left the room; verified cup loop stopped.')
                 self._room_users,removed=remove_room_user_by_index(self._room_users,index)
                 for name in removed:
                     self._room_chat_names.discard(name)
@@ -3425,6 +3450,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._own_account_id=None
+                    self._own_name=''
+                    self._own_room_index=None
                     self._room_users.clear()
                     self._room_chat_names.clear()
                     self._room_profile_cache.clear()
