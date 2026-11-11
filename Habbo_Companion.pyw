@@ -80,6 +80,7 @@ DEFAULT = dict(
     coffee_cycles='0',
     coffee_group_names='',
     coffee_group_enabled=False,
+    coffee_wait_for_hand=False,
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -260,7 +261,7 @@ def classify_room_packet(extension,direction,packet,description=''):
             if isinstance(name,str):names.add(name.casefold())
     except (ValueError,TypeError,AttributeError):
         pass
-    for name in ('Users','RoomReady','UserRemove','ExtendedProfile','CarryObject'):
+    for name in ('Users','RoomReady','UserRemove','ExtendedProfile','CarryObject','UserObject'):
         if name.casefold() in names or incoming_packet_is(description,name):
             return name
     return None
@@ -312,6 +313,65 @@ def coffee_profile_request_expression(username):
     if not 1<=len(username)<=80 or any(c in username for c in '\r\n\x00{}'):
         raise ValueError('Enter a valid username (1-80 characters).')
     return '{out:GetExtendedProfileByName}{s:'+json.dumps(username,ensure_ascii=True)+'}'
+
+
+def own_identity_from_packet(packet):
+    """Habbo's UserObject starts with account ID and username."""
+    try:
+        ident=packet.read_int(6)
+        name=packet.read_string(10)
+        if not 1<=ident<2147483648 or not isinstance(name,str):
+            return None
+        if not 1<=len(name.strip())<=80 or any(c in name for c in '\r\n\x00'):
+            return None
+        return ident,name
+    except (IndexError,ValueError,TypeError,UnicodeError,AttributeError):
+        return None
+
+
+def full_room_users_from_packet(packet,entity_parser=None):
+    """Use G-Python's room entity format to obtain both account ID and room index.
+
+    Do not let parser state modifications leak to other packet interceptors.
+    Failure returns no entries and callers keep their legacy decoding fallback.
+    """
+    original=getattr(packet,'read_index',None)
+    try:
+        count=packet.read_int(6)
+        if not isinstance(count,int) or not 1<=count<=500 or original is None:
+            return {}
+        if entity_parser is None:
+            from g_python.hparsers import HEntity
+            entity_parser=HEntity.parse
+        packet.read_index=6
+        entities=entity_parser(packet)
+        if len(entities)!=count:
+            return {}
+        users={}
+        for entity in entities:
+            account_id=int(entity.id)
+            room_index=int(entity.index)
+            name=str(entity.name)
+            if (not 1<=account_id<2147483648 or not 0<=room_index<=1000000
+                or not 1<=len(name.strip())<=80
+                or any(c in name for c in '\r\n\x00')):
+                return {}
+            users[name.casefold()]=(name,account_id,room_index)
+        return users
+    except (ImportError,IndexError,ValueError,TypeError,AttributeError,KeyError):
+        return {}
+    finally:
+        if original is not None:
+            packet.read_index=original
+
+
+def carry_ack_matches(phase,our_room_index,packet_room_index,item_type,
+                      event_time,action_time):
+    """Only a new server update about our own avatar may advance the loop."""
+    return (phase in ('pickup','release') and our_room_index is not None
+            and packet_room_index==our_room_index
+            and 0<=event_time-action_time<=25
+            and (item_type>0 if phase=='pickup' else item_type==0))
 
 
 def carry_object_from_packet(packet):
@@ -1036,6 +1096,15 @@ class ChatOverlayApp:
         self.coffee_group_names_var=tk.StringVar(value=str(self.config.get('coffee_group_names','')))
         self.coffee_group_enabled_var=tk.BooleanVar(value=bool(self.config.get('coffee_group_enabled',False)))
         self.coffee_group_exclude_var=tk.StringVar(value='')
+        self.coffee_wait_for_hand_var=tk.BooleanVar(
+            value=bool(self.config.get('coffee_wait_for_hand',False)))
+        self._own_account_id=None
+        self._own_name=''
+        self._own_room_index=None
+        self._coffee_wait_for_hand=False
+        self._coffee_ack_phase=None
+        self._coffee_ack_since=0.0
+        self._coffee_ack_timer=None
         self._coffee_group_targets=[]
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
@@ -1641,6 +1710,12 @@ class ChatOverlayApp:
         entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Checkbutton(holder,text='Wait for my avatar to receive/pass each cup',
+                        variable=self.coffee_wait_for_hand_var).pack(anchor='w',pady=(4,5))
+        ttk.Label(holder,text='Optional: uses server CarryObject updates for your '
+                  'own avatar. Stops if your room index or a confirmation is '
+                  'unavailable; never assumes the recipient accepted a cup.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
         ttk.Checkbutton(holder,text='Rotate between willing participants (group mode)',
                         variable=self.coffee_group_enabled_var).pack(anchor='w',pady=(4,8))
         entry('Group usernames',self.coffee_group_names_var,
