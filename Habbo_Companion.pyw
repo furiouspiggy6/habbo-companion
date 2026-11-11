@@ -1106,6 +1106,7 @@ class ChatOverlayApp:
         self._coffee_ack_since=0.0
         self._coffee_ack_timer=None
         self._coffee_finish_after_ack=False
+        self.coffee_own_status_var=tk.StringVar(value='Your avatar room index: not detected yet.')
         self._coffee_group_targets=[]
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
@@ -1734,6 +1735,8 @@ class ChatOverlayApp:
         ttk.Label(holder,textvariable=self.packet_connection_status,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,5))
         ttk.Label(holder,textvariable=self.coffee_users_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,4))
+        ttk.Label(holder,textvariable=self.coffee_own_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
         ttk.Button(holder,text='Refresh room players',command=self._refresh_room_players).pack(anchor='w',pady=(0,9))
         buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
@@ -1886,6 +1889,10 @@ class ChatOverlayApp:
         self.config['coffee_group_names']=self.coffee_group_names_var.get()
         self.save()
         if self._coffee_running and self._coffee_group_active:
+            if self._coffee_wait_for_hand and self._coffee_ack_phase is not None:
+                self._stop_coffee_loop(
+                    'Group changed during a pending handoff. Restart for remaining participants.')
+                return
             targets=[v for v in self._coffee_group_targets
                      if v[0].casefold()!=name.casefold()]
             if len(targets)<2:
@@ -2146,6 +2153,7 @@ class ChatOverlayApp:
             packet=ext.string_to_packet(expression)
             if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
                 raise ValueError('G-Earth rejected a generated packet.')
+            sent_at=time.time()
             if ext.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the send.')
         except Exception as exc:
@@ -2182,7 +2190,7 @@ class ChatOverlayApp:
         if self._coffee_running and generation==self._coffee_generation:
             if self._coffee_wait_for_hand:
                 self._coffee_ack_phase=('pickup' if just_picked_up else 'release')
-                self._coffee_ack_since=time.time()
+                self._coffee_ack_since=sent_at
                 self._coffee_finish_after_ack=limit_reached
                 phase=self._coffee_ack_phase
                 self.coffee_status_var.set(
@@ -3449,6 +3457,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._own_room_index=(
                     own[2] if own is not None and own[1]==self._own_account_id
                     else None)
+                self.coffee_own_status_var.set(
+                    f'Your avatar: {self._own_name} — room index '
+                    f'{self._own_room_index if self._own_room_index is not None else "unknown"}')
                 continue
             if item[0]=='coffee_carry_observed':
                 _,room_index,item_type,seen_at=item
@@ -3464,6 +3475,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='room_users_reset':
                 self._own_room_index=None
+                self.coffee_own_status_var.set(
+                    'Your avatar room index: unknown after room change; waiting for Users.')
                 self._room_users.clear()
                 self._room_chat_names.clear()
                 self._room_profile_cache.clear()
@@ -3493,6 +3506,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                               and user[2] is not None),None)
                     if own is not None:
                         self._own_room_index=own[2]
+                        self.coffee_own_status_var.set(
+                            f'Your avatar: {self._own_name} — room index {own[2]}')
                 self._room_lookup_pending=False
                 self.coffee_users_status_var.set(
                     f'{len(self._room_users)} player(s) detected in this room. Enter an exact username.')
@@ -3501,6 +3516,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 index=item[1]
                 if self._own_room_index is not None and index==self._own_room_index:
                     self._own_room_index=None
+                    self.coffee_own_status_var.set(
+                        'Your avatar left the room; own hand monitoring unavailable.')
                     if self._coffee_running and self._coffee_wait_for_hand:
                         self._stop_coffee_loop('Your avatar left the room; verified cup loop stopped.')
                 self._room_users,removed=remove_room_user_by_index(self._room_users,index)
@@ -3534,6 +3551,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._own_account_id=None
                     self._own_name=''
                     self._own_room_index=None
+                    self.coffee_own_status_var.set(
+                        'Your avatar room index unavailable until Habbo reconnects.')
                     self._room_users.clear()
                     self._room_chat_names.clear()
                     self._room_profile_cache.clear()
