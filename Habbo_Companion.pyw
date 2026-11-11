@@ -158,19 +158,94 @@ def parse_coffee_group_names(raw):
     return tuple(names)
 
 
-def build_coffee_group_sequence(cup_one,cup_two,recipients):
-    """Rotate 2 rounds per cycle; each participant gets a different cup.
+def parse_extra_furniture_sources(raw,cup_one,cup_two):
+    """Validate optional bookcase / other hand-item furniture INSTANCE IDs."""
+    if not isinstance(raw,str):
+        raise ValueError('Extra hand-item sources must be comma-separated furniture IDs.')
+    raw=raw.strip()
+    if not raw:
+        return ()
+    candidates=[v.strip() for v in re.split(r'[,;\n]+',raw) if v.strip()]
+    if len(candidates)>4:
+        raise ValueError('You can add at most 4 additional furniture sources.')
+    used=set()
+    for label,val in (('Cup 1',cup_one),('Cup 2',cup_two)):
+        text=str(val).strip()
+        if not re.fullmatch(r'[0-9]{1,10}',text) or not 1<=int(text)<2147483648:
+            raise ValueError(label+' needs a valid room furniture ID.')
+        if int(text) in used:
+            raise ValueError('Cup furniture IDs must be different.')
+        used.add(int(text))
+    extras=[]
+    for item in candidates:
+        if not re.fullmatch(r'[0-9]{1,10}',item) or not 1<=int(item)<2147483648:
+            raise ValueError('Additional furniture IDs must be positive 32-bit numbers.')
+        value=int(item)
+        if value in used:
+            raise ValueError('Duplicate furniture ID: '+str(value))
+        used.add(value)
+        extras.append(str(value))
+    return tuple(extras)
 
-    recipients: ordered (username, numeric account ID) pairs.
-    """
+
+def build_extended_coffee_sequence(cup_one,cup_two,extras,recipient,single_cup=False):
+    """One pickup immediately followed by one pass, per source."""
+    if single_cup:
+        return build_coffee_pass_sequence(cup_one,'',recipient,single_cup=True)
+    first=build_coffee_pass_sequence(cup_one,cup_two,recipient)
+    if not extras:
+        return first
+    sequence=list(first)
+    for furniture in extras:
+        sequence.extend(build_coffee_pass_sequence(
+            furniture,'',recipient,single_cup=True))
+    return tuple(sequence)
+
+
+def outgoing_furniture_id_from_packet(extension,direction,packet):
+    """Recognize the next manual UseFurniture by named outgoing G-Earth header."""
+    try:
+        records=(getattr(extension,'packet_infos',None) or {}).get(
+            direction,{}).get(packet.header_id(),())
+        if not any(str(record.get('Name','')).casefold()=='usefurniture'
+                   for record in records):
+            return None
+        instance_id=packet.read_int(6)
+        return instance_id if 1<=instance_id<2147483648 else None
+    except (ValueError,TypeError,AttributeError,IndexError):
+        return None
+
+
+def coffee_speed_test_report(elapsed,pickups,releases,requests,source_attempts,
+                             source_confirmations,delay):
+    """Only own-hand confirmations, never claimed recipient deliveries."""
+    elapsed=max(0.001,float(elapsed))
+    pickups=max(0,int(pickups))
+    releases=max(0,int(releases))
+    requests=max(0,int(requests))
+    source_notes=[]
+    for source,attempts in source_attempts.items():
+        confirmed=source_confirmations.get(source,0)
+        source_notes.append(f'{source}: {confirmed}/{attempts} pickups')
+    return (f'Speed test ({float(delay):g}s delay; {elapsed:.1f}s elapsed): '
+            f'own pickups confirmed {pickups}/{sum(source_attempts.values())}, '
+            f'own hand emptied {releases}/{requests}; '
+            f'{requests} pass requests, {60*pickups/elapsed:.1f} confirmed '
+            'own pickups/min. Sources: '+('; '.join(source_notes) or 'none')+
+            '. Recipient deliveries NOT verified.')
+
+
+def build_coffee_group_sequence(cup_one,cup_two,recipients,extra_sources=()):
+    """Each participant receives one action from each configured source per cycle."""
     if not 2<=len(recipients)<=8:
         raise ValueError('Group rotation needs 2 to 8 participants.')
+    sources=(cup_one,cup_two,*extra_sources)
     sequence=[]
-    for round_number in range(2):
+    for round_number in range(len(sources)):
         for i,(_,account_id) in enumerate(recipients):
-            cup=cup_one if (round_number+i)%2==0 else cup_two
+            furniture=sources[(round_number+i)%len(sources)]
             sequence.extend(build_coffee_pass_sequence(
-                cup,'',account_id,single_cup=True))
+                furniture,'',account_id,single_cup=True))
     return tuple(sequence)
 
 
