@@ -1931,7 +1931,7 @@ class ChatOverlayApp:
         raise ValueError('Player "'+username+'" not found in room list, '
                          'and no matching Habbo profile response was received.')
 
-    def _lookup_coffee_profile(self,username,single_cup=False):
+    def _lookup_coffee_profile(self,username,single_cup=False,speed_test=False):
         """Get the exact numeric ID from Habbo without guessing a recipient."""
         if self._coffee_profile_pending is not None:
             self.coffee_status_var.set('Already checking a Habbo username. No coffee sent yet.')
@@ -1943,7 +1943,8 @@ class ChatOverlayApp:
                 raise ValueError('G-Earth could not resolve GetExtendedProfileByName.')
             self._coffee_profile_generation+=1
             gen=self._coffee_profile_generation
-            self._coffee_profile_pending=(username.casefold(),bool(single_cup),gen)
+            self._coffee_profile_pending=(username.casefold(),bool(single_cup),gen,
+                                          bool(speed_test))
             if self.packet_extension.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the profile request.')
             self.coffee_status_var.set(
@@ -1986,7 +1987,9 @@ class ChatOverlayApp:
                 'the recipient does not need to speak to attempt a cup.')
         self.coffee_status_var.set(
             'Exact username and account ID confirmed by Habbo; checking cup actions...')
-        self.root.after(0,lambda once=pending[1]:self._start_coffee_loop(single_cup=once))
+        self.root.after(0,lambda once=pending[1],bench=(
+            pending[3] if len(pending)>3 else False):
+            self._start_coffee_loop(single_cup=once,speed_test=bench))
 
     def _request_own_identity(self,force=False):
         """Request current account ID from Habbo's normal UserObject response.
@@ -2376,6 +2379,15 @@ class ChatOverlayApp:
         if timer is not None:
             try:self.root.after_cancel(timer)
             except (tk.TclError,AttributeError):pass
+        if self._coffee_speed_active:
+            if phase=='pickup':
+                self._coffee_speed_pickups+=1
+                source=self._coffee_speed_last_source
+                if source is not None:
+                    self._coffee_speed_source_confirmations[source]=(
+                        self._coffee_speed_source_confirmations.get(source,0)+1)
+            elif phase=='release':
+                self._coffee_speed_releases+=1
         if phase=='release' and self._coffee_finish_after_ack:
             self._stop_coffee_loop(
                 'Requested cycles finished; Habbo reports your hand is empty. '
@@ -2425,6 +2437,14 @@ class ChatOverlayApp:
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
+        if self._coffee_speed_active and self._coffee_index%2==0:
+            # Count only the particular source whose UseFurniture was just sent.
+            matched=re.search(r'\{out:UseFurniture\}\{i:([0-9]+)\}',expression)
+            if matched:
+                source=matched.group(1)
+                self._coffee_speed_last_source=source
+                self._coffee_speed_source_attempts[source]=(
+                    self._coffee_speed_source_attempts.get(source,0)+1)
         # Odd steps are PassCarryItem. Counting a successful local send
         # does NOT establish that Habbo accepted the handoff.
         if self._coffee_index%2==1:
@@ -2442,7 +2462,10 @@ class ChatOverlayApp:
             if limit_reached and not self._coffee_wait_for_hand:
                 self._stop_coffee_loop('Requested cycles finished.')
                 return
-        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index%4]
+        upcoming=self._coffee_sequence[self._coffee_index]
+        next_source=re.search(r'\{out:UseFurniture\}\{i:([0-9]+)\}',upcoming)
+        label=(f'Pick up from {next_source.group(1)}'
+               if next_source else 'Pass hand item')
         if self._coffee_group_active:
             next_recipient=self._coffee_group_targets[
                 (self._coffee_index//2)%len(self._coffee_group_targets)][0]
@@ -2471,6 +2494,15 @@ class ChatOverlayApp:
                     lambda gen=generation:self._coffee_loop_tick(gen))
 
     def _stop_coffee_loop(self,reason=None):
+        if getattr(self,'_coffee_speed_active',False):
+            elapsed=time.monotonic()-self._coffee_speed_started
+            report=coffee_speed_test_report(
+                elapsed,self._coffee_speed_pickups,self._coffee_speed_releases,
+                self._coffee_pass_requests,self._coffee_speed_source_attempts,
+                self._coffee_speed_source_confirmations,self._coffee_speed_delay)
+            self.coffee_speed_var.set(
+                ('Test ended: '+str(reason or 'stopped')+'. ')[:120]+report)
+        self._coffee_speed_active=False
         self._coffee_running=False
         self._coffee_start_queued=False
         self._coffee_queued_single=False
