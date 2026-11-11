@@ -102,13 +102,30 @@ class ProfileLookupTests(unittest.TestCase):
         self.assertEqual(len(obj.root.callbacks),1)
         self.assertEqual(obj.root.callbacks[0][0],0)
 
-    def test_profile_without_in_room_chat_does_not_send_coffee(self):
+    def test_profile_without_in_room_chat_can_offer_confirmed_cup(self):
         obj=self.fake(spoken=False)
         accept(obj,'Cheesecake',381423)
-        self.assertEqual(obj.root.callbacks,[])
-        self.assertEqual(obj._room_users,{})
-        self.assertIn('not spoken',obj.coffee_status_var.value)
+        self.assertEqual(len(obj.root.callbacks),1)
+        self.assertEqual(obj.root.callbacks[0][0],0)
+        self.assertEqual(obj._room_users,{})  # do not pretend room presence
         self.assertEqual(obj._room_profile_cache['cheesecake'],('Cheesecake',381423))
+        self.assertIn('Room presence not verified',obj.coffee_users_status_var.value)
+
+    def test_cached_habbo_profile_resolves_without_chat(self):
+        resolve_node=next(n for n in CLASS.body
+                          if isinstance(n,ast.FunctionDef) and n.name=='_resolve_coffee_recipient')
+        scope={}
+        exec(compile(ast.Module(body=[resolve_node],type_ignores=[]),str(SOURCE),'exec'),scope)
+        resolve=scope['_resolve_coffee_recipient']
+        obj=self.fake(spoken=False)
+        obj._room_profile_cache={'cheesecake':('Cheesecake',381423)}
+        obj.coffee_recipient_var=Value('999')  # fallback ID must not be used
+        self.assertEqual(resolve(obj),('381423','Cheesecake'))
+        obj.coffee_username_var=Value('SomeoneElse')
+        with self.assertRaisesRegex(ValueError,'not mapped'):
+            resolve(obj)
+        obj.coffee_username_var=Value('')
+        self.assertEqual(resolve(obj),('999',''))
 
     def test_wrong_username_or_no_pending_request_cannot_trigger_coffee(self):
         obj=self.fake()
