@@ -2844,7 +2844,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             # g_expression() for {i:ID}{s:"username"} fields,
                             # plus the actual binary count/id/name prefix as a
                             # fallback when G-Earth predicts the rest incorrectly.
-                            users=first_room_user_from_raw_packet(msg.packet)
+                            verified_prefix=first_room_user_from_raw_packet(msg.packet)
+                            users={}
                             try:
                                 predicted=msg.packet.g_expression(ext)
                                 if isinstance(predicted,str):
@@ -2852,6 +2853,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                         predicted,trusted_users=True))
                             except Exception:
                                 pass
+                            # The actual binary prefix takes precedence over
+                            # G-Earth's best-effort predicted expression.
+                            users.update(verified_prefix)
                             self._packet_put(('room_users_observed',bool(users)))
                             if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
