@@ -21,13 +21,35 @@ class FixedFont:
 
 
 class WideChatTests(unittest.TestCase):
-    def test_whispers_are_chat_type_two_only(self):
+    def test_only_whispers_go_right_not_bold_shouts(self):
+        # Original Habbo AIR: 0=speak, 1=whisper, 2=shout.
+        # 10/11/12 are bot speak/shout/whisper.
         f=namespace['is_whisper_chat']
-        self.assertTrue(f(2))
-        self.assertTrue(f('2'))
-        for value in (0,1,3,None,'whisper',''):
+        self.assertTrue(f(1))
+        self.assertTrue(f('1'))
+        self.assertTrue(f(12))
+        for value in (0,2,3,10,11,None,'whisper',''):
             with self.subTest(value=value):
                 self.assertFalse(f(value))
+
+    def test_explicit_shout_type_cannot_be_promoted_by_packet_hint(self):
+        handling=CODE[CODE.index('    def handle_message(self,item):'):
+                      CODE.index('    def _rounded(self,canvas',CODE.index('    def handle_message(self,item):'))]
+        self.assertIn("chat_type_explicit=('chatType' in item or 'chat_type' in item)",handling)
+        self.assertIn('if not chat_type_explicit and match_recent_whisper(',handling)
+        self.assertIn('chat_type=1',handling)
+        self.assertIn('chat_type_explicit))',handling)
+        pump=CODE[CODE.index("            if item[0]=='whisper_hint':"):
+                  CODE.index("            if item[0]=='coffee_profile':")]
+        self.assertIn('if not msg.chat_type_explicit',pump)
+        self.assertIn('msg.chat_type=1',pump)
+
+    def test_native_pngs_still_draw_without_replacement_shapes(self):
+        section=CODE[CODE.index('        for msg in reversed(self.messages[start:end]):'):
+                     CODE.index('        self.visible_count_current=rendered_count')]
+        self.assertIn("cv.create_image(bx,top,image=native,anchor='nw')",section)
+        self.assertNotIn('create_polygon',section)
+        self.assertNotIn('self._rounded(',section)
 
     def test_multi_line_message_flattens_to_one_row(self):
         f=namespace['chat_one_line']
