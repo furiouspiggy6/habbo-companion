@@ -78,6 +78,8 @@ DEFAULT = dict(
     coffee_username='',
     coffee_interval='0.1',
     coffee_cycles='0',
+    coffee_group_names='',
+    coffee_group_enabled=False,
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -138,6 +140,37 @@ def validate_replay_interval(value):
         raise ValueError('Repeat delay must be between 0.1 and 120 seconds.')
     return interval
 
+
+
+def parse_coffee_group_names(raw):
+    """Opt-in room activity list; never silently add people."""
+    if not isinstance(raw,str):
+        raise ValueError('Enter comma-separated participant usernames.')
+    names=[n.strip() for n in re.split(r'[,\n]+',raw)]
+    names=[n for n in names if n]
+    if not 2<=len(names)<=8:
+        raise ValueError('Group rotation requires 2 to 8 willing participants.')
+    if len({n.casefold() for n in names})!=len(names):
+        raise ValueError('Remove duplicate group usernames.')
+    if any(len(n)>80 or any(c in n for c in '{}\r\x00') for n in names):
+        raise ValueError('An invalid username is present in the participant list.')
+    return tuple(names)
+
+
+def build_coffee_group_sequence(cup_one,cup_two,recipients):
+    """Rotate 2 rounds per cycle; each participant gets a different cup.
+
+    recipients: ordered (username, numeric account ID) pairs.
+    """
+    if not 2<=len(recipients)<=8:
+        raise ValueError('Group rotation needs 2 to 8 participants.')
+    sequence=[]
+    for round_number in range(2):
+        for i,(_,account_id) in enumerate(recipients):
+            cup=cup_one if (round_number+i)%2==0 else cup_two
+            sequence.extend(build_coffee_pass_sequence(
+                cup,'',account_id,single_cup=True))
+    return tuple(sequence)
 
 
 def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
@@ -1000,6 +1033,11 @@ class ChatOverlayApp:
         self._coffee_queued_single=False
         self.coffee_interval_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_cycles_var=tk.StringVar(value=str(self.config.get('coffee_cycles','0')))
+        self.coffee_group_names_var=tk.StringVar(value=str(self.config.get('coffee_group_names','')))
+        self.coffee_group_enabled_var=tk.BooleanVar(value=bool(self.config.get('coffee_group_enabled',False)))
+        self.coffee_group_exclude_var=tk.StringVar(value='')
+        self._coffee_group_targets=[]
+        self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
         self._coffee_pass_requests=0
@@ -1603,6 +1641,19 @@ class ChatOverlayApp:
         entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
+        ttk.Checkbutton(holder,text='Rotate between willing participants (group mode)',
+                        variable=self.coffee_group_enabled_var).pack(anchor='w',pady=(4,8))
+        entry('Group usernames',self.coffee_group_names_var,
+              'Comma-separated, 2-8; checked only in group mode')
+        group_actions=ttk.Frame(holder,style='Panel.TFrame')
+        group_actions.pack(anchor='w',pady=(0,8))
+        ttk.Label(group_actions,text='Exclude participant',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(group_actions,textvariable=self.coffee_group_exclude_var,width=18).pack(side='left',padx=(8,8))
+        ttk.Button(group_actions,text='Remove from rotation',
+                   command=self._exclude_coffee_group_recipient).pack(side='left')
+        ttk.Label(holder,text='Group mode: consenting users only; at least 10 seconds '
+                  'between packet actions. No automatic retry of blocked or excluded users.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(1,8))
 
         ttk.Label(holder,textvariable=self.packet_connection_status,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,5))
