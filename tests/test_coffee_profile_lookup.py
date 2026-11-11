@@ -52,7 +52,7 @@ class ProfileLookupTests(unittest.TestCase):
         self.assertEqual(read_profile(Packet()),('Cheesecake',381423))
         self.assertIsNone(read_profile(Packet(id=0)))
         self.assertIsNone(read_profile(Packet(name='')))
-        self.assertIsNone(read_profile(Packet(name='a\\x00b')))
+        self.assertIsNone(read_profile(Packet(name='a\x00b')))
 
     def test_request_is_escaped_and_not_an_arbitrary_packet(self):
         self.assertEqual(request(' Cheesecake '),
