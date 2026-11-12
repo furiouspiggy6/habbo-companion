@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.41 — LEGACY UPDATE COMPATIBILITY FIX
+HABBO COMPANION v1.1.42 — LOCAL SESSION TICKET FETCH
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -449,3 +449,51 @@ clients or endpoints in the Direct Classic feature. The official
 Habbo.exe itself must connect to official Habbo game servers to play.
 This update does not implement credentialless headless live gameplay,
 per-client G-Earth proxy routing or avatar verification.
+
+
+v1.1.42 — REQUEST SSO WITHOUT COPYING A BROWSER LOGIN CODE
+==========================================================
+New optional button in the existing "Direct Classic" tab:
+    Fetch from signed-in local session
+
+Select the appropriate saved account profile and click the button.
+Companion uses that account's already-running, previously signed-in
+isolated Chromium profile (127.0.0.1 debugging socket) to issue an
+authenticated HTTPS request to HABBO.COM ONLY:
+    POST https://www.habbo.com/api/client/clientnative/url
+
+This is an *undocumented* website endpoint; it may stop working, deny
+the request, or return an incompatible ticket format. Successful
+login or server acceptance has NOT been verified on a live account.
+
+SECURITY AND LIMITS
+-------------------
+- No manual SSO code copy is required if the account's Habbo website
+  session is already signed in and the browser control port works.
+- No new browser window is opened by this operation, and no account
+  password is sent by Companion. The browser itself supplies its
+  existing session credentials to Habbo.com over HTTPS.
+- Browser cookies, tokens, saved passwords and response bodies are
+  not logged or stored in settings.json. Only a format-validated
+  launch ticket is returned to Companion memory temporarily.
+- Companion does not send account credentials to Bobba-Packet or any
+  third party. The browser request goes only to official Habbo.com.
+- This is NOT a fully browserless email/password login. A previously
+  authenticated site session is still required, and if it expires
+  you must re-authenticate through the official login method.
+- If no account browser is running with a working 127.0.0.1 DevTools
+  endpoint, the button reports that the local session is unavailable
+  instead of launching a browser or silently guessing account identity.
+- A ticket is associated with the local browser profile you selected,
+  not independently proved to belong to the account label. Confirm
+  the correct profile was signed in.
+- The separate local Headless Test tab continues to be a test-only
+  socket server. It still does not connect avatars to Habbo.com.
+- Direct Classic still launches the native game, not a headless game
+  protocol implementation. Multiple G-Earth game proxies remain
+  unimplemented.
+
+The optional manual "Queue ticket locally" path remains unchanged.
+The verified ZIP updater still uses the original three application
+files and includes this change inside the bundled .pyw, avoiding
+the legacy "Unexpected files" rejection.
