@@ -21,7 +21,7 @@ import zipfile
 
 APP_ID = 'habbo-companion'
 MANIFEST = 'habbo-update.json'
-APP_FILES = frozenset({'Habbo_Companion.pyw', 'Habbo_Update_Helper.py', 'README.txt'})
+APP_FILES = frozenset({'Habbo_Companion.pyw', 'Habbo_Update_Helper.py', 'headless_transport.py', 'README.txt'})
 MAX_PACKAGE = 12 * 1024 * 1024
 MAX_FILE = 2 * 1024 * 1024
 
