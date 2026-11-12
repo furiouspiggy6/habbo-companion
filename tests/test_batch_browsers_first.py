@@ -99,7 +99,7 @@ class BatchBrowserFirst(unittest.TestCase):
         self.assertIn("('launch_state','Browser / Classic status',340)",CODE)
         self.assertIn("self.account_table.set(item[2],'launch_state',item[3])",CODE)
         self.assertIn("if account_select_classic_launcher(16):",CODE)
-        self.assertIn("G-Earth routing for additional accounts is NOT automatic.",CODE)
+        self.assertIn("No multi-account G-Earth packet routing yet.",CODE)
 
 
 if __name__=='__main__':
