@@ -109,7 +109,7 @@ class MultiAccountTests(unittest.TestCase):
         self.assertIn('self._account_attached_port=port',code)
         self.assertIn("self.notebook.add(accounts,text='  Accounts  ')",code)
         self.assertIn('account_login_browser()',code)
-        self.assertIn('account_browser_command(browser,folder,account[\'url\'])',code)
+        self.assertIn('account_browser_command(\n                browser,folder,account[\'url\']',code)
         self.assertIn('one g-earth',code.lower())
         self.assertNotIn('self.account_password_var',code)
 
