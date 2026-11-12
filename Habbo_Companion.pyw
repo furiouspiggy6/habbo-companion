@@ -1752,8 +1752,10 @@ class ChatOverlayApp:
         self.account_login_url_var=tk.StringVar(value='https://www.habbo.com/')
         self.account_port_var=tk.StringVar(value='')
         self.account_status_var=tk.StringVar(
-            value='Add accounts, then sign in using separate browser windows. '
-                  'One G-Earth extension is attached at a time.')
+            value='Add accounts, then sign in once. Auto Play reuses each saved '
+                  'browser session. One G-Earth extension is attached at a time.')
+        self._account_auto_running=False
+        self._account_auto_generation=0
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -2108,9 +2110,24 @@ class ChatOverlayApp:
                    command=self._account_use_port).pack(side='left',padx=(0,6))
         ttk.Button(actions,text='Check port',
                    command=self._account_check_port).pack(side='left')
+        autoplay=ttk.Frame(f,style='Panel.TFrame')
+        autoplay.pack(fill='x',pady=(0,9))
+        ttk.Button(autoplay,text='Auto Play selected',
+                   command=self._account_auto_play).pack(side='left',padx=(0,7))
+        ttk.Button(autoplay,text='Auto Play all saved accounts',
+                   command=lambda:self._account_auto_play(all_accounts=True)).pack(
+                       side='left')
         tk.Label(f,textvariable=self.account_status_var,
                  bg='#121a28',fg='#73c5ab',wraplength=620,
                  justify='left').pack(anchor='w',fill='x',pady=(0,9))
+        tk.Label(f,
+            text='Auto Play opens each saved login, clicks the Play/Launch '
+                 'controls and tries the Classic button in Habbo Launcher. '
+                 'First sign-in, verification challenges and Windows '
+                 'permission prompts may still require you. '
+                 'It does not create extra G-Earth proxies.',
+            fg='#8ea9c1',bg='#121a28',wraplength=620,
+            justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
             text='Packet isolation: This Companion instance attaches to ONE '
                  'G-Earth endpoint at a time. Separate endpoints require separate '
@@ -2237,7 +2254,9 @@ class ChatOverlayApp:
         folder=APP_DIR/'account_browser_profiles'/account['id']
         try:
             folder.mkdir(parents=True,exist_ok=True)
-            command=account_browser_command(browser,folder,account['url'])
+            command=account_browser_command(
+                browser,folder,account['url'],
+                account_browser_debug_port(account['id']))
             subprocess.Popen(command,cwd=str(browser.parent),
                              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         except (OSError,ValueError) as exc:
@@ -2247,6 +2266,112 @@ class ChatOverlayApp:
             f'{account["label"]}: opened an isolated browser login. '
             'Sign in on the website; Companion does not read your password. '
             'Browser login alone does not connect another G-Earth proxy.')
+
+    def _account_auto_play(self,all_accounts=False):
+        """One click per selected account or serially for all saved profiles."""
+        if self._account_auto_running:
+            self.account_status_var.set(
+                'Account launch already in progress. Finish it first.')
+            return
+        if all_accounts:
+            accounts=list(self._account_profiles)
+        else:
+            selected=self._account_selected()
+            if selected is None:return
+            accounts=[selected]
+        if not accounts:
+            self.account_status_var.set('Add at least one account first.')
+            return
+        if self.packet_started and not all_accounts:
+            account=accounts[0]
+            if account['port']!=self._account_attached_port:
+                self.account_status_var.set(
+                    'G-Earth is attached to a different account endpoint. '
+                    'Restart Companion before launching this account with '
+                    'packet control, to prevent mixed account traffic.')
+                return
+        if len({account_browser_debug_port(a['id']) for a in accounts})!=len(accounts):
+            self.account_status_var.set(
+                'Two account profiles share a browser control port. '
+                'Remove/re-add one profile before automation.')
+            return
+        if not self.packet_started and not all_accounts:
+            self._account_use_port()
+            if (accounts[0]['port']==9092
+                and not self._gearth_extension_port_responds(9092)):
+                self._start_integrated_engine()
+        self._account_auto_running=True
+        self._account_auto_generation+=1
+        generation=self._account_auto_generation
+        self.account_status_var.set(
+            'Opening saved login session(s) and checking Habbo Play/Launch. '
+            'Do not enter passwords into Companion.')
+        threading.Thread(
+            target=self._account_auto_worker,
+            args=(tuple(dict(a) for a in accounts),generation),
+            daemon=True).start()
+
+    def _account_auto_worker(self,accounts,generation):
+        def report(value):
+            self._packet_put(('account_auto_status',generation,str(value)[:350]))
+        try:
+            browser=account_login_browser()
+            if browser is None:
+                report('Brave/Chrome/Edge not found; install one first.')
+                return
+            for n,account in enumerate(accounts,1):
+                ident=account['id']
+                label=account['label']
+                folder=APP_DIR/'account_browser_profiles'/ident
+                debug_port=account_browser_debug_port(ident)
+                report(f'{n}/{len(accounts)}: starting {label} browser...')
+                folder.mkdir(parents=True,exist_ok=True)
+                try:
+                    account_browser_pages(debug_port)
+                    ready=True
+                except (OSError,ValueError,TimeoutError,
+                        urllib.error.URLError,UnicodeError):
+                    ready=False
+                if not ready:
+                    cmd=account_browser_command(browser,folder,account['url'],
+                                                debug_port)
+                    subprocess.Popen(
+                        cmd,cwd=str(browser.parent),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+                    for _ in range(28):
+                        time.sleep(0.45)
+                        try:
+                            account_browser_pages(debug_port)
+                            ready=True
+                            break
+                        except (OSError,ValueError,TimeoutError,
+                                urllib.error.URLError,UnicodeError):
+                            continue
+                if not ready:
+                    report(f'{label}: browser automation unavailable. '
+                           'Close older windows for this account and retry; '
+                           'it may have opened without control enabled.')
+                    break
+                result=account_attempt_auto_play(
+                    debug_port,lambda msg,name=label:report(f'{name}: {msg}'))
+                if result=='launched':
+                    report(f'{label}: website launch requested; '
+                           'checking for the native Classic button...')
+                    if account_select_classic_launcher(16):
+                        report(f'{label}: Classic selected automatically. '
+                               'G-Earth interception is not independently verified.')
+                    else:
+                        report(f'{label}: Habbo Launcher may require clicking '
+                               'Classic or approving an external-app prompt. '
+                               'Check the launcher window.')
+                        if len(accounts)>1:break
+                else:
+                    if len(accounts)>1:break
+        except Exception as exc:
+            report('Auto Play stopped: '+type(exc).__name__+': '+str(exc)[:150])
+        finally:
+            self._packet_put(('account_auto_finished',generation))
 
     def _account_use_port(self):
         account=self._account_selected()
@@ -4713,6 +4838,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='account_auto_status':
+                if item[1]==self._account_auto_generation:
+                    self.account_status_var.set(item[2])
+                continue
+            if item[0]=='account_auto_finished':
+                if item[1]==self._account_auto_generation:
+                    self._account_auto_running=False
+                continue
             if item[0]=='engine_diagnostic_done':
                 self._diagnostic_running=False
                 self._diagnostic_text=item[1]
