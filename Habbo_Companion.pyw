@@ -84,6 +84,8 @@ DEFAULT = dict(
     coffee_wait_for_hand=False,
     coffee_extra_furniture='',
     habbo_launcher_path='',
+    account_profiles=[],
+    account_active_id='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
 
@@ -164,6 +166,87 @@ def validate_coffee_interval(value):
 def coffee_delay_ms(interval):
     """Nonzero integer Tk delay (1ms minimum regardless of requested value)."""
     return max(1,round(validate_coffee_interval(interval)*1000))
+
+
+def validate_habbo_login_url(value):
+    """Only open HTTPS login pages; never embed or store account credentials."""
+    url=str(value).strip()
+    try:
+        parsed=urllib.parse.urlsplit(url)
+        host=parsed.hostname
+        port=parsed.port
+    except (ValueError,TypeError):
+        raise ValueError('Enter a valid HTTPS login URL.')
+    if (parsed.scheme!='https' or not host or parsed.username is not None
+        or parsed.password is not None or port==0 or
+        any(ch.isspace() for ch in url) or len(url)>300):
+        raise ValueError('Enter a valid HTTPS login URL without credentials.')
+    return url
+
+
+def normalize_habbo_accounts(profiles):
+    """Validate only labels, login URLs, local ports and opaque safe IDs."""
+    if not isinstance(profiles,list):
+        return []
+    valid=[]
+    ids=set()
+    ports=set()
+    for entry in profiles[:30]:
+        if not isinstance(entry,dict):
+            continue
+        ident=str(entry.get('id','')).lower()
+        label=str(entry.get('label','')).strip()
+        try:
+            port=int(entry.get('port',0))
+            url=validate_habbo_login_url(entry.get('url',''))
+        except (ValueError,TypeError,OverflowError):
+            continue
+        if (not re.fullmatch(r'[a-f0-9]{12}',ident)
+            or not 1<=len(label)<=50
+            or any(ord(ch)<32 for ch in label)
+            or not 1024<=port<=65535
+            or ident in ids or port in ports):
+            continue
+        ids.add(ident)
+        ports.add(port)
+        valid.append({'id':ident,'label':label,'port':port,'url':url})
+        if len(valid)==12:
+            break
+    return valid
+
+
+def account_login_browser():
+    """Prefer Brave; allow Chrome/Edge as separate user-data-dir browsers."""
+    roots=[os.environ.get('LOCALAPPDATA',''),
+           os.environ.get('PROGRAMFILES',''),
+           os.environ.get('PROGRAMFILES(X86)','')]
+    relative=[
+        'BraveSoftware/Brave-Browser/Application/brave.exe',
+        'Google/Chrome/Application/chrome.exe',
+        'Microsoft/Edge/Application/msedge.exe']
+    for rel in relative:
+        for root in roots:
+            if not root:
+                continue
+            candidate=Path(root)/rel
+            if candidate.is_file():
+                return candidate
+    for name in ('brave.exe','chrome.exe','msedge.exe'):
+        found=shutil.which(name)
+        if found and Path(found).is_file():
+            return Path(found)
+    return None
+
+
+def account_browser_command(browser,folder,url):
+    """Chromium isolated user data, never passing a username or password."""
+    url=validate_habbo_login_url(url)
+    browser=Path(browser)
+    folder=Path(folder)
+    if browser.suffix.lower()!='.exe':
+        raise ValueError('Select a supported Windows browser executable.')
+    return [str(browser),'--user-data-dir='+str(folder),
+            '--no-first-run','--new-window',url]
 
 
 def parse_coffee_group_names(raw):
@@ -1375,6 +1458,20 @@ class ChatOverlayApp:
         self.root.configure(bg='#121a28')
         self.tracker=WinTracker()
         self.config=load_config()
+        self._account_profiles=normalize_habbo_accounts(
+            self.config.get('account_profiles',[]))
+        self.config['account_profiles']=self._account_profiles
+        self._account_active_id=str(self.config.get('account_active_id',''))
+        if self._account_active_id not in {item['id'] for item in self._account_profiles}:
+            self._account_active_id=''
+        self.config['account_active_id']=self._account_active_id
+        self._account_attached_port=None
+        self.account_label_var=tk.StringVar(value='')
+        self.account_login_url_var=tk.StringVar(value='https://www.habbo.com/')
+        self.account_port_var=tk.StringVar(value='')
+        self.account_status_var=tk.StringVar(
+            value='Add accounts, then sign in using separate browser windows. '
+                  'One G-Earth extension is attached at a time.')
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -1591,6 +1688,9 @@ class ChatOverlayApp:
         packets=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(packets,text='  Packet Viewer  ')
         self._make_packet_panel(packets)
+        accounts=ttk.Frame(self.notebook,style='Panel.TFrame')
+        self.notebook.add(accounts,text='  Accounts  ')
+        self._make_accounts_panel(accounts)
         manip=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(manip,text='  Packet Manipulator  ')
         self._make_manipulator_panel(manip)
@@ -1677,6 +1777,229 @@ class ChatOverlayApp:
         ttk.Button(opts,text='Clear local log',command=self.clear_log).pack(side='left',expand=True,fill='x',padx=(5,0))
         tk.Label(f,text='Ctrl + Shift + F6  ·  show/hide settings\nCtrl + Shift + F7  ·  toggle room background\nCtrl + Shift + PgUp/PgDn  ·  older/newer chat',font=('Segoe UI',9),justify='left',bg='#121a28',fg='#7f9db7').pack(anchor='w',pady=(13,0))
         tk.Label(f,text='Messages do not expire. Only recent bubbles are drawn; scroll for older.\nHistory is bounded in memory and cleared on exit (unless logging is enabled).\nOriginal artwork comes from your existing modified Habbo client.',font=('Segoe UI',8),justify='left',bg='#121a28',fg='#6f8299').pack(anchor='w',pady=(8,0))
+
+    def _make_accounts_panel(self,parent):
+        """Manage independent login cookies and separately configured ports."""
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        f.pack(fill='both',expand=True)
+        tk.Label(f,text='ACCOUNT SESSIONS',font=('Segoe UI Semibold',18),
+                 fg='#e6f1ff',bg='#121a28').pack(anchor='w',pady=(0,8))
+        tk.Label(f,
+            text='Each account opens in its own Brave/Chromium profile so sign-ins '
+                 'and cookies stay separate. Login happens on the website; '
+                 'Companion never asks for or saves passwords.',
+            fg='#9db7cb',bg='#121a28',wraplength=595,justify='left').pack(
+                anchor='w',pady=(0,10))
+        grid=ttk.Frame(f,style='Panel.TFrame')
+        grid.pack(fill='x',pady=(0,9))
+        self.account_table=ttk.Treeview(
+            grid,columns=('name','port','url'),show='headings',height=7,
+            selectmode='browse')
+        for key,heading,width in (
+            ('name','Account',160),('port','G-Earth port',100),
+            ('url','Login URL',315)):
+            self.account_table.heading(key,text=heading)
+            self.account_table.column(key,width=width,stretch=(key=='url'))
+        self.account_table.pack(fill='x')
+        self.account_table.bind('<<TreeviewSelect>>',self._account_on_select)
+        for field,var in (
+            ('Account label',self.account_label_var),
+            ('Login website (HTTPS)',self.account_login_url_var),
+            ('G-Earth extension port',self.account_port_var)):
+            line=ttk.Frame(f,style='Panel.TFrame')
+            line.pack(fill='x',pady=(0,6))
+            ttk.Label(line,text=field,style='Panel.TLabel',width=23).pack(side='left')
+            ttk.Entry(line,textvariable=var).pack(side='left',fill='x',expand=True)
+        buttons=ttk.Frame(f,style='Panel.TFrame')
+        buttons.pack(fill='x',pady=(6,6))
+        ttk.Button(buttons,text='Add account',
+                   command=self._account_add).pack(side='left',padx=(0,6))
+        ttk.Button(buttons,text='Save changes',
+                   command=self._account_save_selected).pack(side='left',padx=(0,6))
+        ttk.Button(buttons,text='Remove entry',
+                   command=self._account_remove).pack(side='left')
+        actions=ttk.Frame(f,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(3,10))
+        ttk.Button(actions,text='Open account login',
+                   command=self._account_open_login).pack(side='left',padx=(0,6))
+        ttk.Button(actions,text='Use selected G-Earth port',
+                   command=self._account_use_port).pack(side='left',padx=(0,6))
+        ttk.Button(actions,text='Check port',
+                   command=self._account_check_port).pack(side='left')
+        tk.Label(f,textvariable=self.account_status_var,
+                 bg='#121a28',fg='#73c5ab',wraplength=620,
+                 justify='left').pack(anchor='w',fill='x',pady=(0,9))
+        tk.Label(f,
+            text='Packet isolation: This Companion instance attaches to ONE '
+                 'G-Earth endpoint at a time. Separate endpoints require separate '
+                 'G-Earth proxies configured by you. Starting another browser '
+                 'login does not create another intercepted Habbo connection. '
+                 'Changing endpoints while packet tools are attached is blocked. '
+                 'Do not assign the same extension port to two accounts.',
+            fg='#8ea9c1',bg='#121a28',wraplength=620,
+            justify='left').pack(anchor='w')
+        self._accounts_render()
+
+    def _accounts_render(self,select_id=None):
+        table=self.account_table
+        if select_id is None:
+            row=table.selection()
+            select_id=row[0] if row else None
+        for row in table.get_children():
+            table.delete(row)
+        for item in self._account_profiles:
+            name=item['label']+(' (active)' if item['id']==self._account_active_id else '')
+            table.insert('', 'end',iid=item['id'],
+                         values=(name,item['port'],item['url']))
+        if select_id and table.exists(select_id):
+            table.selection_set(select_id)
+            table.focus(select_id)
+
+    def _account_selected(self):
+        selection=self.account_table.selection()
+        if not selection:
+            self.account_status_var.set('Select an account first.')
+            return None
+        return next((a for a in self._account_profiles if a['id']==selection[0]),None)
+
+    def _account_on_select(self,event=None):
+        account=self._account_selected()
+        if account is None:return
+        self.account_label_var.set(account['label'])
+        self.account_login_url_var.set(account['url'])
+        self.account_port_var.set(str(account['port']))
+        self.account_status_var.set(
+            f'Selected {account["label"]} — G-Earth extension {account["port"]}. '
+            'Open account login to sign in separately.')
+
+    def _account_add(self):
+        if len(self._account_profiles)>=12:
+            self.account_status_var.set('Maximum 12 account profiles.')
+            return
+        used={a['port'] for a in self._account_profiles}
+        try:base=int(self.gearth_port_var.get()) if not used else 9092
+        except (ValueError,TypeError):base=9092
+        port=next((p for p in [base,*range(9092,9110)] if 1024<=p<=65535
+                   and p not in used),None)
+        if port is None:
+            self.account_status_var.set('No free extension port in the preset range.')
+            return
+        ident=uuid.uuid4().hex[:12]
+        account={'id':ident,'label':f'Account {len(self._account_profiles)+1}',
+                 'url':'https://www.habbo.com/','port':port}
+        self._account_profiles.append(account)
+        self.config['account_profiles']=self._account_profiles
+        self.save()
+        self._accounts_render(ident)
+        self._account_on_select()
+        self.account_status_var.set(
+            f'Added {account["label"]}. Use Open account login to sign in.')
+
+    def _account_save_selected(self):
+        account=self._account_selected()
+        if account is None:return
+        label=self.account_label_var.get().strip()
+        try:
+            url=validate_habbo_login_url(self.account_login_url_var.get())
+            port=int(self.account_port_var.get().strip())
+            if not 1<=len(label)<=50 or any(ord(c)<32 for c in label):
+                raise ValueError('Account label must be 1–50 printable characters.')
+            if not 1024<=port<=65535:
+                raise ValueError('Extension port must be between 1024 and 65535.')
+            if any(x['port']==port and x['id']!=account['id']
+                   for x in self._account_profiles):
+                raise ValueError('Every account must have a different extension port.')
+            if (account['id']==self._account_active_id
+                and self.packet_started and self._account_attached_port!=port):
+                raise ValueError('Cannot change the attached G-Earth port. '
+                                 'Stop packet tools and restart Companion first.')
+        except (ValueError,TypeError,OverflowError) as exc:
+            self.account_status_var.set('Not saved: '+str(exc)[:170]);return
+        account.update(label=label,url=url,port=port)
+        self.config['account_profiles']=self._account_profiles
+        self.save()
+        self._accounts_render(account['id'])
+        self.account_status_var.set(f'Saved {label} (port {port}). No passwords stored.')
+
+    def _account_remove(self):
+        account=self._account_selected()
+        if account is None:return
+        if account['id']==self._account_active_id and self.packet_started:
+            self.account_status_var.set(
+                'Cannot remove the active attached account; restart Companion first.')
+            return
+        if not messagebox.askyesno('Remove account entry',
+            f'Remove {account["label"]} from Companion? '
+            'Browser login data on disk will NOT be deleted.',
+            parent=self.root):
+            return
+        self._account_profiles=[x for x in self._account_profiles
+                                if x['id']!=account['id']]
+        if self._account_active_id==account['id']:
+            self._account_active_id=''
+        self.config.update(account_profiles=self._account_profiles,
+                           account_active_id=self._account_active_id)
+        self.save()
+        self._accounts_render()
+        self.account_status_var.set(
+            'Account entry removed. Its isolated browser data remains on disk.')
+
+    def _account_open_login(self):
+        account=self._account_selected()
+        if account is None:return
+        browser=account_login_browser()
+        if browser is None:
+            self.account_status_var.set(
+                'Brave, Chrome or Edge not found. Install one of these browsers.')
+            return
+        folder=APP_DIR/'account_browser_profiles'/account['id']
+        try:
+            folder.mkdir(parents=True,exist_ok=True)
+            command=account_browser_command(browser,folder,account['url'])
+            subprocess.Popen(command,cwd=str(browser.parent),
+                             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        except (OSError,ValueError) as exc:
+            self.account_status_var.set('Could not open login window: '+str(exc)[:150])
+            return
+        self.account_status_var.set(
+            f'{account["label"]}: opened an isolated browser login. '
+            'Sign in on the website; Companion does not read your password. '
+            'Browser login alone does not connect another G-Earth proxy.')
+
+    def _account_use_port(self):
+        account=self._account_selected()
+        if account is None:return
+        port=account['port']
+        if self.packet_started:
+            if self._account_attached_port!=port:
+                self.account_status_var.set(
+                    f'Packet tools are attached on port {self._account_attached_port}. '
+                    'Switching accounts now could mix packet sessions. '
+                    'Restart Companion, then select this account before attaching.')
+                return
+            self.account_status_var.set(
+                f'Already attached to port {port}. '
+                'The current avatar identity still needs server confirmation.')
+            return
+        self._account_active_id=account['id']
+        self.config['account_active_id']=account['id']
+        self.gearth_port_var.set(str(port))
+        self.config['gearth_port']=port
+        self.save()
+        self._accounts_render(account['id'])
+        self.account_status_var.set(
+            f'Active endpoint: {account["label"]}, port {port}. '
+            'Make sure a SEPARATE G-Earth proxy listens there before connecting. '
+            'An open extension port alone cannot verify which Habbo account owns it.')
+
+    def _account_check_port(self):
+        account=self._account_selected()
+        if account is None:return
+        online=self._gearth_extension_port_responds(account['port'])
+        self.account_status_var.set(
+            f'{account["label"]}: 127.0.0.1:{account["port"]} is '
+            +('listening (not an authenticated avatar check).'
+              if online else 'not listening. Configure/start its own G-Earth endpoint.'))
 
     def _make_updates_panel(self, parent):
         """One-click updates without replacing files by hand."""
@@ -3968,6 +4291,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             return False
         self.packet_active=bool(capture)
         self.packet_started=True
+        self._account_attached_port=port
         self.packet_connection_status.set(f'Connecting packet tools to G-Earth on port {port}...')
         self.packet_status.set(f'Connecting extension on local port {port}...')
         threading.Thread(target=self._packet_worker,args=(port,),daemon=True).start()
@@ -4092,6 +4416,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.packet_started=False
             self._habbo_session_connected=False
             self.packet_extension=None
+            self._account_attached_port=None
             self._packet_auto_retry_after=time.monotonic()+10
             self._packet_put(('session_connection',False))
             self._packet_put(('packet_connect_error',f'{type(exc).__name__}: {str(exc)[:160]}'))
