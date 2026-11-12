@@ -531,7 +531,13 @@ def room_users_from_binary_prefixes(packet):
         figure_result=string_at(cursor,1024)
         if figure_result is None:
             continue
-        _,cursor=figure_result
+        figure,cursor=figure_result
+        # Habbo avatar figures are structured outfit tokens such as
+        # hd-180-1.hr-100-42. Without this check, a bytewise scan may
+        # mistake incidental strings in a large room packet for users.
+        if not re.search(r'(?:^|\.)(?:hd|hr|ch|lg|sh|ha|fa|ca|cc|cp)-[0-9]+',
+                         figure):
+            continue
         if cursor+12>len(raw):
             continue
         room_index=int.from_bytes(raw[cursor:cursor+4],'big',signed=True)
