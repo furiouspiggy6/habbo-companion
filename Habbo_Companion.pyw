@@ -831,7 +831,7 @@ HABBO_SESSION_TICKET_JS=r'''(async () => {
     if (!data || typeof data !== 'object') return {
       kind:'error',reason:'unexpected_response'
     };
-    // Never collect document.cookie, localStorage or other session secrets.
+    // Never collect site cookies, browser storage or other session secrets.
     const candidate = [data.ticket,data.url,data.launchUrl,
                        data.launch_url,data.loginUrl].find(
       value => typeof value === 'string' && value.length > 8 && value.length < 400
