@@ -86,7 +86,7 @@ class AutoPlayAllBatchTests(unittest.TestCase):
         self.worker(self.app,(self.a,self.b),3)
         self.assertEqual(len(self.calls),3)  # two login preflights, one launch
         self.assertIn('remaining native launches paused',self.summary())
-        self.assertIn('manual Classic selection',self.summary().lower())
+        self.assertIn('manual classic selection',self.summary().lower())
         self.assertEqual(self.events[-1],('account_auto_finished',3))
 
     def test_login_only_just_opens_and_checks_both(self):
