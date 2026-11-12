@@ -1,44 +1,43 @@
-HABBO COMPANION v1.1.26 — FIX UNKNOWN ROOM INDEX AFTER ID CONFIRMED
-====================================================================
+HABBO COMPANION v1.1.27 — FASTER COFFEE DELAYS; UNLIMITED CYCLES
+=================================================================
 
-The problem:
-  Account confirmed: dan.alt100 (ID 69016008);
-  room index still unavailable. Re-enter the room if needed.
+The Coffee Pass Loop's "Delay per action" now accepts values BELOW 0.1s:
+  0.1 = 100 milliseconds
+  0.05 = 50 milliseconds
+  0.02 = 20 milliseconds
+  0.01 = 10 milliseconds (fastest selectable)
 
-Your account ID lookup already worked. The problem was identifying the
-separate room avatar index from Habbo's incoming "Users" packet. The
-existing G-Python HEntity parser relies on variable entity tail fields
-which can change with Habbo client versions. Parsing the full room
-list could fail, leaving indexes unrecognized even when 50 players
-were detected.
+The interval is between outgoing actions, so each handoff needs at
+least two actions: pick up from furniture, then pass the carried item.
+The physical/software/server timing may be longer than the selected
+delay. Shorter request intervals do NOT imply that Habbo accepted or
+delivered more items. The Habbo server can reject or rate-limit them.
 
-What changed:
-- Companion now reads a strongly validated binary prefix of each
-  Habbo room Users entity: account ID, username, motto, avatar figure,
-  room index, tile coordinates, height, direction and type.
-- It can recover indexes even when subsequent optional entity fields
-  change or cannot be parsed by the older G-Python entity decoder.
-- It matches the server-confirmed self account ID (69016008 on the
-  affected screenshot) with the corresponding room index. This does
-  not use account IDs as room indexes or invent numbers.
-- Old G-Earth expression and G-Python entity decoders remain as
-  fallbacks. Validated real binary indexes take priority.
-- The packet type is checked before decoding. Wrong or ambiguous
-  records are rejected rather than used for confirmed-hand coffee
-  transfers.
+Why there is a 10ms floor:
+This is a Windows/Tk event-loop application. A 0-millisecond
+continuously rescheduled send could monopolize the user interface,
+make STOP unresponsive, or overwhelm the client. A minimum of 10ms
+allows controlled sub-100ms timing; it is not a confirmed Habbo
+server-side minimum. No claim of unlimited packets per second is made.
 
-To use:
-1. Update Companion to 1.1.26 using Updates > Check online.
-2. Make sure G-Earth is connected and re-enter the Habbo room once.
-3. In Coffee Pass Loop, look for:
-       Your avatar: dan.alt100 — room index <number>
-4. If the index still cannot be decoded, leave the confirmed-hand
-   checkbox OFF and use the normal timed loop. Do not type your account
-   ID into the recipient room-index field.
+TOTAL NUMBER OF SENDS IS ALREADY UNLIMITED:
+Set "Complete loop cycles" = 0. Companion keeps cycling until STOP,
+disconnect or a normal safety condition; no hard maximum count applies.
+The cap of 10000 applies only when the user chooses a specific finite
+number of cycles.
 
-This preserves the original fast 0.1s loop, automatic CSV recording,
-bookcase sources, three-cycle speed test, group rotation, original
-Habbo chat PNGs, whispers and existing updater.
+The optional Wait for my avatar to receive/pass each cup mode still
+waits for actual server updates between actions. It may therefore
+run slower. The finite three-cycle speed test still uses confirmations.
 
-The change has offline regression tests including a simulated
-50-player room list. It still requires in-game validation.
+Opt-in group mode continues to require 10 seconds between individual
+packet actions, and excluded/blocked recipients are not automatically
+re-added. The generic packet repeater also keeps its existing
+0.1-second minimum; this change is limited to Coffee Pass.
+
+Everything else remains: original Habbo bubble PNGs, automatic local
+coffee-session CSV and summary recordings, bookcase/multiple hand-item
+sources, whisper-right positioning, username identification, and
+normal in-app updates.
+
+Install via Habbo Companion > Updates > Check online.
