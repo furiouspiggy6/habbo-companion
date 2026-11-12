@@ -146,24 +146,24 @@ def validate_replay_interval(value):
 
 
 def validate_coffee_interval(value):
-    """Coffee actions may run faster than 100ms; keep GUI/event loop responsive.
+    """Accept a 100µs *requested* delay without promising sub-ms GUI timing.
 
-    This limits *minimum spacing*, not how many total loop cycles a
-    participating recipient can choose to receive. Cycles=0 remains
-    unlimited until STOP or disconnection.
+    Cycles=0 remains unlimited until STOP or disconnection. Timing is
+    best effort: Tkinter schedules in integer milliseconds and the
+    G-Earth send itself can take longer than the requested interval.
     """
     try:
         interval=float(str(value).strip())
     except (ValueError,TypeError,OverflowError):
-        raise ValueError('Enter a coffee delay in seconds (0.01 to 120).')
-    if not math.isfinite(interval) or not 0.01<=interval<=120.0:
-        raise ValueError('Coffee delay must be between 0.01 and 120 seconds.')
+        raise ValueError('Enter a coffee delay in seconds (0.0001 to 120).')
+    if not math.isfinite(interval) or not 0.0001<=interval<=120.0:
+        raise ValueError('Coffee delay must be between 0.0001 and 120 seconds.')
     return interval
 
 
 def coffee_delay_ms(interval):
-    """A Tk after() callback must use an integer, nonzero millisecond wait."""
-    return max(10,round(validate_coffee_interval(interval)*1000))
+    """Nonzero integer Tk delay (1ms minimum regardless of requested value)."""
+    return max(1,round(validate_coffee_interval(interval)*1000))
 
 
 def parse_coffee_group_names(raw):
@@ -2072,7 +2072,8 @@ class ChatOverlayApp:
                    command=self._arm_coffee_furniture_capture).pack(anchor='w',pady=(0,5))
         ttk.Label(holder,textvariable=self.coffee_furniture_capture_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
-        entry('Delay per action (sec)',self.coffee_interval_var,'0.01 minimum (10ms); 120 maximum')
+        entry('Delay per action (sec)',self.coffee_interval_var,
+              '0.0001 accepted; actual Tk scheduling minimum ~1ms')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = unlimited cycles until STOP')
         ttk.Checkbutton(holder,text='Wait for my avatar to receive/pass each cup',
                         variable=self.coffee_wait_for_hand_var).pack(anchor='w',pady=(4,5))
@@ -2588,7 +2589,9 @@ class ChatOverlayApp:
             f'Send coffee actions {duration}?\n'
             f'Recipient(s): {recipient_display}\n'
             f'{presence_note}'
-            f'Delay between actions: {interval:g} seconds\n'
+            f'Requested delay: {interval:g} seconds\n'
+            f'Tk scheduling floor: {coffee_delay_ms(interval)} ms '
+            '(actual sends may take longer)\n'
             f'Wait for own-hand server updates: '
             f'{"ON" if (self.coffee_wait_for_hand_var.get() or speed_test) else "OFF"}\n'
             f'Hand-item furniture sources per cycle: {len(sequence)//2 if not group_mode else len(extras)+2}\n'
