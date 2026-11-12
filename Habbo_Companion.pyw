@@ -386,7 +386,7 @@ def account_cdp_call(websocket_url,method,params=None,timeout=4):
 # Intentionally no authentication fields or access to cookies/tokens.
 # Only inspect visible, text-labelled controls on the Habbo website.
 HABBO_AUTO_PLAY_JS=r'''(() => {
-  if (!/(^|\\.)habbo\\.com$/i.test(location.hostname))
+  if (!/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'not_habbo'};
   const login=Array.from(document.querySelectorAll('input[type=password]'))
     .some(el => el.getClientRects().length > 0);
@@ -402,7 +402,7 @@ HABBO_AUTO_PLAY_JS=r'''(() => {
   for (const [kind,re] of targets) {
     for (const el of choices) {
       const text=(el.innerText || el.value ||
-                  el.getAttribute('aria-label') || '').trim().replace(/\\s+/g,' ');
+                  el.getAttribute('aria-label') || '').trim().replace(/\s+/g,' ');
       const rect=el.getBoundingClientRect();
       const style=getComputedStyle(el);
       if (!re.test(text) || !rect.width || !rect.height ||
@@ -475,9 +475,6 @@ def account_attempt_auto_play(debug_port,report):
     report('Could not find the next Habbo launch button. '
            'The website layout may have changed.')
     return 'timeout'
-
-
-def parse_coffee_group_names(raw):
 
 
 def parse_coffee_group_names(raw):
