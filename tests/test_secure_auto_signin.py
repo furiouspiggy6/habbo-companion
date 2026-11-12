@@ -18,6 +18,11 @@ FUNCTIONS={
 def scope():
     nodes=[n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name in FUNCTIONS]
     space={'re':re}
+    for node in TREE.body:
+        if (isinstance(node,ast.Assign) and any(
+            isinstance(t,ast.Name) and t.id=='HABBO_LOGIN_FIELDS_JS'
+            for t in node.targets)):
+            space['HABBO_LOGIN_FIELDS_JS']=ast.literal_eval(node.value)
     exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),'exec'),space)
     return space
 
