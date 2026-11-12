@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.35 — RECOGNISE SIGNED-IN ACCOUNTS
+HABBO COMPANION v1.1.36 — RESUME UNFINISHED ACCOUNTS
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -197,3 +197,36 @@ retry. A CAPTCHA or two-factor check requires manual completion.
 Native Classic launching remains sequential and multi-client G-Earth
 routing is NOT yet implemented. Real Windows + Habbo verification is
 still necessary.
+
+
+v1.1.36 — CONTINUE UNFINISHED ACCOUNTS
+=====================================
+Added an "Continue unfinished accounts" button in the Accounts tab.
+
+If the batch shows "1/2 website logins ready, 1 launch request, 0
+Classic selections", it now preserves the other account in a small
+in-memory queue of account profile IDs. It does NOT repeat the first
+account's native launcher request or reuse a previously sent ticket.
+
+If the first Habbo Launcher is waiting for a Classic choice or Brave
+prompts "Open Habbo Launcher?", complete that manual step FIRST.
+Then click Continue unfinished accounts. Companion asks you to confirm
+you've handled the earlier prompt, then retries only the accounts that
+never reached the native launch request step. The remaining profiles
+are rechecked for valid sign-ins using their own stored browser
+profiles and their saved login in Windows Credential Manager.
+
+The resume queue is only in Companion's current process memory, not
+in settings.json; it stores profile IDs, NEVER account passwords,
+browser cookies or Habbo launch tickets. Closing Companion loses this
+short queue; a fresh Auto Play all batch is still available.
+
+If Classic was selected but the Windows program did not launch, the
+account is NOT considered proof of a connected avatar or intercepted
+packet feed. You may manually select that account to investigate, but
+the Continue button deliberately avoids replaying the same request.
+
+This is a recovery and diagnostics improvement, not a way to bypass
+browser permission prompts, CAPTCHA, OS security controls, nor
+Habbo's launcher itself. Multiple separately controlled G-Earth
+proxy game connections are still not implemented.
