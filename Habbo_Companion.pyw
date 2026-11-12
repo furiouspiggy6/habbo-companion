@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Habbo View Chat | Standalone Windows overlay and settings panel.
+"""Habbo View Chat | Windows overlay, packet tools and account sessions.
 
-Works with the companion patched HabboAir.swf, which streams incoming chat
-messages into the user's local AIR application storage. No networking, input
-capture, remote access or gameplay automation. Uses only Python stdlib.
+Works with the companion patched HabboAir.swf for chat feeds. Optional G-Earth
+extension integration and per-profile local browser automation use network
+sockets on the same machine. Account passwords are never handled by Companion.
 """
 from __future__ import annotations
 import ctypes
