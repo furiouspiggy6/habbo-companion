@@ -109,9 +109,13 @@ class MultiAccountTests(unittest.TestCase):
         self.assertIn('self._account_attached_port=port',code)
         self.assertIn("self.notebook.add(accounts,text='  Accounts  ')",code)
         self.assertIn('account_login_browser()',code)
-        self.assertIn('account_browser_command(\n                browser,folder,account[\'url\']',code)
+        self.assertIn("cmd=account_browser_command(browser,folder,account['url']",code)
         self.assertIn('one g-earth',code.lower())
-        self.assertNotIn('self.account_password_var',code)
+        self.assertIn('self.account_password_var',code)
+        self.assertIn("account_saved_login_write(",code)
+        self.assertIn("account_saved_login_read(",code)
+        self.assertIn("account_saved_login_delete(",code)
+        self.assertNotIn("'password':",code.split('DEFAULT = dict(',1)[1].split('THEMES =',1)[0])
 
 if __name__=='__main__':
     unittest.main()
