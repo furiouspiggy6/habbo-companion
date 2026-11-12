@@ -1,71 +1,73 @@
-HABBO COMPANION v1.1.30 — ONE-CLICK ACCOUNT AUTO PLAY
-=====================================================
+HABBO COMPANION v1.1.31 — SAVED ACCOUNT AUTO SIGN-IN
+===================================================
 
-The new Accounts tab has TWO additional buttons:
-  Auto Play selected
-  Auto Play all saved accounts
+Accounts > Open account login now opens that account's isolated browser
+profile and signs in automatically when you have saved its login.
+The existing Auto Play buttons can sign in, click Play / Launch and
+log in, and attempt to select Classic from the Habbo Launcher.
 
-WHAT AUTO PLAY DOES
-===================
-1. Selects or launches that account's isolated Brave/Chrome/Edge
-   browser profile. Every profile keeps its own cookies and sign-in.
-2. If already signed into www.habbo.com, tries to follow the website's
-   visible Play Now / Play / Download / Launch and log in buttons
-   using trusted browser input events.
-3. After Launch and log in, tries to select the accessible Classic
-   button from an identified Habbo Launcher window via Windows
-   UI Automation. If the button is not accessible or the browser
-   prompts for permission to open an external app, asks you to
-   complete the step manually.
-4. If Auto Play all is selected, processes profiles SEQUENTIALLY,
-   not all at once. To protect account/login token identity, it stops
-   rather than triggering subsequent client launches if the previous
-   Classic launcher was not independently selected.
+SET UP ONCE FOR EACH ACCOUNT
+============================
+1. Open Accounts and select Account 1 (or create and select an account).
+2. Enter its Habbo sign-in EMAIL and PASSWORD.
+3. Click Save login securely.
+4. Repeat for Account 2, Account 3, etc.
+5. Click Open account login to open the profile and submit the login.
+   This button does not launch Classic.
+6. Click Auto Play selected or Auto Play all saved accounts to attempt
+   the full website → launcher flow.
 
-ONE-TIME SETUP
-==============
-1. Install v1.1.30 via Updates > Check online.
-2. In Accounts, add a label for each account (e.g. Main, Alt).
-3. Click Open account login and sign into Habbo in each profile ONCE.
-   You enter credentials ONLY into the official Habbo website.
-4. If the browser asks to allow Habbo Launcher to open, choose whether
-   to allow it yourself. Windows may remember your choice.
-5. Next time, click Auto Play selected or Auto Play all saved accounts
-   to reuse the browser's signed-in sessions.
+Saving a login stores the email/password as a Generic Credential in
+Windows Credential Manager for your Windows user account. It DOES NOT
+write it to Companion settings.json, a JSON file, browser command-line
+arguments, GitHub or update packages. The password field is masked and
+cleared immediately after saving. Forget saved login deletes the vault
+entry; existing browser cookies remain until you clear that browser
+profile separately. Removing an account also deletes its vault entry.
 
-If Habbo requests a new login or two-factor verification, Auto Play
-stops and asks you to finish the sign-in in the matching browser.
-Companion does NOT collect, store or autofill usernames, passwords,
-two-factor codes, tokens or session cookies.
+If you don't save a login, you can still sign in manually once in that
+account's own browser profile. Browser cookies normally preserve the
+session for subsequent launches. The app supports direct email/password
+login; Google, Apple and Facebook sign-ins may need manual completion.
+CAPTCHA, two-factor checks, sign-in errors and OS permission prompts
+can still require you. Sign-in only targets the official habbo.com
+domain over HTTPS. The app does not bypass verification or promise the
+website will accept automated typing if its layout has changed.
 
-LOCAL BROWSER AUTOMATION SECURITY
-=================================
-For browser control Companion starts each dedicated Chromium profile
-with a local 127.0.0.1 DevTools endpoint bound to a stable profile
-specific port. This endpoint is accessible to other software on the
-same PC. Don't use these profiles for unrelated sensitive browsing;
-close the profile windows when finished. Existing browser windows
-created by pre-v1.1.30 versions may need to be closed once to restart
-with local automation enabled. No remote debugging connection is made
-to an external IP address.
+AUTO PLAY
+=========
+1. Opens the selected isolated Brave/Chrome/Edge profile.
+2. If the Habbo email/password form is shown and login is saved,
+   types it through local browser input events and submits once.
+3. After authentication, follows visible Play / Launch and log in
+   buttons using trusted browser click events.
+4. Attempts Classic in a named Habbo Launcher window. Manual selection
+   may be needed if its accessibility interface is unavailable.
+5. "Auto Play all" processes profiles sequentially. If a launch
+   cannot be confirmed, the chain stops instead of guessing which
+   account is active.
+
+SECURITY
+========
+Automatic browser control requires a local Chrome DevTools endpoint
+on 127.0.0.1 for each dedicated Chromium profile. Other programs on
+your PC could reach that endpoint; keep your Windows session secure,
+do not use these isolated browser profiles for unrelated sensitive
+browsing, and close them when finished. Some Brave/Chrome versions
+may disable remote debugging on special/default profiles; Companion
+uses non-default per-account profile directories to avoid that.
+No credentials are sent to ChatGPT or into the repository.
 
 G-EARTH LIMITATION
 ==================
-Auto Play manages BROWSER sign-in and desktop launch, not the
-G-Earth proxy architecture. The current Companion session can only
-intercept ONE G-Earth extension connection at a time. Multiple browser
-logins and multiple AIR clients are not automatically multiple G-Earth
-proxies. A second account using a different extension port still
-needs its own independently working proxy setup. The feature refuses
-to silently switch between already attached G-Earth packet sessions.
-The ordinary managed engine is started automatically when supported
-for the selected account's default extension port 9092.
+Automating two browser sign-ins does not automatically create two
+independent G-Earth proxies. Companion can control one attached G-Earth
+extension port at a time, and additional clients still require
+correctly separated proxies. The browser profile labels are not proof
+that a given packet connection belongs to that account.
 
-Other features continue as before: 0.0001s requested coffee-delay
-input (Tk minimum 1ms), cycles=0 until STOP, automatic CSV summaries,
-confirmed hand-item updates, account ID/room-index decoding, chat
-bubble PNG preservation, right-hand whispers and in-app updates.
+Other features retained: coffee controls, chat bubble rendering,
+right-side whispers, packet tools and online updates.
 
-This update passed offline unit tests but requires real Windows/Habbo
-website/client testing to confirm the current page labels and that
-the Habbo Launcher exposes a Classic button to Windows accessibility.
+This version has offline automated tests, but successful sign-in and
+Classic launching need validation on a live Windows/Habbo install.
