@@ -1,43 +1,39 @@
-HABBO COMPANION v1.1.27 — FASTER COFFEE DELAYS; UNLIMITED CYCLES
-=================================================================
+HABBO COMPANION v1.1.28 — 0.0001s COFFEE DELAY INPUT
+===================================================
 
-The Coffee Pass Loop's "Delay per action" now accepts values BELOW 0.1s:
-  0.1 = 100 milliseconds
-  0.05 = 50 milliseconds
-  0.02 = 20 milliseconds
-  0.01 = 10 milliseconds (fastest selectable)
+Coffee Pass now accepts requested "Delay per action" values down to
+0.0001 seconds (100 microseconds / 0.1 milliseconds).
 
-The interval is between outgoing actions, so each handoff needs at
-least two actions: pick up from furniture, then pass the carried item.
-The physical/software/server timing may be longer than the selected
-delay. Shorter request intervals do NOT imply that Habbo accepted or
-delivered more items. The Habbo server can reject or rate-limit them.
+The program's Tkinter event loop schedules callbacks in WHOLE
+milliseconds. Therefore, a requested 0.0001 seconds is scheduled at
+the smallest nonzero Tk delay of 1 millisecond, not an actual
+100-microsecond interval. Packet encoding, G-Earth sends, Windows
+scheduling and any server processing can make actual intervals longer.
+The confirmation dialog now displays both the requested delay and the
+effective Tk scheduling floor.
 
-Why there is a 10ms floor:
-This is a Windows/Tk event-loop application. A 0-millisecond
-continuously rescheduled send could monopolize the user interface,
-make STOP unresponsive, or overwhelm the client. A minimum of 10ms
-allows controlled sub-100ms timing; it is not a confirmed Habbo
-server-side minimum. No claim of unlimited packets per second is made.
+Examples:
+  Requested 0.1s    => 100ms Tk scheduling floor
+  Requested 0.05s   =>  50ms Tk scheduling floor
+  Requested 0.01s   =>  10ms Tk scheduling floor
+  Requested 0.001s  =>   1ms Tk scheduling floor
+  Requested 0.0001s =>   1ms Tk scheduling floor (not 0.1ms)
 
-TOTAL NUMBER OF SENDS IS ALREADY UNLIMITED:
-Set "Complete loop cycles" = 0. Companion keeps cycling until STOP,
-disconnect or a normal safety condition; no hard maximum count applies.
-The cap of 10000 applies only when the user chooses a specific finite
-number of cycles.
+There is no total cycle-count limit in the regular loop when
+Complete loop cycles = 0. The user can stop the loop at any time.
+The existing G-Earth connection, rate limits imposed by the server
+and send errors still apply, and no specific recipient receipt rate
+is guaranteed.
 
-The optional Wait for my avatar to receive/pass each cup mode still
-waits for actual server updates between actions. It may therefore
-run slower. The finite three-cycle speed test still uses confirmations.
+Automatic local CSV logging continues unchanged. The timestamps in
+the saved CSV tell you actual local send intervals and any available
+CarryObject observations. The normal timed loop does not wait for server
+acknowledgements; the optional confirmed-hand mode and the finite
+three-cycle speed test still do.
 
-Opt-in group mode continues to require 10 seconds between individual
-packet actions, and excluded/blocked recipients are not automatically
-re-added. The generic packet repeater also keeps its existing
-0.1-second minimum; this change is limited to Coffee Pass.
+The minimum 10-second per-action delay for multi-recipient opt-in group
+mode is unchanged. The generic packet repeater keeps its 0.1s minimum.
+Existing recipient exclusions, native chat bubbles, bookcase sources,
+whisper placement and other app features remain unchanged.
 
-Everything else remains: original Habbo bubble PNGs, automatic local
-coffee-session CSV and summary recordings, bookcase/multiple hand-item
-sources, whisper-right positioning, username identification, and
-normal in-app updates.
-
-Install via Habbo Companion > Updates > Check online.
+INSTALL: Habbo Companion > Updates > Check online.

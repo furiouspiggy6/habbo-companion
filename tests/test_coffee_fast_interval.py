@@ -17,17 +17,21 @@ replay=scope['validate_replay_interval']
 
 class FastCoffeeIntervalTests(unittest.TestCase):
     def test_sub_hundred_milliseconds_is_accepted(self):
-        for sec,milliseconds in [('0.01',10),('0.02',20),('0.05',50),
-                                 ('0.075',75),('0.099',99),('0.1',100)]:
+        for sec,milliseconds in [('0.0001',1),('0.0005',1),('0.001',1),
+                                 ('0.005',5),('0.01',10),('0.02',20),
+                                 ('0.05',50),('0.075',75),
+                                 ('0.099',99),('0.1',100)]:
             with self.subTest(sec=sec):
                 self.assertAlmostEqual(coffee(sec),float(sec))
                 self.assertEqual(ms(sec),milliseconds)
 
     def test_invalid_and_zero_delay_rejected_without_flooding_ui(self):
-        for value in ('0','0.0','0.001','-1','inf','nan','foo','',None):
+        for value in ('0','0.0','0.00001','-1','inf','nan','foo','',None):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     coffee(value)
+        self.assertEqual(ms('0.0001'),1)
+        self.assertEqual(ms('0.0009'),1)
         self.assertEqual(ms('0.0101'),10)
         self.assertEqual(ms('120'),120000)
 
@@ -44,6 +48,7 @@ class FastCoffeeIntervalTests(unittest.TestCase):
         start_code=ast.get_source_segment(CODE,start)
         self.assertIn('validate_coffee_interval(self.coffee_interval_var.get())',start_code)
         self.assertIn('if group_mode and interval<10:',start_code)
+        self.assertIn('coffee_delay_ms(interval)',start_code)
         self.assertIn('cycles=int(cycles_text)',start_code)
         self.assertIn('if cycles>10000:',start_code)
         self.assertIn("'continuously until STOP' if cycles==0",start_code)
