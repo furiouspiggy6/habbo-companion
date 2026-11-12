@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Habbo View Chat | Standalone Windows overlay and settings panel.
+"""Habbo View Chat | Windows overlay, packet tools and account sessions.
 
-Works with the companion patched HabboAir.swf, which streams incoming chat
-messages into the user's local AIR application storage. No networking, input
-capture, remote access or gameplay automation. Uses only Python stdlib.
+Works with the companion patched HabboAir.swf for chat feeds. Optional G-Earth
+extension integration and per-profile local browser automation use network
+sockets on the same machine. Account passwords are never handled by Companion.
 """
 from __future__ import annotations
 import ctypes
@@ -28,6 +28,9 @@ import uuid
 from pathlib import PurePosixPath
 import hashlib
 import math
+import base64
+import socket
+import struct
 import importlib.util
 from datetime import datetime
 import tkinter as tk
@@ -238,15 +241,294 @@ def account_login_browser():
     return None
 
 
-def account_browser_command(browser,folder,url):
+def account_browser_debug_port(account_id):
+    """Stable per-profile Chrome DevTools port; never a public listener."""
+    ident=str(account_id).lower()
+    if not re.fullmatch(r'[a-f0-9]{12}',ident):
+        raise ValueError('Invalid account profile identifier.')
+    return 43000+int(ident,16)%20000
+
+
+def account_browser_command(browser,folder,url,debug_port=None):
     """Chromium isolated user data, never passing a username or password."""
     url=validate_habbo_login_url(url)
     browser=Path(browser)
     folder=Path(folder)
     if browser.suffix.lower()!='.exe':
         raise ValueError('Select a supported Windows browser executable.')
-    return [str(browser),'--user-data-dir='+str(folder),
-            '--no-first-run','--new-window',url]
+    args=[str(browser),'--user-data-dir='+str(folder),
+          '--no-first-run','--new-window']
+    if debug_port is not None:
+        if not 1024<=int(debug_port)<=65535:
+            raise ValueError('Invalid local browser control port.')
+        args+=['--remote-debugging-address=127.0.0.1',
+               '--remote-debugging-port='+str(int(debug_port))]
+    return args+[url]
+
+
+def account_browser_pages(debug_port):
+    """Discover only page targets in a local, isolated Chromium profile."""
+    if not 1024<=int(debug_port)<=65535:
+        raise ValueError('Invalid local browser port.')
+    req=urllib.request.Request(
+        f'http://127.0.0.1:{int(debug_port)}/json/list',
+        headers={'User-Agent':'HabboCompanionLocal/1.0'})
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req,timeout=1.5) as response:
+        if response.status!=200:
+            raise OSError('Browser automation endpoint not ready.')
+        data=response.read(250000)
+    pages=json.loads(data.decode('utf-8'))
+    if not isinstance(pages,list):
+        raise ValueError('Unexpected browser debugging response.')
+    return [p for p in pages if isinstance(p,dict) and p.get('type')=='page'
+            and isinstance(p.get('url'),str)
+            and p.get('webSocketDebuggerUrl')]
+
+
+def account_habbo_page(debug_port):
+    """Never inspect or automate unrelated webpages in the browser profile."""
+    pages=account_browser_pages(debug_port)
+    for page in pages:
+        target=urllib.parse.urlsplit(page['url'])
+        if (target.scheme=='https' and target.hostname
+            and (target.hostname=='habbo.com'
+                 or target.hostname.endswith('.habbo.com'))):
+            return page
+    return None
+
+
+def account_cdp_call(websocket_url,method,params=None,timeout=4):
+    """Tiny one-shot Chrome DevTools client, using only Python stdlib.
+
+    CDP is bound to loopback, never launched against a normal browser
+    profile. A browser endpoint is not authentication for a Habbo avatar.
+    """
+    u=urllib.parse.urlsplit(websocket_url)
+    if (u.scheme!='ws' or u.hostname not in ('127.0.0.1','localhost')
+        or not u.port or not u.path.startswith('/devtools/page/')):
+        raise ValueError('Refusing an external/non-page DevTools connection.')
+    with socket.create_connection(('127.0.0.1',u.port),timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        key=base64.b64encode(os.urandom(16)).decode('ascii')
+        handshake=(
+            f'GET {u.path} HTTP/1.1\r\n'
+            f'Host: 127.0.0.1:{u.port}\r\n'
+            'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+            f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n')
+        sock.sendall(handshake.encode('ascii'))
+        data=bytearray()
+        while b'\r\n\r\n' not in data and len(data)<8192:
+            chunk=sock.recv(4096)
+            if not chunk:break
+            data.extend(chunk)
+        header,sep,rest=bytes(data).partition(b'\r\n\r\n')
+        expected=base64.b64encode(hashlib.sha1(
+            (key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('ascii')
+            ).digest()).decode('ascii')
+        if (not sep or not header.startswith(b'HTTP/1.1 101 ')
+            or ('sec-websocket-accept: '+expected).encode('ascii').lower()
+               not in header.lower()):
+            raise OSError('Local browser refused WebSocket control.')
+
+        def send_frame(payload,opcode=1):
+            length=len(payload)
+            if length<126:
+                prefix=bytes([0x80|opcode,0x80|length])
+            elif length<=65535:
+                prefix=bytes([0x80|opcode,0x80|126])+struct.pack('!H',length)
+            else:
+                prefix=bytes([0x80|opcode,0x80|127])+struct.pack('!Q',length)
+            mask=os.urandom(4)
+            sock.sendall(prefix+mask+
+                         bytes(b^mask[i%4] for i,b in enumerate(payload)))
+
+        send_frame(json.dumps(
+            {'id':1,'method':method,'params':params or {}},
+            separators=(',',':')).encode('utf-8'))
+        buffer=bytearray(rest)
+        def read_n(n):
+            while len(buffer)<n:
+                chunk=sock.recv(4096)
+                if not chunk:
+                    raise OSError('Browser closed the debugging socket.')
+                buffer.extend(chunk)
+            value=bytes(buffer[:n]);del buffer[:n]
+            return value
+        for _ in range(80):
+            b0,b1=read_n(2)
+            size=b1&127
+            if size==126:size=struct.unpack('!H',read_n(2))[0]
+            elif size==127:size=struct.unpack('!Q',read_n(8))[0]
+            if size>2_000_000:
+                raise ValueError('Browser message too large.')
+            mask=read_n(4) if b1&128 else None
+            payload=read_n(size)
+            if mask:
+                payload=bytes(b^mask[i%4] for i,b in enumerate(payload))
+            opcode=b0&15
+            if opcode==9:
+                send_frame(payload,10)
+                continue
+            if opcode==8:
+                raise OSError('Browser closed the debugging socket.')
+            if opcode!=1:
+                continue
+            reply=json.loads(payload.decode('utf-8'))
+            if reply.get('id')!=1:
+                continue
+            if 'error' in reply:
+                raise RuntimeError(str(reply['error'].get('message','CDP error'))[:120])
+            return reply.get('result',{})
+        raise TimeoutError('Browser did not answer the requested command.')
+
+
+# Intentionally no authentication fields or access to cookies/tokens.
+# Only inspect visible, text-labelled controls on the Habbo website.
+HABBO_AUTO_PLAY_JS=r'''(() => {
+  if (!/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'not_habbo'};
+  const login=Array.from(document.querySelectorAll('input[type=password]'))
+    .some(el => el.getClientRects().length > 0);
+  if (login) return {kind:'login'};
+  const choices=Array.from(document.querySelectorAll(
+    'a,button,[role=button],input[type=button],input[type=submit]'));
+  const targets=[
+    ['launch',/^(launch and log in|launch & log in|launch and login)$/i],
+    ['play-now',/^play now!?$/i],
+    ['play',/^play!?$/i],
+    ['download',/^download!?$/i]
+  ];
+  for (const [kind,re] of targets) {
+    for (const el of choices) {
+      const text=(el.innerText || el.value ||
+                  el.getAttribute('aria-label') || '').trim().replace(/\s+/g,' ');
+      const rect=el.getBoundingClientRect();
+      const style=getComputedStyle(el);
+      if (!re.test(text) || !rect.width || !rect.height ||
+          style.display==='none' || style.visibility==='hidden' ||
+          el.hasAttribute('disabled') || rect.bottom<0 ||
+          rect.top>innerHeight || rect.right<0 || rect.left>innerWidth)
+        continue;
+      return {kind, label:text, x:rect.left+rect.width/2,
+              y:rect.top+rect.height/2, page:location.pathname};
+    }
+  }
+  return {kind:'waiting',page:location.pathname};
+})()'''
+
+
+def account_inspect_play_page(websocket_url):
+    result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_AUTO_PLAY_JS,'returnByValue':True})
+    return result.get('result',{}).get('value',{'kind':'waiting'})
+
+
+def account_click_play_button(websocket_url,step):
+    """Send a trusted Chrome mouse click, not a JS .click() fake gesture."""
+    x,y=step['x'],step['y']
+    for kind in ('mousePressed','mouseReleased'):
+        account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+            'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
+
+
+def account_attempt_auto_play(debug_port,report):
+    """Move through saved-session Habbo pages; stop for a fresh login."""
+    previous=None
+    identical=0
+    for iteration in range(28):
+        page=account_habbo_page(debug_port)
+        if page is None:
+            time.sleep(0.6);continue
+        try:
+            step=account_inspect_play_page(page['webSocketDebuggerUrl'])
+        except (OSError,RuntimeError,ValueError,socket.timeout):
+            time.sleep(0.6);continue
+        kind=step.get('kind')
+        if kind=='login':
+            report('Sign in once in this account browser. '
+                   'Saved sessions can use Auto Play next time.')
+            return 'login'
+        if kind=='not_habbo':
+            return 'unknown'
+        if kind=='launch':
+            account_click_play_button(page['webSocketDebuggerUrl'],step)
+            report('Clicked Launch and log in. Approve any browser/Windows '
+                   'launcher permission prompt; then select Classic if asked.')
+            return 'launched'
+        if kind in ('play','play-now','download'):
+            identity=(page.get('url'),kind,step.get('page'))
+            if identity==previous:
+                identical+=1
+                if identical>=2:
+                    report('Habbo stayed on the same Play button. '
+                           'Click it manually if the browser blocked automation.')
+                    return 'stalled'
+            else:
+                identical=0
+            previous=identity
+            account_click_play_button(page['webSocketDebuggerUrl'],step)
+            report('Continuing through Habbo '+step.get('label','Play')+'...')
+            time.sleep(1.4)
+        else:
+            time.sleep(0.6)
+    report('Could not find the next Habbo launch button. '
+           'The website layout may have changed.')
+    return 'timeout'
+
+
+def account_select_classic_launcher(timeout=16):
+    """Click a named Classic button in a Habbo Launcher window if accessible.
+
+    This does not dismiss Windows permission prompts, enter login details,
+    or click controls in arbitrary windows. Falls back to manual Classic.
+    """
+    if os.name!='nt':
+        return False
+    script=r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$max=(Get-Date).AddSeconds(TIMEOUT_SECONDS)
+while ((Get-Date) -lt $max) {
+    $windows=$root.FindAll(
+       [System.Windows.Automation.TreeScope]::Children,
+       [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($window in $windows) {
+        $title=$window.Current.Name
+        if ($title -notmatch '(?i)(habbo.*launcher|launcher.*habbo)') {
+            continue
+        }
+        $controls=$window.FindAll(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($button in $controls) {
+            if ($button.Current.Name -ne 'Classic' -or
+                -not $button.Current.IsEnabled) { continue }
+            try {
+                $invoke=$button.GetCurrentPattern(
+                  [System.Windows.Automation.InvokePattern]::Pattern)
+                $invoke.Invoke()
+                Write-Output 'CLASSIC_CLICKED'
+                exit 0
+            } catch { }
+        }
+    }
+    Start-Sleep -Milliseconds 450
+}
+exit 2
+'''.replace('TIMEOUT_SECONDS',str(int(max(1,min(30,timeout)))))
+    encoded=base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+    flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+    try:
+        result=subprocess.run(
+            ['powershell.exe','-NoProfile','-NonInteractive',
+             '-EncodedCommand',encoded],
+            timeout=timeout+6,capture_output=True,text=True,
+            creationflags=flags)
+        return result.returncode==0 and 'CLASSIC_CLICKED' in result.stdout
+    except (OSError,subprocess.TimeoutExpired,ValueError):
+        return False
 
 
 def parse_coffee_group_names(raw):
@@ -1470,8 +1752,10 @@ class ChatOverlayApp:
         self.account_login_url_var=tk.StringVar(value='https://www.habbo.com/')
         self.account_port_var=tk.StringVar(value='')
         self.account_status_var=tk.StringVar(
-            value='Add accounts, then sign in using separate browser windows. '
-                  'One G-Earth extension is attached at a time.')
+            value='Add accounts, then sign in once. Auto Play reuses each saved '
+                  'browser session. One G-Earth extension is attached at a time.')
+        self._account_auto_running=False
+        self._account_auto_generation=0
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -1826,9 +2110,24 @@ class ChatOverlayApp:
                    command=self._account_use_port).pack(side='left',padx=(0,6))
         ttk.Button(actions,text='Check port',
                    command=self._account_check_port).pack(side='left')
+        autoplay=ttk.Frame(f,style='Panel.TFrame')
+        autoplay.pack(fill='x',pady=(0,9))
+        ttk.Button(autoplay,text='Auto Play selected',
+                   command=self._account_auto_play).pack(side='left',padx=(0,7))
+        ttk.Button(autoplay,text='Auto Play all saved accounts',
+                   command=lambda:self._account_auto_play(all_accounts=True)).pack(
+                       side='left')
         tk.Label(f,textvariable=self.account_status_var,
                  bg='#121a28',fg='#73c5ab',wraplength=620,
                  justify='left').pack(anchor='w',fill='x',pady=(0,9))
+        tk.Label(f,
+            text='Auto Play opens each saved login, clicks the Play/Launch '
+                 'controls and tries the Classic button in Habbo Launcher. '
+                 'First sign-in, verification challenges and Windows '
+                 'permission prompts may still require you. '
+                 'It does not create extra G-Earth proxies.',
+            fg='#8ea9c1',bg='#121a28',wraplength=620,
+            justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
             text='Packet isolation: This Companion instance attaches to ONE '
                  'G-Earth endpoint at a time. Separate endpoints require separate '
@@ -1955,7 +2254,9 @@ class ChatOverlayApp:
         folder=APP_DIR/'account_browser_profiles'/account['id']
         try:
             folder.mkdir(parents=True,exist_ok=True)
-            command=account_browser_command(browser,folder,account['url'])
+            command=account_browser_command(
+                browser,folder,account['url'],
+                account_browser_debug_port(account['id']))
             subprocess.Popen(command,cwd=str(browser.parent),
                              stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
         except (OSError,ValueError) as exc:
@@ -1965,6 +2266,112 @@ class ChatOverlayApp:
             f'{account["label"]}: opened an isolated browser login. '
             'Sign in on the website; Companion does not read your password. '
             'Browser login alone does not connect another G-Earth proxy.')
+
+    def _account_auto_play(self,all_accounts=False):
+        """One click per selected account or serially for all saved profiles."""
+        if self._account_auto_running:
+            self.account_status_var.set(
+                'Account launch already in progress. Finish it first.')
+            return
+        if all_accounts:
+            accounts=list(self._account_profiles)
+        else:
+            selected=self._account_selected()
+            if selected is None:return
+            accounts=[selected]
+        if not accounts:
+            self.account_status_var.set('Add at least one account first.')
+            return
+        if self.packet_started and not all_accounts:
+            account=accounts[0]
+            if account['port']!=self._account_attached_port:
+                self.account_status_var.set(
+                    'G-Earth is attached to a different account endpoint. '
+                    'Restart Companion before launching this account with '
+                    'packet control, to prevent mixed account traffic.')
+                return
+        if len({account_browser_debug_port(a['id']) for a in accounts})!=len(accounts):
+            self.account_status_var.set(
+                'Two account profiles share a browser control port. '
+                'Remove/re-add one profile before automation.')
+            return
+        if not self.packet_started and not all_accounts:
+            self._account_use_port()
+            if (accounts[0]['port']==9092
+                and not self._gearth_extension_port_responds(9092)):
+                self._start_integrated_engine()
+        self._account_auto_running=True
+        self._account_auto_generation+=1
+        generation=self._account_auto_generation
+        self.account_status_var.set(
+            'Opening saved login session(s) and checking Habbo Play/Launch. '
+            'Do not enter passwords into Companion.')
+        threading.Thread(
+            target=self._account_auto_worker,
+            args=(tuple(dict(a) for a in accounts),generation),
+            daemon=True).start()
+
+    def _account_auto_worker(self,accounts,generation):
+        def report(value):
+            self._packet_put(('account_auto_status',generation,str(value)[:350]))
+        try:
+            browser=account_login_browser()
+            if browser is None:
+                report('Brave/Chrome/Edge not found; install one first.')
+                return
+            for n,account in enumerate(accounts,1):
+                ident=account['id']
+                label=account['label']
+                folder=APP_DIR/'account_browser_profiles'/ident
+                debug_port=account_browser_debug_port(ident)
+                report(f'{n}/{len(accounts)}: starting {label} browser...')
+                folder.mkdir(parents=True,exist_ok=True)
+                try:
+                    account_browser_pages(debug_port)
+                    ready=True
+                except (OSError,ValueError,TimeoutError,
+                        urllib.error.URLError,UnicodeError):
+                    ready=False
+                if not ready:
+                    cmd=account_browser_command(browser,folder,account['url'],
+                                                debug_port)
+                    subprocess.Popen(
+                        cmd,cwd=str(browser.parent),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+                    for _ in range(28):
+                        time.sleep(0.45)
+                        try:
+                            account_browser_pages(debug_port)
+                            ready=True
+                            break
+                        except (OSError,ValueError,TimeoutError,
+                                urllib.error.URLError,UnicodeError):
+                            continue
+                if not ready:
+                    report(f'{label}: browser automation unavailable. '
+                           'Close older windows for this account and retry; '
+                           'it may have opened without control enabled.')
+                    break
+                result=account_attempt_auto_play(
+                    debug_port,lambda msg,name=label:report(f'{name}: {msg}'))
+                if result=='launched':
+                    report(f'{label}: website launch requested; '
+                           'checking for the native Classic button...')
+                    if account_select_classic_launcher(16):
+                        report(f'{label}: Classic selected automatically. '
+                               'G-Earth interception is not independently verified.')
+                    else:
+                        report(f'{label}: Habbo Launcher may require clicking '
+                               'Classic or approving an external-app prompt. '
+                               'Check the launcher window.')
+                        if len(accounts)>1:break
+                else:
+                    if len(accounts)>1:break
+        except Exception as exc:
+            report('Auto Play stopped: '+type(exc).__name__+': '+str(exc)[:150])
+        finally:
+            self._packet_put(('account_auto_finished',generation))
 
     def _account_use_port(self):
         account=self._account_selected()
@@ -4431,6 +4838,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='account_auto_status':
+                if item[1]==self._account_auto_generation:
+                    self.account_status_var.set(item[2])
+                continue
+            if item[0]=='account_auto_finished':
+                if item[1]==self._account_auto_generation:
+                    self._account_auto_running=False
+                continue
             if item[0]=='engine_diagnostic_done':
                 self._diagnostic_running=False
                 self._diagnostic_text=item[1]

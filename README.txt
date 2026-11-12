@@ -1,64 +1,71 @@
-HABBO COMPANION v1.1.29 — MULTIPLE HABBO LOGIN PROFILES
-=========================================================
+HABBO COMPANION v1.1.30 — ONE-CLICK ACCOUNT AUTO PLAY
+=====================================================
 
-NEW: Accounts tab — independent browser sign-ins for multiple Habbo
-accounts, plus an account-labelled G-Earth extension-port selector.
+The new Accounts tab has TWO additional buttons:
+  Auto Play selected
+  Auto Play all saved accounts
 
-To open several Habbo logins:
-1. Update Companion in the Updates tab to 1.1.29.
-2. Open the Accounts tab and click Add account for each login.
-3. Select an account, set its account label and login website URL,
-   and click Save changes.
-4. Click Open account login. Companion starts Brave (or Chrome/Edge)
-   with a private, dedicated browser user-data directory for that
-   account. Log in directly on Habbo's website.
-5. Repeat for other accounts. Browser cookies and sessions are not
-   shared between account profiles. Companion does NOT collect
-   usernames, passwords, cookies or authentication tokens.
+WHAT AUTO PLAY DOES
+===================
+1. Selects or launches that account's isolated Brave/Chrome/Edge
+   browser profile. Every profile keeps its own cookies and sign-in.
+2. If already signed into www.habbo.com, tries to follow the website's
+   visible Play Now / Play / Download / Launch and log in buttons
+   using trusted browser input events.
+3. After Launch and log in, tries to select the accessible Classic
+   button from an identified Habbo Launcher window via Windows
+   UI Automation. If the button is not accessible or the browser
+   prompts for permission to open an external app, asks you to
+   complete the step manually.
+4. If Auto Play all is selected, processes profiles SEQUENTIALLY,
+   not all at once. To protect account/login token identity, it stops
+   rather than triggering subsequent client launches if the previous
+   Classic launcher was not independently selected.
 
-The browser profile directories are:
-    %APPDATA%\HabboViewChat\account_browser_profiles\<internal ID>
+ONE-TIME SETUP
+==============
+1. Install v1.1.30 via Updates > Check online.
+2. In Accounts, add a label for each account (e.g. Main, Alt).
+3. Click Open account login and sign into Habbo in each profile ONCE.
+   You enter credentials ONLY into the official Habbo website.
+4. If the browser asks to allow Habbo Launcher to open, choose whether
+   to allow it yourself. Windows may remember your choice.
+5. Next time, click Auto Play selected or Auto Play all saved accounts
+   to reuse the browser's signed-in sessions.
 
-Removing an account from the list DOES NOT delete its browser data.
-Keep these directories private because browsers store session cookies.
+If Habbo requests a new login or two-factor verification, Auto Play
+stops and asks you to finish the sign-in in the matching browser.
+Companion does NOT collect, store or autofill usernames, passwords,
+two-factor codes, tokens or session cookies.
 
-G-EARTH PACKET CONNECTIONS
-=========================
-- Each account has an optional independent G-Earth extension-port
-  assignment (e.g. main=9092, alternate=9093). Ports must be unique.
-- "Check port" shows whether a local socket is listening there; it
-  does NOT prove the G-Earth engine is connected to the account.
-- "Use selected G-Earth port" changes the ONE packet-tools endpoint
-  that this instance of Companion uses, provided it is not currently
-  attached to a different endpoint. Changing the active endpoint while
-  connected is refused to avoid mixing packets and account identities.
-- Separate accounts must have independently configured G-Earth
-  instances/proxies to be intercepted separately. Account browser
-  login windows by themselves do NOT spawn additional proxies.
-- The shipped G-Earth AIR proxy and the existing Companion packet
-  worker are SINGLE-CONNECTION systems. This update does NOT make one
-  G-Earth engine intercept multiple simultaneously connected clients
-  or safely launch multiple AIR clients on the same hotel server/port.
-  If the packet tools are already attached, restart Companion and
-  select another port before attaching that account.
-- No password fields or automated account sign-in are included.
+LOCAL BROWSER AUTOMATION SECURITY
+=================================
+For browser control Companion starts each dedicated Chromium profile
+with a local 127.0.0.1 DevTools endpoint bound to a stable profile
+specific port. This endpoint is accessible to other software on the
+same PC. Don't use these profiles for unrelated sensitive browsing;
+close the profile windows when finished. Existing browser windows
+created by pre-v1.1.30 versions may need to be closed once to restart
+with local automation enabled. No remote debugging connection is made
+to an external IP address.
 
-This is a practical first phase for managing separate logins and
-endpoint configurations in one window. Simultaneously intercepting
-multiple AIR clients would require upstream G-Earth multi-proxy
-support and independent per-account packet workers.
+G-EARTH LIMITATION
+==================
+Auto Play manages BROWSER sign-in and desktop launch, not the
+G-Earth proxy architecture. The current Companion session can only
+intercept ONE G-Earth extension connection at a time. Multiple browser
+logins and multiple AIR clients are not automatically multiple G-Earth
+proxies. A second account using a different extension port still
+needs its own independently working proxy setup. The feature refuses
+to silently switch between already attached G-Earth packet sessions.
+The ordinary managed engine is started automatically when supported
+for the selected account's default extension port 9092.
 
-PREVIOUS FEATURES PRESERVED
-===========================
-- Coffee Pass loop with requested delay down to 0.0001 seconds;
-  real Tk event-loop scheduling still has >=1ms floor.
-- Complete loop cycles=0 runs until STOP.
-- Auto-saved CSV and summary recording; own-avatar room-index repair.
-- Optional verified pickup mode, finite 3-cycle speed testing,
-  extra coffee/bookcase sources and opt-in group rotation.
-- Original Habbo PNG chat bubble images, whisper-right alignment,
-  chat overlay, packet viewer, and the one-click online updater.
+Other features continue as before: 0.0001s requested coffee-delay
+input (Tk minimum 1ms), cycles=0 until STOP, automatic CSV summaries,
+confirmed hand-item updates, account ID/room-index decoding, chat
+bubble PNG preservation, right-hand whispers and in-app updates.
 
-Install through Updates > Check online. Automated tests are run in
-GitHub Actions; multi-account browser/G-Earth behavior needs real
-Windows/client verification.
+This update passed offline unit tests but requires real Windows/Habbo
+website/client testing to confirm the current page labels and that
+the Habbo Launcher exposes a Classic button to Windows accessibility.
