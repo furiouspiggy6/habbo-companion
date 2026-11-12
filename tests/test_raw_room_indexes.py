@@ -5,6 +5,7 @@ a valid roster can fail an old full-entity parser even when the prefix is
 still valid. Account ID != room index.
 """
 import ast
+import re
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ CODE=SOURCE.read_text(encoding='utf-8')
 TREE=ast.parse(CODE)
 FN=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
         and n.name=='room_users_from_binary_prefixes')
-ns={}
+ns={'re':re}
 exec(compile(ast.Module(body=[FN],type_ignores=[]),str(SOURCE),'exec'),ns)
 parse=ns['room_users_from_binary_prefixes']
 
