@@ -2491,7 +2491,7 @@ class ChatOverlayApp:
         if not accounts:
             self.account_status_var.set('Add at least one account first.')
             return
-        if self.packet_started and not all_accounts:
+        if self.packet_started and not all_accounts and not login_only:
             account=accounts[0]
             if account['port']!=self._account_attached_port:
                 self.account_status_var.set(
