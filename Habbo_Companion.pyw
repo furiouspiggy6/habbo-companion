@@ -2537,6 +2537,7 @@ class ChatOverlayApp:
             self._packet_put(('account_auto_status',generation,
                               (str(value)+packet_note)[:350]))
 
+        prelaunched=set()
         def ready_browser(account,browser):
             ident=account['id']
             folder=APP_DIR/'account_browser_profiles'/ident
@@ -2548,10 +2549,13 @@ class ChatOverlayApp:
             except (OSError,ValueError,TimeoutError,
                     urllib.error.URLError,UnicodeError):
                 pass
-            cmd=account_browser_command(browser,folder,account['url'],debug_port)
-            subprocess.Popen(cmd,cwd=str(browser.parent),
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL)
+            # Avoid opening a duplicate tab/window for a profile that was
+            # already started during the batch browser-open phase.
+            if ident not in prelaunched:
+                cmd=account_browser_command(browser,folder,account['url'],debug_port)
+                subprocess.Popen(cmd,cwd=str(browser.parent),
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
             for _ in range(28):
                 time.sleep(0.45)
                 try:
@@ -2570,10 +2574,42 @@ class ChatOverlayApp:
             authenticated=[]
             failures=[]
             total=len(accounts)
-            # Phase 1: ensure each profile is signed in. This also opens all
-            # requested browser windows before any desktop launcher work begins.
+            # Phase 1: start ALL separate browsers immediately. The previous
+            # loop did not open Alt until Main finished all login polling.
             for n,account in enumerate(accounts,1):
                 label=account['label']
+                report(f'Opening browser {n}/{total}: {label}...')
+                try:
+                    ident=account['id']
+                    folder=APP_DIR/'account_browser_profiles'/ident
+                    folder.mkdir(parents=True,exist_ok=True)
+                    port=account_browser_debug_port(ident)
+                    try:
+                        account_browser_pages(port)
+                        report(f'{label}: its existing isolated browser is open.')
+                        continue
+                    except (OSError,ValueError,TimeoutError,
+                            urllib.error.URLError,UnicodeError):
+                        pass
+                    cmd=account_browser_command(browser,folder,account['url'],port)
+                    subprocess.Popen(cmd,cwd=str(browser.parent),
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL)
+                    prelaunched.add(ident)
+                    report(f'{label}: separate browser launch requested.')
+                except (OSError,ValueError,TimeoutError) as exc:
+                    failures.append(label)
+                    report(f'{label}: browser launch error '
+                           f'({type(exc).__name__}); trying other accounts.')
+            report(f'Browser launch phase finished ({total} profiles considered). '
+                   'Checking sign-ins one by one next.')
+            # Phase 2: wait for each browser and authenticate. Every other
+            # separate browser was already requested before this potentially
+            # long per-account stage begins.
+            for n,account in enumerate(accounts,1):
+                label=account['label']
+                if label in failures:
+                    continue
                 report(f'{n}/{total}: checking {label} browser login...')
                 try:
                     debug_port=ready_browser(account,browser)
@@ -2613,7 +2649,7 @@ class ChatOverlayApp:
                        'account browser and check the sign-in screen.')
                 return
 
-            # Phase 2: launch Classic, but never allow an unresolved native
+            # Phase 3: launch Classic, but never allow an unresolved native
             # launcher window to consume a different account's login ticket.
             attempted=0
             classic_selected=0
