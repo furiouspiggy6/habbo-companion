@@ -1929,6 +1929,7 @@ class ChatOverlayApp:
                   'Open account login or Auto Play. One G-Earth endpoint at a time.')
         self._account_auto_running=False
         self._account_auto_generation=0
+        self._account_run_states={}
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -2251,13 +2252,13 @@ class ChatOverlayApp:
         grid=ttk.Frame(f,style='Panel.TFrame')
         grid.pack(fill='x',pady=(0,9))
         self.account_table=ttk.Treeview(
-            grid,columns=('name','port','url'),show='headings',height=7,
+            grid,columns=('name','port','launch_state'),show='headings',height=7,
             selectmode='browse')
         for key,heading,width in (
-            ('name','Account',160),('port','G-Earth port',100),
-            ('url','Login URL',315)):
+            ('name','Account',155),('port','G-Earth port',90),
+            ('launch_state','Browser / Classic status',340)):
             self.account_table.heading(key,text=heading)
-            self.account_table.column(key,width=width,stretch=(key=='url'))
+            self.account_table.column(key,width=width,stretch=(key=='launch_state'))
         self.account_table.pack(fill='x')
         self.account_table.bind('<<TreeviewSelect>>',self._account_on_select)
         for field,var in (
@@ -2337,7 +2338,8 @@ class ChatOverlayApp:
         for item in self._account_profiles:
             name=item['label']+(' (active)' if item['id']==self._account_active_id else '')
             table.insert('', 'end',iid=item['id'],
-                         values=(name,item['port'],item['url']))
+                         values=(name,item['port'],
+                                  self._account_run_states.get(item['id'],'Not started')))
         if select_id and table.exists(select_id):
             table.selection_set(select_id)
             table.focus(select_id)
@@ -2517,8 +2519,11 @@ class ChatOverlayApp:
             if active_packet_port is not None and
             any(a['port']!=active_packet_port for a in accounts)
             else '')
+        for account in accounts:
+            self._account_run_states[account['id']]='Queued'
+        self._accounts_render()
         self.account_status_var.set(
-            'Opening isolated browser session(s); using saved login if needed.'
+            f'Starting all {len(accounts)} browser profile(s) before sign-in.'
             +packet_note)
         threading.Thread(
             target=self._account_auto_worker,
@@ -2536,6 +2541,10 @@ class ChatOverlayApp:
         def report(value):
             self._packet_put(('account_auto_status',generation,
                               (str(value)+packet_note)[:350]))
+
+        def stage(account,value):
+            self._packet_put(('account_auto_stage',generation,
+                              account['id'],str(value)[:95]))
 
         prelaunched=set()
         def ready_browser(account,browser):
@@ -2578,6 +2587,7 @@ class ChatOverlayApp:
             # loop did not open Alt until Main finished all login polling.
             for n,account in enumerate(accounts,1):
                 label=account['label']
+                stage(account,'Opening browser')
                 report(f'Opening browser {n}/{total}: {label}...')
                 try:
                     ident=account['id']
@@ -2586,6 +2596,7 @@ class ChatOverlayApp:
                     port=account_browser_debug_port(ident)
                     try:
                         account_browser_pages(port)
+                        stage(account,'Browser already open')
                         report(f'{label}: its existing isolated browser is open.')
                         continue
                     except (OSError,ValueError,TimeoutError,
@@ -2596,9 +2607,11 @@ class ChatOverlayApp:
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
                     prelaunched.add(ident)
+                    stage(account,'Browser starting')
                     report(f'{label}: separate browser launch requested.')
                 except (OSError,ValueError,TimeoutError) as exc:
                     failures.append(label)
+                    stage(account,'Browser launch failed')
                     report(f'{label}: browser launch error '
                            f'({type(exc).__name__}); trying other accounts.')
             report(f'Browser launch phase finished ({total} profiles considered). '
@@ -2610,24 +2623,28 @@ class ChatOverlayApp:
                 label=account['label']
                 if label in failures:
                     continue
+                stage(account,'Checking website login')
                 report(f'{n}/{total}: checking {label} browser login...')
                 try:
                     debug_port=ready_browser(account,browser)
                 except (OSError,ValueError,TimeoutError) as exc:
                     report(f'{label}: could not open browser: '+str(exc)[:130])
                     failures.append(label)
+                    stage(account,'Browser automation unavailable')
                     continue
                 if debug_port is None:
                     report(f'{label}: browser opened, but local browser control '
                            'is unavailable. Close old dedicated account windows '
                            'and retry; other accounts will still be checked.')
                     failures.append(label)
+                    stage(account,'Browser control unavailable')
                     continue
                 try:
                     credentials=account_saved_login_read(account['id'])
                 except (OSError,ValueError) as exc:
                     report(f'{label}: saved login unavailable: '+str(exc)[:130])
                     failures.append(label)
+                    stage(account,'Saved login unavailable')
                     continue
                 result=account_attempt_auto_play(
                     debug_port,
@@ -2635,9 +2652,11 @@ class ChatOverlayApp:
                     credentials=credentials,login_only=True)
                 if result=='signed_in':
                     authenticated.append((account,debug_port,credentials))
+                    stage(account,'Website signed in')
                     report(f'{n}/{total}: {label} website login ready.')
                 else:
                     failures.append(label)
+                    stage(account,'Sign-in needs attention ('+str(result)+')')
                     report(f'{n}/{total}: {label} website login not confirmed '
                            f'({result}); continuing with remaining accounts.')
             if login_only:
@@ -2656,6 +2675,7 @@ class ChatOverlayApp:
             unresolved=False
             for n,(account,debug_port,credentials) in enumerate(authenticated,1):
                 label=account['label']
+                stage(account,'Requesting Classic launch')
                 report(f'{n}/{len(authenticated)}: launching {label} Classic...')
                 result=account_attempt_auto_play(
                     debug_port,
@@ -2665,16 +2685,22 @@ class ChatOverlayApp:
                     report(f'{label}: Classic launch not requested ({result}); '
                            'checking remaining accounts.')
                     failures.append(label)
+                    stage(account,'Classic launch blocked ('+str(result)+')')
                     continue
                 attempted+=1
                 report(f'{label}: website launch requested; checking '
                        'for the native Classic button...')
+                stage(account,'Finding native Classic button')
                 if account_select_classic_launcher(16):
                     classic_selected+=1
+                    stage(account,'Classic selected; client unverified')
                     report(f'{label}: Classic selected. G-Earth proxy '
                            'interception has NOT been verified for this avatar.')
                 else:
                     unresolved=True
+                    stage(account,'Needs manual Classic / permission')
+                    for future,_,_ in authenticated[n:]:
+                        stage(future,'Waiting: previous launcher unresolved')
                     report(f'{label}: launcher requires manual Classic selection '
                            'or a browser permission prompt. Pausing remaining '
                            'native launches to avoid mixing account login tickets. '
@@ -5159,6 +5185,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='account_auto_status':
                 if item[1]==self._account_auto_generation:
                     self.account_status_var.set(item[2])
+                continue
+            if item[0]=='account_auto_stage':
+                if item[1]==self._account_auto_generation:
+                    self._account_run_states[item[2]]=item[3]
+                    if self.account_table.exists(item[2]):
+                        self.account_table.set(item[2],'launch_state',item[3])
                 continue
             if item[0]=='account_auto_finished':
                 if item[1]==self._account_auto_generation:
