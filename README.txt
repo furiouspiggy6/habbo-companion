@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.33 — AUTO PLAY ALL LOGIN PREFLIGHT
+HABBO COMPANION v1.1.34 — OPEN ALL BROWSERS FIRST
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -131,3 +131,35 @@ port conflicts. This version deliberately does NOT claim to provide
 independent G-Earth interception for multiple accounts.
 
 Manual verification on a live Windows Habbo install is still necessary.
+
+
+v1.1.34 — ALL BROWSER WINDOWS START BEFORE LOGIN
+===============================================
+Fixes a key delay in the prior Auto Play all order. v1.1.33 started
+Account 1's browser and then checked its sign-in (potentially waiting
+through many authentication polls) BEFORE it opened Account 2.
+
+Auto Play all now attempts to start the isolated browser for EVERY
+saved account BEFORE entering the per-account sign-in and Classic flow.
+Existing profile windows are reused rather than launching duplicates.
+This is not a guarantee that two windows will be visible side-by-side:
+existing windows may overlap or be minimized.
+
+The Accounts table includes a Browser / Classic status column. You can
+see independently whether an account is:
+- Opening browser / Browser already open
+- Checking website login / Website signed in
+- Sign-in needs attention / Browser control unavailable
+- Requesting Classic launch / Classic selected; client unverified
+- Needs manual Classic / permission; a later launch is paused
+
+Where the native launcher requires manual permission or Classic selection,
+the batch still pauses subsequent *native* client launches to avoid
+accidentally consuming a different account's login ticket. Every browser
+will already have been opened before that point. The status column shows
+which account is waiting. Neither a website login nor a clicked Classic
+button establishes a verified independent G-Earth packet interception.
+
+The G-Earth per-game-client proxy routing described in issue #24 is
+still outstanding. Different extension ports (9092/9093) are not a
+solution by themselves.
