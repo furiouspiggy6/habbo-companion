@@ -2012,6 +2012,8 @@ class ChatOverlayApp:
         self._account_auto_running=False
         self._account_auto_generation=0
         self._account_run_states={}
+        self._account_remaining_ids=()
+        self._account_resume_requires_manual=False
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -2388,15 +2390,18 @@ class ChatOverlayApp:
         ttk.Button(autoplay,text='Auto Play all saved accounts',
                    command=lambda:self._account_auto_play(all_accounts=True)).pack(
                        side='left')
+        ttk.Button(f,text='Continue unfinished accounts',
+                   command=self._account_resume_pending).pack(
+                       anchor='w',pady=(0,8))
         tk.Label(f,textvariable=self.account_status_var,
                  bg='#121a28',fg='#73c5ab',wraplength=620,
                  justify='left').pack(anchor='w',fill='x',pady=(0,9))
         tk.Label(f,
-            text='Auto Play all first opens/checks EVERY saved browser profile '
-                 'and then tries Classic launches one by one. If Classic or a '
-                 'browser permission prompt needs manual action, additional '
-                 'native launches pause to protect account identity. G-Earth '
-                 'routing to multiple game clients is NOT yet implemented.',
+            text='Auto Play all opens/checks each account browser, then tries '
+                 'Classic one at a time. If Classic or an external-app prompt '
+                 'needs manual action, finish it and choose Continue unfinished '
+                 'accounts. Already-requested Classic launches will NOT be '
+                 'replayed. This does NOT enable multi-client G-Earth routing.',
             fg='#8ea9c1',bg='#121a28',wraplength=620,
             justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
@@ -2562,13 +2567,39 @@ class ChatOverlayApp:
         """Open just this browser profile and sign it in using the local vault."""
         self._account_auto_play(login_only=True)
 
-    def _account_auto_play(self,all_accounts=False,login_only=False):
-        """One click per selected account or serially for all saved profiles."""
+    def _account_resume_pending(self):
+        """Retry only account IDs not yet sent to the native Classic launcher."""
+        if self._account_auto_running:
+            self.account_status_var.set(
+                'An account launch is still running; finish it before continuing.')
+            return
+        if not self._account_remaining_ids:
+            self.account_status_var.set(
+                'No unfinished accounts are queued. Use Auto Play all to '
+                'start a fresh batch, or select one account to retry.')
+            return
+        if self._account_resume_requires_manual:
+            if not messagebox.askyesno(
+                'Continue remaining accounts',
+                'A previous account reached the Habbo Launcher, but Companion '
+                'could not confirm Classic was selected. Finish that launcher '
+                'or its browser permission prompt before proceeding. '
+                'Have you completed that manual step?',
+                parent=self.root):
+                return
+        self._account_auto_play(remaining_only=True)
+
+    def _account_auto_play(self,all_accounts=False,login_only=False,
+                           remaining_only=False):
+        """Open selected, all or only unfinished browser/Classic profiles."""
         if self._account_auto_running:
             self.account_status_var.set(
                 'Account launch already in progress. Finish it first.')
             return
-        if all_accounts:
+        if remaining_only:
+            keep=set(self._account_remaining_ids)
+            accounts=[a for a in self._account_profiles if a['id'] in keep]
+        elif all_accounts:
             accounts=list(self._account_profiles)
         else:
             selected=self._account_selected()
@@ -2587,11 +2618,14 @@ class ChatOverlayApp:
                 'Two account profiles share a browser control port. '
                 'Remove/re-add one profile before automation.')
             return
-        if not login_only and not self.packet_started and not all_accounts:
+        if not login_only and not self.packet_started and not all_accounts and not remaining_only:
             self._account_use_port()
             if (accounts[0]['port']==9092
                 and not self._gearth_extension_port_responds(9092)):
                 self._start_integrated_engine()
+        if not login_only:
+            self._account_remaining_ids=()
+            self._account_resume_requires_manual=False
         self._account_auto_running=True
         self._account_auto_generation+=1
         generation=self._account_auto_generation
@@ -2622,7 +2656,16 @@ class ChatOverlayApp:
         """
         def report(value):
             self._packet_put(('account_auto_status',generation,
-                              (str(value)+packet_note)[:350]))
+                              (str(value)+packet_note)[:650]))
+
+        def queue_unfinished(attempted_ids,manual_step=False):
+            # No profile passwords, authentication cookies or launcher tickets
+            # are persisted in the resume queue. Only existing opaque IDs.
+            remainder=tuple(a['id'] for a in accounts
+                            if a['id'] not in attempted_ids)
+            self._packet_put(('account_remaining',generation,remainder,
+                              bool(manual_step)))
+            return remainder
 
         def stage(account,value):
             self._packet_put(('account_auto_stage',generation,
@@ -2746,15 +2789,17 @@ class ChatOverlayApp:
                        f'ready. {len(failures)} need attention.')
                 return
             if not authenticated:
-                report('No account logins confirmed. Check the Browser / Classic '
-                       'status beside each account: missing browser control, '
-                       'verification required, or login page not recognised. '
-                       'A blank saved-password field is normal.')
+                if not login_only:
+                    queue_unfinished(set())
+                report('No website logins confirmed. Check each account status '
+                       '(e.g. sign-in/verification, or browser control), then '
+                       'select Continue unfinished accounts.')
                 return
 
             # Phase 3: launch Classic, but never allow an unresolved native
             # launcher window to consume a different account's login ticket.
             attempted=0
+            attempted_ids=set()
             classic_selected=0
             unresolved=False
             for n,(account,debug_port,credentials) in enumerate(authenticated,1):
@@ -2772,6 +2817,7 @@ class ChatOverlayApp:
                     stage(account,'Classic launch blocked ('+str(result)+')')
                     continue
                 attempted+=1
+                attempted_ids.add(account['id'])
                 report(f'{label}: website launch requested; checking '
                        'for the native Classic button...')
                 stage(account,'Finding native Classic button')
@@ -2790,12 +2836,17 @@ class ChatOverlayApp:
                            'native launches to avoid mixing account login tickets. '
                            'All independent browser logins were checked.')
                     break
-            report(f'Batch complete: {len(authenticated)}/{total} website logins '
-                   f'ready; {classic_selected} Classic button selection(s) '
-                   f'confirmed, {attempted} launch request(s). '
-                   + ('Manual launcher action needed; remaining native launches '
-                      'paused to protect account identity. ' if unresolved else '')
-                   + 'G-Earth routing for additional accounts is NOT automatic.')
+            unfinished=queue_unfinished(attempted_ids,unresolved)
+            report(f'Batch: {len(authenticated)}/{total} website logins; '
+                   f'{attempted} native launch request(s); '
+                   f'{classic_selected} Classic selection(s); '
+                   f'{len(unfinished)} unfinished. '
+                   + ('Finish the outstanding launcher/permission prompt, '
+                      'then click Continue unfinished accounts. '
+                      if unresolved and unfinished else
+                      ('Complete missing sign-ins, then click Continue '
+                       'unfinished accounts. ' if unfinished else ''))
+                   + 'No multi-account G-Earth packet routing yet.')
         except Exception as exc:
             report('Auto Play stopped: '+type(exc).__name__+': '+str(exc)[:150])
         finally:
@@ -5275,6 +5326,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._account_run_states[item[2]]=item[3]
                     if self.account_table.exists(item[2]):
                         self.account_table.set(item[2],'launch_state',item[3])
+                continue
+            if item[0]=='account_remaining':
+                if item[1]==self._account_auto_generation:
+                    self._account_remaining_ids=tuple(item[2])
+                    self._account_resume_requires_manual=bool(item[3])
                 continue
             if item[0]=='account_auto_finished':
                 if item[1]==self._account_auto_generation:
