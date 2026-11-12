@@ -104,7 +104,7 @@ class AccountAutoPlayTests(unittest.TestCase):
         self.assertIn('Sign in once',outputs[-1])
 
     def test_no_cross_account_port_switch_and_powershell_only_known_window(self):
-        self.assertIn('account_browser_debug_port(account[',CODE)
+        self.assertIn("account_browser_debug_port(a['id'])",CODE)
         self.assertIn("self._account_auto_running=True",CODE)
         self.assertIn("text='Auto Play selected'",CODE)
         self.assertIn("text='Auto Play all saved accounts'",CODE)

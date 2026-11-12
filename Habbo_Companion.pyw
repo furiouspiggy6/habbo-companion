@@ -3,7 +3,7 @@
 
 Works with the companion patched HabboAir.swf for chat feeds. Optional G-Earth
 extension integration and per-profile local browser automation use network
-sockets on the same machine. Account passwords are never handled by Companion.
+sockets on the same machine. Saved passwords are held in the local Windows Credential Manager vault only.
 """
 from __future__ import annotations
 import ctypes
@@ -216,6 +216,93 @@ def normalize_habbo_accounts(profiles):
         if len(valid)==12:
             break
     return valid
+
+
+# Credentials stay in the current Windows user's Credential Manager vault.
+# settings.json, GitHub releases and browser command lines never contain secrets.
+class _HabboCredential(ctypes.Structure):
+    _fields_=[
+        ('Flags',wintypes.DWORD),('Type',wintypes.DWORD),
+        ('TargetName',wintypes.LPWSTR),('Comment',wintypes.LPWSTR),
+        ('LastWritten',wintypes.FILETIME),('CredentialBlobSize',wintypes.DWORD),
+        ('CredentialBlob',ctypes.POINTER(ctypes.c_ubyte)),
+        ('Persist',wintypes.DWORD),('AttributeCount',wintypes.DWORD),
+        ('Attributes',ctypes.c_void_p),('TargetAlias',wintypes.LPWSTR),
+        ('UserName',wintypes.LPWSTR)]
+
+
+def _account_credential_target(account_id):
+    ident=str(account_id).lower()
+    if not re.fullmatch(r'[a-f0-9]{12}',ident):
+        raise ValueError('Invalid account profile identifier.')
+    return 'HabboCompanion:login:'+ident
+
+
+def _account_credential_api():
+    if os.name!='nt':
+        raise OSError('Windows Credential Manager requires Windows.')
+    api=ctypes.WinDLL('advapi32',use_last_error=True)
+    ptr=ctypes.POINTER(_HabboCredential)
+    api.CredWriteW.argtypes=[ptr,wintypes.DWORD]
+    api.CredWriteW.restype=wintypes.BOOL
+    api.CredReadW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,
+                             wintypes.DWORD,ctypes.POINTER(ptr)]
+    api.CredReadW.restype=wintypes.BOOL
+    api.CredDeleteW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD]
+    api.CredDeleteW.restype=wintypes.BOOL
+    api.CredFree.argtypes=[ctypes.c_void_p]
+    api.CredFree.restype=None
+    return api
+
+
+def account_saved_login_write(account_id,email,password):
+    """Persist only in the per-user Windows Credential Manager vault."""
+    target=_account_credential_target(account_id)
+    email=str(email).strip()
+    password=str(password)
+    if not email or '@' not in email or any(ch.isspace() for ch in email):
+        raise ValueError('Enter the email address used to sign into Habbo.')
+    blob=password.encode('utf-16-le')
+    if not password or len(blob)>512:
+        raise ValueError('Enter a password up to 256 characters.')
+    api=_account_credential_api()
+    payload=ctypes.create_string_buffer(blob,len(blob))
+    record=_HabboCredential()
+    record.Type=1  # CRED_TYPE_GENERIC
+    record.TargetName=target
+    record.UserName=email
+    record.CredentialBlobSize=len(blob)
+    record.CredentialBlob=ctypes.cast(payload,ctypes.POINTER(ctypes.c_ubyte))
+    record.Persist=2  # CRED_PERSIST_LOCAL_MACHINE, scoped to Windows user
+    if not api.CredWriteW(ctypes.byref(record),0):
+        raise OSError('Windows could not save this login in Credential Manager.')
+
+
+def account_saved_login_read(account_id):
+    """Return (email,password) in memory only, or None when not saved."""
+    api=_account_credential_api()
+    output=ctypes.POINTER(_HabboCredential)()
+    if not api.CredReadW(_account_credential_target(account_id),1,0,
+                         ctypes.byref(output)):
+        if ctypes.get_last_error()==1168:  # ERROR_NOT_FOUND
+            return None
+        raise OSError('Windows could not read this saved login.')
+    try:
+        record=output.contents
+        size=record.CredentialBlobSize
+        if size>512 or size%2 or not record.CredentialBlob:
+            raise ValueError('Saved login has an invalid credential value.')
+        return (record.UserName or '',
+                ctypes.string_at(record.CredentialBlob,size).decode('utf-16-le'))
+    finally:
+        api.CredFree(ctypes.cast(output,ctypes.c_void_p))
+
+
+def account_saved_login_delete(account_id):
+    api=_account_credential_api()
+    if not api.CredDeleteW(_account_credential_target(account_id),1,0):
+        if ctypes.get_last_error()!=1168:
+            raise OSError('Windows could not forget this saved login.')
 
 
 def account_login_browser():
@@ -432,10 +519,68 @@ def account_click_play_button(websocket_url,step):
             'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
 
 
-def account_attempt_auto_play(debug_port,report):
-    """Move through saved-session Habbo pages; stop for a fresh login."""
+# Inspect only visible login form controls on Habbo itself; never read existing
+# password field values, browser cookies or session tokens.
+HABBO_LOGIN_FIELDS_JS=r'''(() => {
+  if (!/^https:$/.test(location.protocol) ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'not_habbo'};
+  const visible=el => {
+    if (!el || el.disabled) return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' &&
+      s.visibility!=='hidden' && r.left<innerWidth && r.top<innerHeight &&
+      r.right>0 && r.bottom>0;
+  };
+  const password=Array.from(document.querySelectorAll(
+      'input[type=password]')).find(visible);
+  const email=Array.from(document.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).find(visible);
+  const form=password && password.closest('form');
+  const buttons=Array.from((form || document).querySelectorAll(
+      'button,input[type=submit],[role=button]')).filter(visible);
+  const submit=buttons.find(el =>
+      /^(let'?s go!?|sign in|log in|login|continue)$/i.test(
+          (el.innerText || el.value || el.getAttribute('aria-label') || '').trim()))
+      || buttons.find(el => el.type==='submit');
+  if (!email || !password || !submit) return {kind:'not_ready'};
+  const point=el => {
+    const r=el.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2};
+  };
+  return {kind:'form',email:point(email),password:point(password),
+          submit:point(submit)};
+})()'''
+
+
+def account_submit_saved_login(websocket_url,email,password):
+    """Type into the official Habbo login, never into unrelated websites."""
+    inspection=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
+    fields=inspection.get('result',{}).get('value',{})
+    if fields.get('kind')!='form':
+        return False
+    for field,value in (('email',email),('password',password)):
+        account_click_play_button(websocket_url,fields[field])
+        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+            'type':'keyDown','key':'a','code':'KeyA',
+            'windowsVirtualKeyCode':65,'modifiers':2})
+        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+            'type':'keyUp','key':'a','code':'KeyA',
+            'windowsVirtualKeyCode':65,'modifiers':2})
+        # Text is sent to loopback Chrome DevTools, never a URL, shell or log.
+        account_cdp_call(websocket_url,'Input.insertText',{'text':value})
+    account_click_play_button(websocket_url,fields['submit'])
+    return True
+
+
+def account_attempt_auto_play(debug_port,report,credentials=None,login_only=False):
+    """Sign into an isolated profile if saved; optionally continue to Classic."""
     previous=None
     identical=0
+    login_submitted=False
+    login_waits=0
     for iteration in range(28):
         page=account_habbo_page(debug_port)
         if page is None:
@@ -446,9 +591,30 @@ def account_attempt_auto_play(debug_port,report):
             time.sleep(0.6);continue
         kind=step.get('kind')
         if kind=='login':
-            report('Sign in once in this account browser. '
-                   'Saved sessions can use Auto Play next time.')
-            return 'login'
+            if not credentials:
+                report('Sign in once manually or save email/password in the '
+                       'Accounts tab for automatic sign-in.')
+                return 'login'
+            if login_submitted:
+                login_waits+=1
+                if login_waits>=4:
+                    report('Habbo still shows the login form. Check your '
+                           'password, CAPTCHA or verification manually.')
+                    return 'login'
+                time.sleep(1.2)
+                continue
+            if not account_submit_saved_login(
+                    page['webSocketDebuggerUrl'],credentials[0],credentials[1]):
+                report('Habbo login fields changed. Sign in manually this time.')
+                return 'login'
+            login_submitted=True
+            report('Submitted saved login for this account. '
+                   'Checking whether Habbo accepted it...')
+            time.sleep(1.6)
+            continue
+        if login_only and kind in ('play','play-now','launch'):
+            report('Habbo session is signed in. Use Auto Play to launch Classic.')
+            return 'signed_in'
         if kind=='not_habbo':
             return 'unknown'
         if kind=='launch':
@@ -472,6 +638,9 @@ def account_attempt_auto_play(debug_port,report):
             time.sleep(1.4)
         else:
             time.sleep(0.6)
+    if login_only:
+        report('Habbo sign-in status could not be verified. Check the browser.')
+        return 'waiting'
     report('Could not find the next Habbo launch button. '
            'The website layout may have changed.')
     return 'timeout'
@@ -1751,9 +1920,11 @@ class ChatOverlayApp:
         self.account_label_var=tk.StringVar(value='')
         self.account_login_url_var=tk.StringVar(value='https://www.habbo.com/')
         self.account_port_var=tk.StringVar(value='')
+        self.account_email_var=tk.StringVar(value='')
+        self.account_password_var=tk.StringVar(value='')
         self.account_status_var=tk.StringVar(
-            value='Add accounts, then sign in once. Auto Play reuses each saved '
-                  'browser session. One G-Earth extension is attached at a time.')
+            value='Save each account login securely on this PC, then use '
+                  'Open account login or Auto Play. One G-Earth endpoint at a time.')
         self._account_auto_running=False
         self._account_auto_generation=0
         # Original Habbo artwork is mandatory. Older settings may have saved
@@ -2069,9 +2240,10 @@ class ChatOverlayApp:
         tk.Label(f,text='ACCOUNT SESSIONS',font=('Segoe UI Semibold',18),
                  fg='#e6f1ff',bg='#121a28').pack(anchor='w',pady=(0,8))
         tk.Label(f,
-            text='Each account opens in its own Brave/Chromium profile so sign-ins '
-                 'and cookies stay separate. Login happens on the website; '
-                 'Companion never asks for or saves passwords.',
+            text='Each account uses separate Brave/Chromium cookies. '
+                 'Save its email and password below for automatic website sign-in. '
+                 'Passwords are kept in your Windows Credential Manager, '
+                 'not settings.json or GitHub.',
             fg='#9db7cb',bg='#121a28',wraplength=595,justify='left').pack(
                 anchor='w',pady=(0,10))
         grid=ttk.Frame(f,style='Panel.TFrame')
@@ -2094,6 +2266,20 @@ class ChatOverlayApp:
             line.pack(fill='x',pady=(0,6))
             ttk.Label(line,text=field,style='Panel.TLabel',width=23).pack(side='left')
             ttk.Entry(line,textvariable=var).pack(side='left',fill='x',expand=True)
+        for field,var,secret in (
+            ('Login email',self.account_email_var,False),
+            ('Login password',self.account_password_var,True)):
+            line=ttk.Frame(f,style='Panel.TFrame')
+            line.pack(fill='x',pady=(0,6))
+            ttk.Label(line,text=field,style='Panel.TLabel',width=23).pack(side='left')
+            ttk.Entry(line,textvariable=var,show='*' if secret else '').pack(
+                side='left',fill='x',expand=True)
+        secrets_row=ttk.Frame(f,style='Panel.TFrame')
+        secrets_row.pack(fill='x',pady=(3,6))
+        ttk.Button(secrets_row,text='Save login securely',
+                   command=self._account_save_login).pack(side='left',padx=(0,7))
+        ttk.Button(secrets_row,text='Forget saved login',
+                   command=self._account_forget_login).pack(side='left')
         buttons=ttk.Frame(f,style='Panel.TFrame')
         buttons.pack(fill='x',pady=(6,6))
         ttk.Button(buttons,text='Add account',
@@ -2121,11 +2307,11 @@ class ChatOverlayApp:
                  bg='#121a28',fg='#73c5ab',wraplength=620,
                  justify='left').pack(anchor='w',fill='x',pady=(0,9))
         tk.Label(f,
-            text='Auto Play opens each saved login, clicks the Play/Launch '
-                 'controls and tries the Classic button in Habbo Launcher. '
-                 'First sign-in, verification challenges and Windows '
-                 'permission prompts may still require you. '
-                 'It does not create extra G-Earth proxies.',
+            text='Open account login automatically signs in when a saved '
+                 'login exists. Auto Play also clicks Play/Launch and tries '
+                 'Classic in Habbo Launcher. CAPTCHA, two-factor checks, '
+                 'external-app prompts and Windows permissions may need you. '
+                 'No extra G-Earth proxies are created.',
             fg='#8ea9c1',bg='#121a28',wraplength=620,
             justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
@@ -2167,9 +2353,16 @@ class ChatOverlayApp:
         self.account_label_var.set(account['label'])
         self.account_login_url_var.set(account['url'])
         self.account_port_var.set(str(account['port']))
+        self.account_password_var.set('')
+        try:
+            saved=account_saved_login_read(account['id'])
+        except (OSError,ValueError):
+            saved=None
+        self.account_email_var.set(saved[0] if saved else '')
         self.account_status_var.set(
             f'Selected {account["label"]} — G-Earth extension {account["port"]}. '
-            'Open account login to sign in separately.')
+            + ('Saved login available: Open account login signs in for you.'
+               if saved else 'Enter email/password and click Save login securely.'))
 
     def _account_add(self):
         if len(self._account_profiles)>=12:
@@ -2218,7 +2411,37 @@ class ChatOverlayApp:
         self.config['account_profiles']=self._account_profiles
         self.save()
         self._accounts_render(account['id'])
-        self.account_status_var.set(f'Saved {label} (port {port}). No passwords stored.')
+        self.account_status_var.set(
+            f'Saved {label} (port {port}). Login passwords are stored '
+            'separately in Windows Credential Manager when you choose to save.')
+
+    def _account_save_login(self):
+        account=self._account_selected()
+        if account is None:return
+        try:
+            account_saved_login_write(
+                account['id'],self.account_email_var.get(),
+                self.account_password_var.get())
+        except (OSError,ValueError) as exc:
+            self.account_status_var.set('Login not saved: '+str(exc)[:160])
+            return
+        self.account_password_var.set('')
+        self.account_status_var.set(
+            f'{account["label"]}: login saved in Windows Credential Manager. '
+            'Open account login will now sign in automatically.')
+
+    def _account_forget_login(self):
+        account=self._account_selected()
+        if account is None:return
+        try:
+            account_saved_login_delete(account['id'])
+        except OSError as exc:
+            self.account_status_var.set('Could not forget login: '+str(exc)[:160])
+            return
+        self.account_password_var.set('')
+        self.account_status_var.set(
+            f'{account["label"]}: saved password deleted from Windows vault. '
+            'Its browser cookies are separate and may still be signed in.')
 
     def _account_remove(self):
         account=self._account_selected()
@@ -2232,6 +2455,12 @@ class ChatOverlayApp:
             'Browser login data on disk will NOT be deleted.',
             parent=self.root):
             return
+        try:
+            account_saved_login_delete(account['id'])
+        except OSError as exc:
+            self.account_status_var.set(
+                'Could not remove saved login: '+str(exc)[:160])
+            return
         self._account_profiles=[x for x in self._account_profiles
                                 if x['id']!=account['id']]
         if self._account_active_id==account['id']:
@@ -2244,30 +2473,10 @@ class ChatOverlayApp:
             'Account entry removed. Its isolated browser data remains on disk.')
 
     def _account_open_login(self):
-        account=self._account_selected()
-        if account is None:return
-        browser=account_login_browser()
-        if browser is None:
-            self.account_status_var.set(
-                'Brave, Chrome or Edge not found. Install one of these browsers.')
-            return
-        folder=APP_DIR/'account_browser_profiles'/account['id']
-        try:
-            folder.mkdir(parents=True,exist_ok=True)
-            command=account_browser_command(
-                browser,folder,account['url'],
-                account_browser_debug_port(account['id']))
-            subprocess.Popen(command,cwd=str(browser.parent),
-                             stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-        except (OSError,ValueError) as exc:
-            self.account_status_var.set('Could not open login window: '+str(exc)[:150])
-            return
-        self.account_status_var.set(
-            f'{account["label"]}: opened an isolated browser login. '
-            'Sign in on the website; Companion does not read your password. '
-            'Browser login alone does not connect another G-Earth proxy.')
+        """Open just this browser profile and sign it in using the local vault."""
+        self._account_auto_play(login_only=True)
 
-    def _account_auto_play(self,all_accounts=False):
+    def _account_auto_play(self,all_accounts=False,login_only=False):
         """One click per selected account or serially for all saved profiles."""
         if self._account_auto_running:
             self.account_status_var.set(
@@ -2282,7 +2491,7 @@ class ChatOverlayApp:
         if not accounts:
             self.account_status_var.set('Add at least one account first.')
             return
-        if self.packet_started and not all_accounts:
+        if self.packet_started and not all_accounts and not login_only:
             account=accounts[0]
             if account['port']!=self._account_attached_port:
                 self.account_status_var.set(
@@ -2295,7 +2504,7 @@ class ChatOverlayApp:
                 'Two account profiles share a browser control port. '
                 'Remove/re-add one profile before automation.')
             return
-        if not self.packet_started and not all_accounts:
+        if not login_only and not self.packet_started and not all_accounts:
             self._account_use_port()
             if (accounts[0]['port']==9092
                 and not self._gearth_extension_port_responds(9092)):
@@ -2304,14 +2513,13 @@ class ChatOverlayApp:
         self._account_auto_generation+=1
         generation=self._account_auto_generation
         self.account_status_var.set(
-            'Opening saved login session(s) and checking Habbo Play/Launch. '
-            'Do not enter passwords into Companion.')
+            'Opening isolated browser session(s); using saved login if needed.')
         threading.Thread(
             target=self._account_auto_worker,
-            args=(tuple(dict(a) for a in accounts),generation),
+            args=(tuple(dict(a) for a in accounts),generation,login_only),
             daemon=True).start()
 
-    def _account_auto_worker(self,accounts,generation):
+    def _account_auto_worker(self,accounts,generation,login_only=False):
         def report(value):
             self._packet_put(('account_auto_status',generation,str(value)[:350]))
         try:
@@ -2353,9 +2561,18 @@ class ChatOverlayApp:
                            'Close older windows for this account and retry; '
                            'it may have opened without control enabled.')
                     break
+                try:
+                    credentials=account_saved_login_read(ident)
+                except (OSError,ValueError) as exc:
+                    report(f'{label}: local saved-login error: '+str(exc)[:140])
+                    break
                 result=account_attempt_auto_play(
-                    debug_port,lambda msg,name=label:report(f'{name}: {msg}'))
-                if result=='launched':
+                    debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
+                    credentials=credentials,login_only=login_only)
+                if result=='signed_in':
+                    report(f'{label}: signed in on Habbo website. '
+                           'Use Auto Play to launch the Classic client.')
+                elif result=='launched':
                     report(f'{label}: website launch requested; '
                            'checking for the native Classic button...')
                     if account_select_classic_launcher(16):
