@@ -78,7 +78,7 @@ class AutoPlayAllBatchTests(unittest.TestCase):
         self.worker(self.app,(self.a,self.b),2)
         self.assertEqual(self.selections,[16])
         self.assertIn('1/2 website logins',self.summary())
-        self.assertIn('Account 1 website login not confirmed',self.summary())
+        self.assertIn('Account 1: Sign-in / verification required',self.summary())
         self.assertEqual(self.events[-1],('account_auto_finished',2))
 
     def test_unresolved_classic_pauses_second_native_launch(self):

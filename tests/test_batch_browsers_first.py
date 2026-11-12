@@ -91,7 +91,7 @@ class BatchBrowserFirst(unittest.TestCase):
         self.assertIn(('classic_requested',self.port2),self.events)
         stages=[e for e in self.events if e[0]=='account_auto_stage']
         self.assertIn(( 'account_auto_stage',1,ACCOUNTS[0]['id'],
-                        'Sign-in needs attention (login)'),stages)
+                        'Sign-in / verification required'),stages)
         self.assertIn(( 'account_auto_stage',1,ACCOUNTS[1]['id'],
                         'Classic selected; client unverified'),stages)
 

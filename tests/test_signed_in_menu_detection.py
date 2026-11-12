@@ -114,7 +114,7 @@ class AuthenticatedPageDetectionTests(unittest.TestCase):
         ns['time']=SimpleNamespace(sleep=lambda _:None)
         out=[]
         self.assertEqual(ns['account_attempt_auto_play'](
-            44000,out.append,None,True),'waiting')
+            44000,out.append,None,True),'no_habbo_tab')
         self.assertIn('No HTTPS Habbo website tab',out[-1])
 
     def test_cdp_eval_exception_is_reported_not_silent_success(self):

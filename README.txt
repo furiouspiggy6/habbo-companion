@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.36 — RESUME UNFINISHED ACCOUNTS
+HABBO COMPANION v1.1.37 — MULTI-TAB SIGN-IN DETECTION
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -230,3 +230,34 @@ This is a recovery and diagnostics improvement, not a way to bypass
 browser permission prompts, CAPTCHA, OS security controls, nor
 Habbo's launcher itself. Multiple separately controlled G-Earth
 proxy game connections are still not implemented.
+
+
+v1.1.37 — SIGNED-IN HABBO TABS CAN NOW BE FOUND RELIABLY
+======================================================
+Fixes one reason for the false "No website logins confirmed" status:
+the previous account_habbo_page() always chose the FIRST Habbo tab in
+a dedicated browser profile. If an older tab was stale, login-only or
+not responding to Chrome DevTools, Companion could overlook a visibly
+signed-in tab showing an avatar and green PLAY button.
+
+Now the per-account browser inspector:
+- Scans up to 12 HTTPS Habbo tabs in that account's isolated profile.
+- Prefers the valid Launch/PLAY/signed-in profile controls over stale
+  login/loading tabs, without mixing browser profiles.
+- Falls back to the next Habbo tab if one refuses a DevTools inspection.
+- Reports an exact browser-control error category instead of treating
+  a DevTools failure as an incorrect password or logged-out avatar.
+- Shows the latest safe browser-control diagnostic in that account's
+  Browser / Classic status column.
+
+If status reports "Browser DevTools socket rejected handshake",
+"Browser control endpoint failed" or "Browser inspection failed",
+this is local browser automation (not your Habbo sign-in). It must be
+resolved separately. Don't repeatedly re-enter credentials merely
+because Companion can't read the tab. Close the old *dedicated*
+Companion browser profile windows only, then retry; normal Brave
+windows and other profiles can remain open.
+
+A website sign-in is still not a Classic game client connection.
+G-Earth's extension socket port does NOT redirect a second game client.
+Per-client G-Earth proxy routing is still outstanding.
