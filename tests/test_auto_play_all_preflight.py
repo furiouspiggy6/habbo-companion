@@ -62,7 +62,7 @@ class AutoPlayAllBatchTests(unittest.TestCase):
                          list(zip(ports,[False,False])))
         self.assertEqual(self.selections,[16,16])
         self.assertIn('2/2 website logins',self.summary())
-        self.assertIn('G-Earth routing for additional accounts is NOT automatic.',
+        self.assertIn('No multi-account G-Earth packet routing yet.',
                       self.summary())
         self.assertEqual(self.events[-1],('account_auto_finished',1))
 
