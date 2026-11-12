@@ -1,41 +1,80 @@
-HABBO COMPANION v1.1.23 — FIX UNKNOWN SELF ROOM INDEX
-=======================================================
-FIX: An avatar could be listed among 16+ room players but Companion
-would still say "Your avatar room index: unknown after room change".
+HABBO COMPANION v1.1.24 — OPTIONAL BOOKCASE / EXTRA SOURCES + SPEED TEST
+=========================================================================
 
-In v1.1.22 the new wait-for-pickup option needed to see your own
-UserObject handshake packet, which sometimes arrived before G-Earth's
-extension subscribed. Without that, the checkbox blocked the coffee loop.
+MORE HAND-ITEM SOURCES
+----------------------
+The original Coffee Pass loop still performs:
+    UseFurniture Cup 1 -> PassCarryItem recipient
+    UseFurniture Cup 2 -> PassCarryItem recipient
+    repeat.
 
-v1.1.23 now requests the current Habbo identity on demand using the
-normal, one-shot InfoRetrieve packet. When the Users roster is received
-without the player's own account ID, Companion automatically makes one
-identity request (throttled to once per five seconds). It then matches
-your real account ID to the room's own avatar index.
+There is now a "Other furniture IDs" box for up to FOUR additional
+hand-item dispenser furniture instance IDs. A bookcase that gives books
+is one example. With one additional source, the cycle becomes:
+    pick up Cup 1 -> pass -> pick up Cup 2 -> pass
+    -> pick up Bookcase item -> pass -> repeat.
+Each source is used sequentially; the loop NEVER tries to hold several
+different items at the same time.
 
-There is also a "Detect my avatar" button next to "Refresh room players"
-for a manual retry. The status reports if identity lookup fails or if
-the account ID is known but the room index could not be decoded.
-No identity or room index is invented.
+These must be instance IDs of furniture actually inside the Habbo room,
+NOT hand-item type numbers (for example, 1003 is a book hand-item type,
+not the instance ID of the bookcase in your room).
 
-IMPORTANT FALLBACK:
-If "Wait for my avatar to receive/pass each cup" is checked but your
-own room index is unavailable, Start now requests your identity and
-asks if you want to use the ORIGINAL fixed-delay coffee mode for
-this run. Choosing Yes turns the checkbox OFF and continues normally.
-Choosing No sends nothing, so you can retry after the room index
-appears.
+CAPTURE THE BOOKCASE WITHOUT MANUAL PACKET INSPECTION
+-----------------------------------------------------
+1. Start Companion and G-Earth and enter the Habbo room.
+2. Stop any running coffee loop.
+3. In Coffee Pass click "Capture next furniture click".
+4. In Habbo, double-click your bookcase to use it.
+5. Companion records that one outgoing UseFurniture instance ID and
+   adds it to "Other furniture IDs" (if not already configured).
+6. You can repeat for up to four additional sources.
 
-The original mode remains pick up Cup 1 -> pass -> pick up Cup 2 ->
-pass -> repeat at the selected delay. Its sends are not proof of
-pickup or recipient receipt.
+Only item-dispensing furniture will actually give you an item. Some
+bookcases are decorative; a captured ID does not prove a hand item was
+picked up. The ordinary Cup 1 and Cup 2 remain unchanged.
 
-The optional verified mode still requires matching server CarryObject
-events for your avatar. It stops if the server does not confirm that
-you received a cup or emptied your hand after passing.
+A consenting group rotation also accepts additional sources; each
+participant gets a turn for every source type over a complete group
+cycle. Group mode still requires 10 seconds per packet action and
+excludes anyone who opts out.
 
-All previous features remain, including original Habbo chat PNGs,
-whisper-right, opt-in group rotation, exclusion, delivery diagnostics
-and unlimited 0-cycle loops.
+FINITE SPEED TEST / MEASURING PRACTICAL LIMITS
+---------------------------------------------
+The "Test speed (3 cycles)" button is a finite single-recipient test
+(not available in group mode). It always uses the optional sender-side
+CarryObject confirmations whether or not the checkbox for confirmed
+pickup is enabled. It requires your own Habbo account's room avatar
+index to be recognized first: use "Detect my avatar" if necessary.
+
+The test performs exactly THREE full source cycles at the entered
+Delay per action and then STOPS automatically. You must confirm the
+recipient before sending any test packets.
+
+The displayed summary includes:
+- elapsed time;
+- the number of your own positive carrying-item updates (pickups);
+- the number of confirmed empty-hand updates following a pass request;
+- outgoing PassCarryItem request count;
+- confirmed own pickup events per minute; and
+- pickup confirmation counts for EACH source furniture ID.
+
+These are measurements of the sender's client and server messages,
+NOT receipts on the recipient's client. If your own avatar cannot be
+identified, the test will not run rather than guessing. If a carry
+confirmation does not arrive, the test stops after its timeout and
+reports partial statistics. It does not silently claim a transfer
+succeeded or try to work around rate limits.
+
+To compare practical throughput, run a test at a chosen delay and note
+the confirmed pickup events per minute. Then repeat with a DIFFERENT
+delay, or compare two-cup rotation versus rotation including a
+bookcase. A larger furniture list does not necessarily increase item
+throughput; the Habbo server may enforce shared limits/cooldowns.
+The test does NOT automatically step through increasingly fast speeds.
+
+All previous features remain: original Habbo PNG speech bubbles,
+whispers on the right, optional confirmed hand state, username
+resolution, manual opt-out, unlimited regular cycles and updater.
 
 INSTALL: Habbo Companion > Updates > Check online.
