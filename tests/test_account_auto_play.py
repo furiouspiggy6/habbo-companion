@@ -113,7 +113,8 @@ class AccountAutoPlayTests(unittest.TestCase):
         self.assertIn("if self._account_attached_port!=port:",CODE)
         self.assertIn('if ($title -notmatch',CODE)
         self.assertIn("if ($button.Current.Name -ne 'Classic'",CODE)
-        self.assertIn("if len(accounts)>1:break",CODE)
+        self.assertIn("unresolved=True",CODE)
+        self.assertIn("All independent browser logins were checked.",CODE)
         self.assertIn("('account_auto_finished',generation)",CODE)
 
 if __name__=='__main__':
