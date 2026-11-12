@@ -1326,6 +1326,9 @@ class ChatOverlayApp:
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self.coffee_recording_var=tk.StringVar(
+            value='Automatic recording starts with each coffee run (including 0.1s loops).')
+        self._coffee_recorder=None
         self.coffee_speed_var=tk.StringVar(value='Speed test not run. Requires your own avatar room index.')
         self._coffee_speed_active=False
         self._coffee_speed_started=0.0
@@ -1986,7 +1989,13 @@ class ChatOverlayApp:
         ttk.Label(holder,textvariable=self.coffee_delivery_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         ttk.Label(holder,textvariable=self.coffee_speed_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,8))
+        ttk.Label(holder,text='AUTOMATIC COFFEE SESSION RECORDING',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,3))
+        ttk.Label(holder,textvariable=self.coffee_recording_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Button(holder,text='Open saved coffee results',
+                   command=self._open_coffee_recordings).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
                    'Confirm the ID and ensure the recipient is in your room. '
@@ -2256,6 +2265,35 @@ class ChatOverlayApp:
                 lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
         self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
 
+    def _open_coffee_recordings(self):
+        """Open local recordings on Windows; never uploads recorded game data."""
+        folder=APP_DIR/'coffee_sessions'
+        try:
+            folder.mkdir(parents=True,exist_ok=True)
+            if os.name=='nt':
+                os.startfile(str(folder))
+            else:
+                self.coffee_recording_var.set('Results folder: '+str(folder))
+        except (OSError,AttributeError) as exc:
+            self.coffee_recording_var.set('Cannot open results folder: '+str(exc)[:130])
+
+    def _record_coffee_carry(self,room_index,item_type):
+        """Called by G-Earth interception thread; no Tk operations allowed."""
+        recorder=getattr(self,'_coffee_recorder',None)
+        if recorder is None:
+            return
+        own_index=self._own_room_index
+        target_index=self._coffee_target_room_index
+        if own_index is not None and room_index==own_index:
+            event=('own_held_update' if item_type>0 else 'own_empty_update')
+            recorder.record(event,room_index=room_index,hand_item=item_type,
+                            note='server CarryObject about own avatar')
+        elif target_index is not None and room_index==target_index:
+            event=('target_held_update' if item_type>0 else 'target_empty_update')
+            recorder.record(event,name=self._coffee_target_name,
+                            room_index=room_index,hand_item=item_type,
+                            note='server CarryObject about current recipient; not receipt proof')
+
     def _run_coffee_speed_test(self):
         """One finite measurement for one willing recipient, no automatic speed ramp."""
         if self.coffee_group_enabled_var.get():
@@ -2422,6 +2460,23 @@ class ChatOverlayApp:
                            coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()),
                            coffee_extra_furniture=self.coffee_extra_furniture_var.get().strip())
         self.save()
+        # The normal fast loop always writes a complete local CSV. Failure to
+        # create the file stops startup rather than silently running unlogged.
+        source_ids=(self.coffee_cup_one_var.get().strip(),) if single_cup else (
+            self.coffee_cup_one_var.get().strip(),
+            self.coffee_cup_two_var.get().strip(),*extras)
+        recording_recipients=(targets if group_mode else
+                              [(target_name or target_id,str(target_id))])
+        try:
+            self._coffee_recorder=CoffeeSessionRecorder(
+                APP_DIR/'coffee_sessions',interval,source_ids,recording_recipients)
+        except (OSError,ValueError,UnicodeError) as exc:
+            self.coffee_recording_var.set(
+                'Recording could not start: '+str(exc)[:140])
+            self.coffee_status_var.set('No coffee sent: session recording could not start.')
+            return
+        self.coffee_recording_var.set(
+            'Recording automatically: '+str(self._coffee_recorder.path))
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
@@ -3776,6 +3831,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         elif kind=='CarryObject':
                             carry=carry_object_from_packet(msg.packet)
                             if carry is not None:
+                                self._record_coffee_carry(carry[0],carry[1])
                                 self._packet_put(('coffee_carry_observed',carry[0],
                                                   carry[1],time.time()))
                         elif kind=='Users':
