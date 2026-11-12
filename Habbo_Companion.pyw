@@ -801,6 +801,120 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     return 'timeout'
 
 
+# This request uses ONLY the existing isolated browser profile's authenticated
+# HTTPS Habbo.com page. No cookies are exported to Companion; no passwords are
+# read. It cannot create a signed-in session from an email/password alone.
+HABBO_SESSION_TICKET_JS=r'''(async () => {
+  if (location.protocol !== 'https:' ||
+      !['habbo.com','www.habbo.com'].includes(location.hostname)) {
+    return {kind:'error',reason:'not_official_habbo'};
+  }
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8500);
+    let response;
+    try {
+      response = await fetch('/api/client/clientnative/url', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Accept':'application/json'},
+        signal: controller.signal,
+        redirect: 'error'
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (!response.ok) return {
+      kind:'error',reason:'http_error',status:response.status
+    };
+    const data = await response.json();
+    if (!data || typeof data !== 'object') return {
+      kind:'error',reason:'unexpected_response'
+    };
+    // Never collect document.cookie, localStorage or other session secrets.
+    const candidate = [data.ticket,data.url,data.launchUrl,
+                       data.launch_url,data.loginUrl].find(
+      value => typeof value === 'string' && value.length > 8 && value.length < 400
+    );
+    if (!candidate) return {kind:'error',reason:'no_ticket_in_response'};
+    return {kind:'ticket',value:candidate};
+  } catch (_) {
+    // Do not leak URLs, response bodies or credentials into diagnostic logs.
+    return {kind:'error',reason:'request_unavailable'};
+  }
+})()'''
+
+
+def account_parse_official_ticket_response(value):
+    """Accept only the narrow known Habbo.com ticket shapes."""
+    if not isinstance(value,str) or not 8<len(value)<400:
+        raise ValueError('Habbo returned no usable SSO ticket.')
+    candidate=value.strip()
+    if re.fullmatch(r'[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?(?:\.[A-Za-z0-9_.:-]{1,40})?',
+                    candidate,re.I):
+        candidate='hhus.'+candidate
+    try:
+        return parse_classic_ticket(candidate)
+    except (TypeError,ValueError) as exc:
+        raise ValueError(
+            'Habbo returned a ticket format this version does not recognise; '
+            'nothing was queued.') from exc
+
+
+def account_fetch_ticket_from_signed_in_profile(debug_port):
+    """Request a ticket without opening or automating any website UI.
+
+    Requires a previously authenticated Companion Chromium profile running
+    with its local debugging port. Browser/session identity is NOT inferred
+    from profile labels. The official API is undocumented and may refuse use.
+    """
+    page=account_habbo_page(debug_port)
+    if page is None:
+        raise ValueError(
+            'No official Habbo tab found in this account browser session.')
+    if page.get('_inspect_error'):
+        raise ValueError(
+            'Local account browser control unavailable; reconnect its existing '
+            'signed-in profile before requesting a ticket.')
+    status=page.get('_preflight_step',{}).get('kind')
+    if status not in ('play','play-now','launch','signed_in','download'):
+        raise ValueError(
+            'Habbo website session is not verified as signed in. '
+            'This method cannot log in using a password.')
+    response=account_cdp_call(
+        page['webSocketDebuggerUrl'],'Runtime.evaluate',{
+            'expression':HABBO_SESSION_TICKET_JS,
+            'returnByValue':True,
+            'awaitPromise':True
+        },timeout=13)
+    if response.get('exceptionDetails'):
+        raise ValueError('The official Habbo ticket request could not run.')
+    obj=response.get('result',{}).get('result',{}).get('value')
+    if not isinstance(obj,dict):
+        raise ValueError('The official Habbo ticket response was unreadable.')
+    if obj.get('kind')!='ticket':
+        reason=obj.get('reason','unknown')
+        if reason=='http_error':
+            try:
+                code=int(obj.get('status',0))
+            except (ValueError,TypeError):
+                code=0
+            if code in (401,403):
+                raise ValueError(
+                    'Habbo rejected the existing session (HTTP '+str(code)+'). '
+                    'Sign in normally if your session expired.')
+            raise ValueError(
+                'Habbo ticket request returned HTTP '+str(code)+'.')
+        reasons={
+            'not_official_habbo':'Selected tab was not Habbo.com.',
+            'no_ticket_in_response':'Habbo response contained no recognised ticket field.',
+            'unexpected_response':'Habbo returned an unexpected ticket response.',
+            'request_unavailable':'Habbo ticket request was blocked or unavailable.'
+        }
+        raise ValueError(reasons.get(reason,'Habbo did not return a ticket.'))
+    return account_parse_official_ticket_response(obj.get('value'))
+
+
 def account_is_native_habbo_window(title):
     """Strict native AIR title filter; excludes Habbo webpages and Launcher."""
     return bool(re.match(r'^HabboAir(?:Plus)?(?:\b|[\s\[\-])',
@@ -2167,6 +2281,7 @@ class ChatOverlayApp:
         self._direct_ticket_queue={}
         self._direct_launch_states={}
         self._direct_launch_running=False
+        self._direct_ticket_fetch_running=False
         self._headless_manager=HeadlessLocalManager()
         self._headless_server=None
         self._headless_account_states={}
@@ -2669,6 +2784,9 @@ class ChatOverlayApp:
         ttk.Button(row,text='Queue ticket locally',
                    command=self._direct_queue_selected).pack(
                        side='left',padx=(0,7))
+        ttk.Button(row,text='Fetch from signed-in local session',
+                   command=self._direct_fetch_session_ticket).pack(
+                       side='left',padx=(0,7))
         ttk.Button(row,text='Clear selected ticket',
                    command=self._direct_clear_selected).pack(side='left')
         row=ttk.Frame(f,style='Panel.TFrame')
@@ -2684,6 +2802,14 @@ class ChatOverlayApp:
         tk.Label(f,textvariable=self.direct_status_var,
                  bg='#121a28',fg='#73c5ab',wraplength=600,
                  justify='left').pack(anchor='w',pady=(0,12))
+        tk.Label(f,text='Fetch from signed-in local session uses the '
+                 'already-running dedicated account browser profile to ask '
+                 'Habbo.com for a ticket, without opening windows or copying '
+                 'codes. It cannot sign in from email/password or replace an '
+                 'expired website session. The official ticket endpoint may '
+                 'change or reject the request.',
+                 bg='#121a28',fg='#8ea9c1',wraplength=600,
+                 justify='left').pack(anchor='w',pady=(0,10))
         tk.Label(f,text='Important: A ticket comes from the official Habbo '
                  'login flow and may expire. Valid format does not mean a '
                  'valid login. Tickets remain in RAM only, but Windows '
@@ -2766,6 +2892,44 @@ class ChatOverlayApp:
                'the ticket belongs to this account.')
         self.direct_status_var.set(
             f'{account["label"]}: hhus ticket queued in RAM only.'+label)
+
+    def _direct_fetch_session_ticket(self):
+        """Try the official API using a running LOCAL authenticated profile."""
+        account=self._direct_selected_profile()
+        if account is None:
+            return
+        if self._direct_ticket_fetch_running:
+            self.direct_status_var.set(
+                'A local ticket request is already in progress.')
+            return
+        if any(account_browser_debug_port(account['id'])==
+               account_browser_debug_port(other['id'])
+               for other in self._account_profiles
+               if other['id']!=account['id']):
+            self.direct_status_var.set(
+                'Two account profiles have the same browser control port. '
+                'No request was sent.')
+            return
+        self._direct_ticket_fetch_running=True
+        self.direct_status_var.set(
+            f'{account["label"]}: checking existing local Habbo session. '
+            'No windows will be opened; no passwords are transmitted by Companion.')
+        def work(account_id,label):
+            try:
+                ticket=account_fetch_ticket_from_signed_in_profile(
+                    account_browser_debug_port(account_id))
+                self._packet_put(('direct_ticket_fetched',account_id,ticket))
+            except (OSError,RuntimeError,ValueError,socket.timeout,
+                    TimeoutError) as exc:
+                # Do not print exception details that might include tokens.
+                message=(str(exc)[:175] if isinstance(exc,ValueError)
+                         else 'Local browser connection unavailable ('+
+                         type(exc).__name__+').')
+                self._packet_put(('direct_ticket_fetch_failed',
+                                  account_id,message))
+        threading.Thread(target=work,
+                         args=(account['id'],account['label']),
+                         daemon=True,name='local-habbo-session-ticket').start()
 
     def _direct_clear_selected(self):
         account=self._direct_selected_profile()
@@ -5871,6 +6035,31 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='direct_ticket_fetched':
+                self._direct_ticket_fetch_running=False
+                ident,ticket=item[1],item[2]
+                if any(a['id']==ident for a in self._account_profiles):
+                    # Reject an accidental copy of another account's ticket.
+                    if any(v.secret==ticket.secret and key!=ident
+                           for key,v in self._direct_ticket_queue.items()):
+                        self.direct_status_var.set(
+                            'Duplicate ticket returned for two profiles; '
+                            'second ticket was not queued.')
+                    else:
+                        self._direct_ticket_queue[ident]=ticket
+                        self._direct_launch_states.pop(ident,None)
+                        self._direct_render()
+                        self.direct_status_var.set(
+                            'Temporary SSO ticket fetched from the existing '
+                            'signed-in Habbo profile and queued locally. '
+                            'Confirm this browser profile belongs to the '
+                            'selected account; server login is not yet verified.')
+                continue
+            if item[0]=='direct_ticket_fetch_failed':
+                self._direct_ticket_fetch_running=False
+                self.direct_status_var.set(
+                    'Ticket was not fetched: '+item[2])
+                continue
             if item[0]=='direct_launch_state':
                 ident,status=item[1],item[2]
                 self._direct_launch_states[ident]=status
