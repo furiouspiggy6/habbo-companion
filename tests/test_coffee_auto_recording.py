@@ -71,7 +71,7 @@ class RecordingTests(unittest.TestCase):
         self.assertIn("recorder.record(",txt)
         self.assertIn("'pickup_request' if pickup else 'pass_request'",txt)
         self.assertIn('if self._coffee_wait_for_hand:',txt)
-        self.assertIn('self.root.after(round(self._coffee_interval*1000)',txt)
+        self.assertIn('self.root.after(coffee_delay_ms(self._coffee_interval)',txt)
         self.assertIn('self._coffee_after_id=self.root.after',txt)
 
     def test_capture_is_relevant_only_and_does_not_operate_tk_from_worker(self):
