@@ -68,8 +68,11 @@ class AccountAutoPlayTests(unittest.TestCase):
         text=ast.literal_eval(js.value)
         self.assertIn(r'/(^|\.)habbo\.com$/i',text)
         self.assertIn('input[type=password]',text)
-        self.assertIn("return {kind:'login'}",text)
-        self.assertIn('launch and log in',text)
+        self.assertIn("return {kind:'login',page:location.pathname}",text)
+        self.assertIn("return {kind:'signed_in'",text)
+        self.assertIn("matchKind",text)
+        self.assertIn("profile-menu",text)
+        self.assertIn("launch\\s*",text)
         self.assertNotIn('document.cookie',text)
         self.assertNotIn('.value=',text)
 
