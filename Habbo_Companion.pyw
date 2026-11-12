@@ -2379,7 +2379,7 @@ class ChatOverlayApp:
         if timer is not None:
             try:self.root.after_cancel(timer)
             except (tk.TclError,AttributeError):pass
-        if self._coffee_speed_active:
+        if getattr(self,'_coffee_speed_active',False):
             if phase=='pickup':
                 self._coffee_speed_pickups+=1
                 source=self._coffee_speed_last_source
