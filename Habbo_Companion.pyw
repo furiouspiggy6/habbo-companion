@@ -374,15 +374,52 @@ def account_browser_pages(debug_port):
 
 
 def account_habbo_page(debug_port):
-    """Never inspect or automate unrelated webpages in the browser profile."""
+    """Pick a usable Habbo tab, not simply the first (possibly stale) tab.
+
+    A profile may have several Habbo tabs. Each candidate is independently
+    inspected over its own local DevTools page socket. Prefer an authenticated
+    Play/Launch tab; never inspect an unrelated hostname or another profile.
+    """
     pages=account_browser_pages(debug_port)
+    candidates=[]
     for page in pages:
-        target=urllib.parse.urlsplit(page['url'])
+        try:
+            target=urllib.parse.urlsplit(page['url'])
+        except (ValueError,TypeError):
+            continue
         if (target.scheme=='https' and target.hostname
             and (target.hostname=='habbo.com'
                  or target.hostname.endswith('.habbo.com'))):
-            return page
-    return None
+            candidates.append(page)
+    if not candidates:
+        return None
+    priorities={'launch':6,'play':5,'play-now':5,'download':4,
+                'signed_in':3,'login':2,'waiting':1,'not_habbo':0}
+    best=None
+    best_rank=-1
+    last_error=''
+    for page in candidates[:12]:
+        try:
+            step=account_inspect_play_page(page['webSocketDebuggerUrl'])
+        except (OSError,RuntimeError,ValueError,socket.timeout,TimeoutError) as exc:
+            # Never log session cookies, auth tokens, email or password.
+            last_error=type(exc).__name__+': '+str(exc)[:95]
+            continue
+        kind=step.get('kind')
+        score=priorities.get(kind,0)
+        if score>best_rank:
+            best=dict(page)
+            best['_preflight_step']=step
+            best_rank=score
+        if score>=6:
+            break
+    if best is not None:
+        return best
+    # Preserve the category of the failed local browser operation for the
+    # Accounts status instead of misreporting an active avatar as logged out.
+    fallback=dict(candidates[0])
+    fallback['_inspect_error']=last_error or 'No readable browser response'
+    return fallback
 
 
 def account_cdp_call(websocket_url,method,params=None,timeout=4):
@@ -416,7 +453,11 @@ def account_cdp_call(websocket_url,method,params=None,timeout=4):
         if (not sep or not header.startswith(b'HTTP/1.1 101 ')
             or ('sec-websocket-accept: '+expected).encode('ascii').lower()
                not in header.lower()):
-            raise OSError('Local browser refused WebSocket control.')
+            first_line=header.split(b'\r\n',1)[0][:100].decode('ascii','replace')
+            if not first_line.startswith('HTTP/'):
+                first_line='invalid HTTP handshake'
+            raise OSError('Browser DevTools socket rejected handshake: '+
+                          first_line)
 
         def send_frame(payload,opcode=1):
             length=len(payload)
@@ -654,17 +695,43 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     login_submitted=False
     login_waits=0
     last_issue='No Habbo website tab detected in this browser profile.'
+    control_failures=0
+    missing_pages=0
     for iteration in range(28):
-        page=account_habbo_page(debug_port)
+        try:
+            page=account_habbo_page(debug_port)
+        except (OSError,RuntimeError,ValueError,socket.timeout,TimeoutError) as exc:
+            control_failures+=1
+            last_issue='Browser control endpoint failed: '+type(exc).__name__
+            if control_failures>=3:
+                report(last_issue+'; close this account browser and retry.')
+                return 'control_error'
+            time.sleep(0.6);continue
         if page is None:
+            missing_pages+=1
             last_issue='No HTTPS Habbo website tab detected in this profile.'
+            if missing_pages>=6:
+                report(last_issue)
+                return 'no_habbo_tab'
+            time.sleep(0.6);continue
+        if page.get('_inspect_error'):
+            control_failures+=1
+            last_issue='Browser inspection failed: '+str(page['_inspect_error'])[:105]
+            if control_failures>=3:
+                report(last_issue+'; DevTools control is not working.')
+                return 'inspect_error'
             time.sleep(0.6);continue
         try:
-            step=account_inspect_play_page(page['webSocketDebuggerUrl'])
-        except (OSError,RuntimeError,ValueError,socket.timeout) as exc:
-            last_issue=('Browser inspection failed ('+type(exc).__name__+
-                        '); close older dedicated browser windows and retry.')
+            step=page.get('_preflight_step') or account_inspect_play_page(
+                page['webSocketDebuggerUrl'])
+        except (OSError,RuntimeError,ValueError,socket.timeout,TimeoutError) as exc:
+            control_failures+=1
+            last_issue='Browser inspection failed: '+type(exc).__name__
+            if control_failures>=3:
+                report(last_issue)
+                return 'inspect_error'
             time.sleep(0.6);continue
+        control_failures=0
         kind=step.get('kind')
         last_issue='Visible Play button and signed-in profile menu not detected.'
         if kind=='login':
@@ -2781,9 +2848,16 @@ class ChatOverlayApp:
                     report(f'{n}/{total}: {label} website login ready.')
                 else:
                     failures.append(label)
-                    stage(account,'Sign-in needs attention ('+str(result)+')')
-                    report(f'{n}/{total}: {label} website login not confirmed '
-                           f'({result}); continuing with remaining accounts.')
+                    reason={
+                        'control_error':'Browser control endpoint failed',
+                        'inspect_error':'Browser inspection failed',
+                        'no_habbo_tab':'No Habbo tab in profile',
+                        'waiting':'Website controls unrecognised',
+                        'login':'Sign-in / verification required'
+                    }.get(result,'Login not confirmed ('+str(result)+')')
+                    stage(account,reason)
+                    report(f'{n}/{total}: {label}: {reason}; '
+                           'checking remaining accounts.')
             if login_only:
                 report(f'Browser sign-in complete: {len(authenticated)}/{total} '
                        f'ready. {len(failures)} need attention.')
