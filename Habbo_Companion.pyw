@@ -3,7 +3,7 @@
 
 Works with the companion patched HabboAir.swf for chat feeds. Optional G-Earth
 extension integration and per-profile local browser automation use network
-sockets on the same machine. Account passwords are never handled by Companion.
+sockets on the same machine. Saved passwords are held in the local Windows Credential Manager vault only.
 """
 from __future__ import annotations
 import ctypes
@@ -216,6 +216,93 @@ def normalize_habbo_accounts(profiles):
         if len(valid)==12:
             break
     return valid
+
+
+# Credentials stay in the current Windows user's Credential Manager vault.
+# settings.json, GitHub releases and browser command lines never contain secrets.
+class _HabboCredential(ctypes.Structure):
+    _fields_=[
+        ('Flags',wintypes.DWORD),('Type',wintypes.DWORD),
+        ('TargetName',wintypes.LPWSTR),('Comment',wintypes.LPWSTR),
+        ('LastWritten',wintypes.FILETIME),('CredentialBlobSize',wintypes.DWORD),
+        ('CredentialBlob',ctypes.POINTER(ctypes.c_ubyte)),
+        ('Persist',wintypes.DWORD),('AttributeCount',wintypes.DWORD),
+        ('Attributes',ctypes.c_void_p),('TargetAlias',wintypes.LPWSTR),
+        ('UserName',wintypes.LPWSTR)]
+
+
+def _account_credential_target(account_id):
+    ident=str(account_id).lower()
+    if not re.fullmatch(r'[a-f0-9]{12}',ident):
+        raise ValueError('Invalid account profile identifier.')
+    return 'HabboCompanion:login:'+ident
+
+
+def _account_credential_api():
+    if os.name!='nt':
+        raise OSError('Windows Credential Manager requires Windows.')
+    api=ctypes.WinDLL('advapi32',use_last_error=True)
+    ptr=ctypes.POINTER(_HabboCredential)
+    api.CredWriteW.argtypes=[ptr,wintypes.DWORD]
+    api.CredWriteW.restype=wintypes.BOOL
+    api.CredReadW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,
+                             wintypes.DWORD,ctypes.POINTER(ptr)]
+    api.CredReadW.restype=wintypes.BOOL
+    api.CredDeleteW.argtypes=[wintypes.LPCWSTR,wintypes.DWORD,wintypes.DWORD]
+    api.CredDeleteW.restype=wintypes.BOOL
+    api.CredFree.argtypes=[ctypes.c_void_p]
+    api.CredFree.restype=None
+    return api
+
+
+def account_saved_login_write(account_id,email,password):
+    """Persist only in the per-user Windows Credential Manager vault."""
+    target=_account_credential_target(account_id)
+    email=str(email).strip()
+    password=str(password)
+    if not email or '@' not in email or any(ch.isspace() for ch in email):
+        raise ValueError('Enter the email address used to sign into Habbo.')
+    blob=password.encode('utf-16-le')
+    if not password or len(blob)>512:
+        raise ValueError('Enter a password up to 256 characters.')
+    api=_account_credential_api()
+    payload=ctypes.create_string_buffer(blob,len(blob))
+    record=_HabboCredential()
+    record.Type=1  # CRED_TYPE_GENERIC
+    record.TargetName=target
+    record.UserName=email
+    record.CredentialBlobSize=len(blob)
+    record.CredentialBlob=ctypes.cast(payload,ctypes.POINTER(ctypes.c_ubyte))
+    record.Persist=2  # CRED_PERSIST_LOCAL_MACHINE, scoped to Windows user
+    if not api.CredWriteW(ctypes.byref(record),0):
+        raise OSError('Windows could not save this login in Credential Manager.')
+
+
+def account_saved_login_read(account_id):
+    """Return (email,password) in memory only, or None when not saved."""
+    api=_account_credential_api()
+    output=ctypes.POINTER(_HabboCredential)()
+    if not api.CredReadW(_account_credential_target(account_id),1,0,
+                         ctypes.byref(output)):
+        if ctypes.get_last_error()==1168:  # ERROR_NOT_FOUND
+            return None
+        raise OSError('Windows could not read this saved login.')
+    try:
+        record=output.contents
+        size=record.CredentialBlobSize
+        if size>512 or size%2 or not record.CredentialBlob:
+            raise ValueError('Saved login has an invalid credential value.')
+        return (record.UserName or '',
+                ctypes.string_at(record.CredentialBlob,size).decode('utf-16-le'))
+    finally:
+        api.CredFree(ctypes.cast(output,ctypes.c_void_p))
+
+
+def account_saved_login_delete(account_id):
+    api=_account_credential_api()
+    if not api.CredDeleteW(_account_credential_target(account_id),1,0):
+        if ctypes.get_last_error()!=1168:
+            raise OSError('Windows could not forget this saved login.')
 
 
 def account_login_browser():
@@ -432,10 +519,68 @@ def account_click_play_button(websocket_url,step):
             'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
 
 
-def account_attempt_auto_play(debug_port,report):
-    """Move through saved-session Habbo pages; stop for a fresh login."""
+# Inspect only visible login form controls on Habbo itself; never read existing
+# password field values, browser cookies or session tokens.
+HABBO_LOGIN_FIELDS_JS=r'''(() => {
+  if (!/^https:$/.test(location.protocol) ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'not_habbo'};
+  const visible=el => {
+    if (!el || el.disabled) return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' &&
+      s.visibility!=='hidden' && r.left<innerWidth && r.top<innerHeight &&
+      r.right>0 && r.bottom>0;
+  };
+  const password=Array.from(document.querySelectorAll(
+      'input[type=password]')).find(visible);
+  const email=Array.from(document.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).find(visible);
+  const form=password && password.closest('form');
+  const buttons=Array.from((form || document).querySelectorAll(
+      'button,input[type=submit],[role=button]')).filter(visible);
+  const submit=buttons.find(el =>
+      /^(let'?s go!?|sign in|log in|login|continue)$/i.test(
+          (el.innerText || el.value || el.getAttribute('aria-label') || '').trim()))
+      || buttons.find(el => el.type==='submit');
+  if (!email || !password || !submit) return {kind:'not_ready'};
+  const point=el => {
+    const r=el.getBoundingClientRect();
+    return {x:r.left+r.width/2,y:r.top+r.height/2};
+  };
+  return {kind:'form',email:point(email),password:point(password),
+          submit:point(submit)};
+})()'''
+
+
+def account_submit_saved_login(websocket_url,email,password):
+    """Type into the official Habbo login, never into unrelated websites."""
+    inspection=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
+    fields=inspection.get('result',{}).get('value',{})
+    if fields.get('kind')!='form':
+        return False
+    for field,value in (('email',email),('password',password)):
+        account_click_play_button(websocket_url,fields[field])
+        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+            'type':'keyDown','key':'a','code':'KeyA',
+            'windowsVirtualKeyCode':65,'modifiers':2})
+        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+            'type':'keyUp','key':'a','code':'KeyA',
+            'windowsVirtualKeyCode':65,'modifiers':2})
+        # Text is sent to loopback Chrome DevTools, never a URL, shell or log.
+        account_cdp_call(websocket_url,'Input.insertText',{'text':value})
+    account_click_play_button(websocket_url,fields['submit'])
+    return True
+
+
+def account_attempt_auto_play(debug_port,report,credentials=None,login_only=False):
+    """Sign into an isolated profile if saved; optionally continue to Classic."""
     previous=None
     identical=0
+    login_submitted=False
+    login_waits=0
     for iteration in range(28):
         page=account_habbo_page(debug_port)
         if page is None:
@@ -446,9 +591,30 @@ def account_attempt_auto_play(debug_port,report):
             time.sleep(0.6);continue
         kind=step.get('kind')
         if kind=='login':
-            report('Sign in once in this account browser. '
-                   'Saved sessions can use Auto Play next time.')
-            return 'login'
+            if not credentials:
+                report('Sign in once manually or save email/password in the '
+                       'Accounts tab for automatic sign-in.')
+                return 'login'
+            if login_submitted:
+                login_waits+=1
+                if login_waits>=4:
+                    report('Habbo still shows the login form. Check your '
+                           'password, CAPTCHA or verification manually.')
+                    return 'login'
+                time.sleep(1.2)
+                continue
+            if not account_submit_saved_login(
+                    page['webSocketDebuggerUrl'],credentials[0],credentials[1]):
+                report('Habbo login fields changed. Sign in manually this time.')
+                return 'login'
+            login_submitted=True
+            report('Submitted saved login for this account. '
+                   'Checking whether Habbo accepted it...')
+            time.sleep(1.6)
+            continue
+        if login_only and kind in ('play','play-now','launch'):
+            report('Habbo session is signed in. Use Auto Play to launch Classic.')
+            return 'signed_in'
         if kind=='not_habbo':
             return 'unknown'
         if kind=='launch':
@@ -472,6 +638,9 @@ def account_attempt_auto_play(debug_port,report):
             time.sleep(1.4)
         else:
             time.sleep(0.6)
+    if login_only:
+        report('Habbo sign-in status could not be verified. Check the browser.')
+        return 'waiting'
     report('Could not find the next Habbo launch button. '
            'The website layout may have changed.')
     return 'timeout'
