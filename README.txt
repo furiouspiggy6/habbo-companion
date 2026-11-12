@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.31 — SAVED ACCOUNT AUTO SIGN-IN
+HABBO COMPANION v1.1.32 — MULTI-ACCOUNT LAUNCH FIX
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -71,3 +71,26 @@ right-side whispers, packet tools and online updates.
 
 This version has offline automated tests, but successful sign-in and
 Classic launching need validation on a live Windows/Habbo install.
+
+
+v1.1.32 — LAUNCH ACCOUNTS WHILE G-EARTH IS CONNECTED
+====================================================
+Fixed: Auto Play selected previously refused to launch Account 2 (extension
+port 9093) whenever Account 1 was attached to G-Earth port 9092, even though
+website sign-in/Classic launching does not use that G-Earth endpoint.
+
+Open account login and Auto Play selected/all now operate independently of
+the active packet endpoint. The G-Earth connection stays on its existing
+port and packets are NOT reassigned to a second account. This is a browser/
+launcher fix, NOT simultaneous packet interception for multiple accounts.
+
+If Companion opens a blank login page rather than typing the saved email and
+password, read the green status message. Older dedicated Brave windows for
+that account may have started before browser automation was enabled. Close
+THOSE separate account browser windows and click Open account login again.
+Do not close or sign out of unrelated browser profiles.
+
+Passwords saved in the Windows vault remain saved after restarting
+Companion. A blank login-password input in the Accounts panel is intentional.
+If the green status reports missing saved credentials, save them once with
+Save login securely. A Habbo security challenge may still require you.
