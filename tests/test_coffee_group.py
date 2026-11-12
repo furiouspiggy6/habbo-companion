@@ -50,7 +50,7 @@ class GroupTests(unittest.TestCase):
         self.assertEqual(len(seq),12)
 
     def test_group_rate_limited_and_manual_exclusion_only(self):
-        start=CODE[CODE.index('    def _start_coffee_loop(self,single_cup=False):'):
+        start=CODE[CODE.index('    def _start_coffee_loop(self,single_cup=False,speed_test=False):'):
                    CODE.index('    def _check_queued_coffee_start(',CODE.index('    def _start_coffee_loop('))]
         self.assertIn('if group_mode and interval<10',start)
         self.assertIn('self._lookup_coffee_profile(missing,single_cup=False)',start)

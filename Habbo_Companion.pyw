@@ -81,6 +81,7 @@ DEFAULT = dict(
     coffee_group_names='',
     coffee_group_enabled=False,
     coffee_wait_for_hand=False,
+    coffee_extra_furniture='',
     habbo_launcher_path='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
@@ -158,19 +159,94 @@ def parse_coffee_group_names(raw):
     return tuple(names)
 
 
-def build_coffee_group_sequence(cup_one,cup_two,recipients):
-    """Rotate 2 rounds per cycle; each participant gets a different cup.
+def parse_extra_furniture_sources(raw,cup_one,cup_two):
+    """Validate optional bookcase / other hand-item furniture INSTANCE IDs."""
+    if not isinstance(raw,str):
+        raise ValueError('Extra hand-item sources must be comma-separated furniture IDs.')
+    raw=raw.strip()
+    if not raw:
+        return ()
+    candidates=[v.strip() for v in re.split(r'[,;\n]+',raw) if v.strip()]
+    if len(candidates)>4:
+        raise ValueError('You can add at most 4 additional furniture sources.')
+    used=set()
+    for label,val in (('Cup 1',cup_one),('Cup 2',cup_two)):
+        text=str(val).strip()
+        if not re.fullmatch(r'[0-9]{1,10}',text) or not 1<=int(text)<2147483648:
+            raise ValueError(label+' needs a valid room furniture ID.')
+        if int(text) in used:
+            raise ValueError('Cup furniture IDs must be different.')
+        used.add(int(text))
+    extras=[]
+    for item in candidates:
+        if not re.fullmatch(r'[0-9]{1,10}',item) or not 1<=int(item)<2147483648:
+            raise ValueError('Additional furniture IDs must be positive 32-bit numbers.')
+        value=int(item)
+        if value in used:
+            raise ValueError('Duplicate furniture ID: '+str(value))
+        used.add(value)
+        extras.append(str(value))
+    return tuple(extras)
 
-    recipients: ordered (username, numeric account ID) pairs.
-    """
+
+def build_extended_coffee_sequence(cup_one,cup_two,extras,recipient,single_cup=False):
+    """One pickup immediately followed by one pass, per source."""
+    if single_cup:
+        return build_coffee_pass_sequence(cup_one,'',recipient,single_cup=True)
+    first=build_coffee_pass_sequence(cup_one,cup_two,recipient)
+    if not extras:
+        return first
+    sequence=list(first)
+    for furniture in extras:
+        sequence.extend(build_coffee_pass_sequence(
+            furniture,'',recipient,single_cup=True))
+    return tuple(sequence)
+
+
+def outgoing_furniture_id_from_packet(extension,direction,packet):
+    """Recognize the next manual UseFurniture by named outgoing G-Earth header."""
+    try:
+        records=(getattr(extension,'packet_infos',None) or {}).get(
+            direction,{}).get(packet.header_id(),())
+        if not any(str(record.get('Name','')).casefold()=='usefurniture'
+                   for record in records):
+            return None
+        instance_id=packet.read_int(6)
+        return instance_id if 1<=instance_id<2147483648 else None
+    except (ValueError,TypeError,AttributeError,IndexError):
+        return None
+
+
+def coffee_speed_test_report(elapsed,pickups,releases,requests,source_attempts,
+                             source_confirmations,delay):
+    """Only own-hand confirmations, never claimed recipient deliveries."""
+    elapsed=max(0.001,float(elapsed))
+    pickups=max(0,int(pickups))
+    releases=max(0,int(releases))
+    requests=max(0,int(requests))
+    source_notes=[]
+    for source,attempts in source_attempts.items():
+        confirmed=source_confirmations.get(source,0)
+        source_notes.append(f'{source}: {confirmed}/{attempts} pickups')
+    return (f'Speed test ({float(delay):g}s delay; {elapsed:.1f}s elapsed): '
+            f'own pickups confirmed {pickups}/{sum(source_attempts.values())}, '
+            f'own hand emptied {releases}/{requests}; '
+            f'{requests} pass requests, {60*pickups/elapsed:.1f} confirmed '
+            'own pickups/min. Sources: '+('; '.join(source_notes) or 'none')+
+            '. Recipient deliveries NOT verified.')
+
+
+def build_coffee_group_sequence(cup_one,cup_two,recipients,extra_sources=()):
+    """Each participant receives one action from each configured source per cycle."""
     if not 2<=len(recipients)<=8:
         raise ValueError('Group rotation needs 2 to 8 participants.')
+    sources=(cup_one,cup_two,*extra_sources)
     sequence=[]
-    for round_number in range(2):
+    for round_number in range(len(sources)):
         for i,(_,account_id) in enumerate(recipients):
-            cup=cup_one if (round_number+i)%2==0 else cup_two
+            furniture=sources[(round_number+i)%len(sources)]
             sequence.extend(build_coffee_pass_sequence(
-                cup,'',account_id,single_cup=True))
+                furniture,'',account_id,single_cup=True))
     return tuple(sequence)
 
 
@@ -1077,6 +1153,13 @@ class ChatOverlayApp:
         self._replay_generation=0
         self.coffee_cup_one_var=tk.StringVar(value=str(self.config.get('coffee_cup_one','476989081')))
         self.coffee_cup_two_var=tk.StringVar(value=str(self.config.get('coffee_cup_two','476989024')))
+        self.coffee_extra_furniture_var=tk.StringVar(
+            value=str(self.config.get('coffee_extra_furniture','')))
+        self.coffee_furniture_capture_var=tk.StringVar(
+            value='Optional bookcase / other sources: click Capture, then use the furniture in Habbo.')
+        self._coffee_furniture_capture_pending=False
+        self._coffee_furniture_capture_generation=0
+        self._coffee_active_extra_sources=()
         self.coffee_recipient_var=tk.StringVar(value=str(self.config.get('coffee_recipient','68808036')))
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
@@ -1113,6 +1196,15 @@ class ChatOverlayApp:
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self.coffee_speed_var=tk.StringVar(value='Speed test not run. Requires your own avatar room index.')
+        self._coffee_speed_active=False
+        self._coffee_speed_started=0.0
+        self._coffee_speed_source_attempts={}
+        self._coffee_speed_source_confirmations={}
+        self._coffee_speed_pickups=0
+        self._coffee_speed_releases=0
+        self._coffee_speed_last_source=None
+        self._coffee_speed_delay=0.1
         self._coffee_pass_requests=0
         self._coffee_carry_observations=0
         self._coffee_target_room_index=None
@@ -1712,6 +1804,12 @@ class ChatOverlayApp:
         entry('Recipient ID (fallback)',self.coffee_recipient_var,'Used only when username is blank')
         entry('Cup 1 furniture ID',self.coffee_cup_one_var,'One-cup action starts here')
         entry('Cup 2 furniture ID',self.coffee_cup_two_var,'For alternating loop')
+        entry('Other furniture IDs',self.coffee_extra_furniture_var,
+              'Optional bookcase / extras: comma-separated room IDs')
+        ttk.Button(holder,text='Capture next furniture click',
+                   command=self._arm_coffee_furniture_capture).pack(anchor='w',pady=(0,5))
+        ttk.Label(holder,textvariable=self.coffee_furniture_capture_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
         entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
         ttk.Checkbutton(holder,text='Wait for my avatar to receive/pass each cup',
@@ -1749,12 +1847,15 @@ class ChatOverlayApp:
         buttons=ttk.Frame(holder,style='Panel.TFrame');buttons.pack(fill='x',pady=(4,12))
         ttk.Button(buttons,text='Give 1 cup',command=lambda:self._start_coffee_loop(single_cup=True)).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='Start coffee pass loop',command=self._start_coffee_loop).pack(side='left',padx=(0,9))
+        ttk.Button(buttons,text='Test speed (3 cycles)',command=self._run_coffee_speed_test).pack(side='left',padx=(0,9))
         ttk.Button(buttons,text='STOP',command=self._stop_coffee_loop).pack(side='left')
         ttk.Label(holder,textvariable=self.coffee_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,7))
         ttk.Label(holder,text='DELIVERY MONITOR (server activity, not a guarantee)',
                   style='Panel.TLabel').pack(anchor='w',pady=(3,3))
         ttk.Label(holder,textvariable=self.coffee_delivery_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
+        ttk.Label(holder,textvariable=self.coffee_speed_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
@@ -1763,6 +1864,54 @@ class ChatOverlayApp:
                   'One cup sends Cup 1 + Pass once; the loop alternates both cups. '
                   'G-Earth must be connected. The server can ignore or rate-limit requests.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,0))
+
+    def _arm_coffee_furniture_capture(self):
+        """Capture one outgoing manual furniture use, not every room interaction."""
+        if self._coffee_running:
+            self.coffee_furniture_capture_var.set(
+                'Press STOP before capturing a furniture source.')
+            return
+        if (not self.packet_started or self.packet_extension is None
+            or not self._habbo_session_connected):
+            self.coffee_furniture_capture_var.set(
+                'Connect Habbo and G-Earth before capturing the bookcase ID.')
+            return
+        self._coffee_furniture_capture_generation+=1
+        generation=self._coffee_furniture_capture_generation
+        self._coffee_furniture_capture_pending=True
+        self.coffee_furniture_capture_var.set(
+            'Capture armed: double-click your bookcase (or other dispenser) in Habbo.')
+        self.root.after(15000,lambda gen=generation:self._coffee_capture_timeout(gen))
+
+    def _coffee_capture_timeout(self,generation):
+        if (generation!=self._coffee_furniture_capture_generation
+            or not self._coffee_furniture_capture_pending):
+            return
+        self._coffee_furniture_capture_pending=False
+        self.coffee_furniture_capture_var.set(
+            'No UseFurniture packet captured in 15 seconds. '
+            'Try Capture again and double-click the dispenser.')
+
+    def _receive_captured_furniture(self,furniture_id):
+        """Add the validated room-instance ID only once."""
+        furniture=str(furniture_id)
+        try:
+            existing=parse_extra_furniture_sources(
+                self.coffee_extra_furniture_var.get(),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get())
+            updated=parse_extra_furniture_sources(
+                ', '.join((*existing,furniture)),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get())
+        except ValueError as exc:
+            self.coffee_furniture_capture_var.set(
+                'Cannot add captured furniture: '+str(exc))
+            return
+        self.coffee_extra_furniture_var.set(', '.join(updated))
+        self.config['coffee_extra_furniture']=self.coffee_extra_furniture_var.get()
+        self.save()
+        self.coffee_furniture_capture_var.set(
+            f'Captured furniture instance {furniture}. Included in cup/book rotation. '
+            'Only works if the furniture actually gives a hand item.')
 
     def _resolve_coffee_recipient(self):
         """Resolve the exact in-room Habbo username, or use manual ID only if blank."""
@@ -1782,7 +1931,7 @@ class ChatOverlayApp:
         raise ValueError('Player "'+username+'" not found in room list, '
                          'and no matching Habbo profile response was received.')
 
-    def _lookup_coffee_profile(self,username,single_cup=False):
+    def _lookup_coffee_profile(self,username,single_cup=False,speed_test=False):
         """Get the exact numeric ID from Habbo without guessing a recipient."""
         if self._coffee_profile_pending is not None:
             self.coffee_status_var.set('Already checking a Habbo username. No coffee sent yet.')
@@ -1794,7 +1943,8 @@ class ChatOverlayApp:
                 raise ValueError('G-Earth could not resolve GetExtendedProfileByName.')
             self._coffee_profile_generation+=1
             gen=self._coffee_profile_generation
-            self._coffee_profile_pending=(username.casefold(),bool(single_cup),gen)
+            self._coffee_profile_pending=(username.casefold(),bool(single_cup),gen,
+                                          bool(speed_test))
             if self.packet_extension.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the profile request.')
             self.coffee_status_var.set(
@@ -1837,7 +1987,9 @@ class ChatOverlayApp:
                 'the recipient does not need to speak to attempt a cup.')
         self.coffee_status_var.set(
             'Exact username and account ID confirmed by Habbo; checking cup actions...')
-        self.root.after(0,lambda once=pending[1]:self._start_coffee_loop(single_cup=once))
+        self.root.after(0,lambda once=pending[1],bench=(
+            pending[3] if len(pending)>3 else False):
+            self._start_coffee_loop(single_cup=once,speed_test=bench))
 
     def _request_own_identity(self,force=False):
         """Request current account ID from Habbo's normal UserObject response.
@@ -1953,7 +2105,8 @@ class ChatOverlayApp:
                 return
             try:
                 seq=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
-                                               self.coffee_cup_two_var.get(),targets)
+                                               self.coffee_cup_two_var.get(),targets,
+                                               self._coffee_active_extra_sources)
             except ValueError as exc:
                 self._stop_coffee_loop('Group rotation update failed: '+str(exc))
                 return
@@ -1973,7 +2126,27 @@ class ChatOverlayApp:
                 lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
         self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
 
-    def _start_coffee_loop(self,single_cup=False):
+    def _run_coffee_speed_test(self):
+        """One finite measurement for one willing recipient, no automatic speed ramp."""
+        if self.coffee_group_enabled_var.get():
+            self.coffee_speed_var.set(
+                'Speed testing is single-recipient only. Disable group mode first.')
+            return
+        if self._own_room_index is None:
+            self._request_own_identity()
+            self.coffee_speed_var.set(
+                'Cannot measure actual pickups until your avatar room index is known. '
+                'Use Detect my avatar and re-enter the room if necessary.')
+            return
+        if self._coffee_running:
+            self.coffee_speed_var.set('Press STOP before running a separate speed test.')
+            return
+        if not self.packet_started or not self._habbo_session_connected:
+            self.coffee_speed_var.set('Connect Habbo and G-Earth before testing.')
+            return
+        self._start_coffee_loop(speed_test=True)
+
+    def _start_coffee_loop(self,single_cup=False,speed_test=False):
         if self._coffee_running:
             self.coffee_status_var.set('Coffee loop already running. Click STOP first.')
             return
@@ -2002,6 +2175,9 @@ class ChatOverlayApp:
             return
 
         group_mode=bool(not single_cup and self.coffee_group_enabled_var.get())
+        if speed_test and group_mode:
+            self.coffee_speed_var.set('Disable group mode for the finite speed test.')
+            return
         username=self.coffee_username_var.get().strip()
         if group_mode:
             try:
@@ -2017,10 +2193,14 @@ class ChatOverlayApp:
                 return
         elif (username and username.casefold() not in self._room_users
               and username.casefold() not in self._room_profile_cache):
-            self._lookup_coffee_profile(username,single_cup=single_cup)
+            self._lookup_coffee_profile(
+                username,single_cup=single_cup,speed_test=speed_test)
             return
         targets=[]
         try:
+            extras=(() if single_cup else parse_extra_furniture_sources(
+                self.coffee_extra_furniture_var.get(),
+                self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get()))
             if group_mode:
                 for n in group_names:
                     record=self._room_users.get(n.casefold())
@@ -2029,13 +2209,16 @@ class ChatOverlayApp:
                 target_name='Group rotation'
                 target_id=targets[0][1]
                 sequence=build_coffee_group_sequence(self.coffee_cup_one_var.get(),
-                                                    self.coffee_cup_two_var.get(),targets)
+                                                    self.coffee_cup_two_var.get(),targets,extras)
             else:
                 target_id,target_name=self._resolve_coffee_recipient()
-                sequence=build_coffee_pass_sequence(self.coffee_cup_one_var.get(),
-                                                    self.coffee_cup_two_var.get(),
-                                                    target_id,single_cup=single_cup)
+                sequence=build_extended_coffee_sequence(
+                    self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get(),
+                    extras,target_id,single_cup=single_cup)
             interval=validate_replay_interval(self.coffee_interval_var.get())
+            if speed_test and self._own_room_index is None:
+                raise ValueError('Cannot test verified throughput without your own '
+                                 'avatar room index. Click Detect my avatar.')
             if self.coffee_wait_for_hand_var.get() and self._own_room_index is None:
                 self._request_own_identity()
                 use_timer=messagebox.askyesno(
@@ -2055,7 +2238,8 @@ class ChatOverlayApp:
             if group_mode and interval<10:
                 raise ValueError('Group mode requires at least 10 seconds per packet action.')
             cycles_text=self.coffee_cycles_var.get().strip()
-            if single_cup:cycles=1
+            if speed_test:cycles=3
+            elif single_cup:cycles=1
             else:
                 if not re.fullmatch(r'[0-9]{1,5}',cycles_text):
                     raise ValueError('Cycles must be an integer from 0 to 10000.')
@@ -2069,8 +2253,10 @@ class ChatOverlayApp:
             self.coffee_status_var.set('Cannot start: '+str(exc)[:170])
             return
 
-        duration=('one cup' if single_cup else
-                  'continuously until STOP' if cycles==0 else f'for {cycles} complete cycles')
+        duration=('3-cycle verified speed test (finite)' if speed_test else
+                  'one cup' if single_cup else
+                  'continuously until STOP' if cycles==0
+                  else f'for {cycles} complete cycles')
         if group_mode:
             recipient_display=', '.join(n for n,_ in targets)
             presence_note=('Group mode is for people who agreed to participate. '
@@ -2088,7 +2274,10 @@ class ChatOverlayApp:
             f'{presence_note}'
             f'Delay between actions: {interval:g} seconds\n'
             f'Wait for own-hand server updates: '
-            f'{"ON" if self.coffee_wait_for_hand_var.get() else "OFF"}\n\n'
+            f'{"ON" if (self.coffee_wait_for_hand_var.get() or speed_test) else "OFF"}\n'
+            f'Hand-item furniture sources per cycle: {len(sequence)//2 if not group_mode else len(extras)+2}\n'
+            'The speed test measures your OWN pickup/empty-hand confirmations, '
+            'not receipt by another player.\n\n'
             'Only proceed with willing recipients. Habbo may reject or rate-limit actions.',
             parent=self.root):
             self.coffee_status_var.set('Coffee loop cancelled.')
@@ -2100,12 +2289,26 @@ class ChatOverlayApp:
                            coffee_interval=str(interval),coffee_cycles=str(cycles),
                            coffee_group_names=self.coffee_group_names_var.get().strip(),
                            coffee_group_enabled=bool(self.coffee_group_enabled_var.get()),
-                           coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()))
+                           coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()),
+                           coffee_extra_furniture=self.coffee_extra_furniture_var.get().strip())
         self.save()
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
-        self._coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get())
+        self._coffee_active_extra_sources=tuple(extras)
+        self._coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get() or speed_test)
+        self._coffee_speed_active=bool(speed_test)
+        self._coffee_speed_started=time.monotonic() if speed_test else 0.0
+        self._coffee_speed_delay=interval
+        self._coffee_speed_source_attempts={}
+        self._coffee_speed_source_confirmations={}
+        self._coffee_speed_last_source=None
+        self._coffee_speed_pickups=0
+        self._coffee_speed_releases=0
+        if speed_test:
+            self.coffee_speed_var.set(
+                f'Finite 3-cycle speed test running at {interval:g}s delay '
+                'using confirmed own-avatar CarryObject events...')
         self._coffee_ack_phase=None
         self._coffee_ack_since=0.0
         self._coffee_ack_timer=None
@@ -2176,6 +2379,15 @@ class ChatOverlayApp:
         if timer is not None:
             try:self.root.after_cancel(timer)
             except (tk.TclError,AttributeError):pass
+        if getattr(self,'_coffee_speed_active',False):
+            if phase=='pickup':
+                self._coffee_speed_pickups+=1
+                source=self._coffee_speed_last_source
+                if source is not None:
+                    self._coffee_speed_source_confirmations[source]=(
+                        self._coffee_speed_source_confirmations.get(source,0)+1)
+            elif phase=='release':
+                self._coffee_speed_releases+=1
         if phase=='release' and self._coffee_finish_after_ack:
             self._stop_coffee_loop(
                 'Requested cycles finished; Habbo reports your hand is empty. '
@@ -2225,6 +2437,14 @@ class ChatOverlayApp:
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
+        if self._coffee_speed_active and self._coffee_index%2==0:
+            # Count only the particular source whose UseFurniture was just sent.
+            matched=re.search(r'\{out:UseFurniture\}\{i:([0-9]+)\}',expression)
+            if matched:
+                source=matched.group(1)
+                self._coffee_speed_last_source=source
+                self._coffee_speed_source_attempts[source]=(
+                    self._coffee_speed_source_attempts.get(source,0)+1)
         # Odd steps are PassCarryItem. Counting a successful local send
         # does NOT establish that Habbo accepted the handoff.
         if self._coffee_index%2==1:
@@ -2242,7 +2462,10 @@ class ChatOverlayApp:
             if limit_reached and not self._coffee_wait_for_hand:
                 self._stop_coffee_loop('Requested cycles finished.')
                 return
-        label=('Cup 1','Pass','Cup 2','Pass')[self._coffee_index%4]
+        upcoming=self._coffee_sequence[self._coffee_index]
+        next_source=re.search(r'\{out:UseFurniture\}\{i:([0-9]+)\}',upcoming)
+        label=(f'Pick up from {next_source.group(1)}'
+               if next_source else 'Pass hand item')
         if self._coffee_group_active:
             next_recipient=self._coffee_group_targets[
                 (self._coffee_index//2)%len(self._coffee_group_targets)][0]
@@ -2271,6 +2494,15 @@ class ChatOverlayApp:
                     lambda gen=generation:self._coffee_loop_tick(gen))
 
     def _stop_coffee_loop(self,reason=None):
+        if getattr(self,'_coffee_speed_active',False):
+            elapsed=time.monotonic()-self._coffee_speed_started
+            report=coffee_speed_test_report(
+                elapsed,self._coffee_speed_pickups,self._coffee_speed_releases,
+                self._coffee_pass_requests,self._coffee_speed_source_attempts,
+                self._coffee_speed_source_confirmations,self._coffee_speed_delay)
+            self.coffee_speed_var.set(
+                ('Test ended: '+str(reason or 'stopped')+'. ')[:120]+report)
+        self._coffee_speed_active=False
         self._coffee_running=False
         self._coffee_start_queued=False
         self._coffee_queued_single=False
@@ -3387,6 +3619,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         return
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    if direction=='Outgoing' and self._coffee_furniture_capture_pending:
+                        captured=outgoing_furniture_id_from_packet(
+                            ext,Direction.TO_SERVER,msg.packet)
+                        if captured is not None:
+                            self._coffee_furniture_capture_pending=False
+                            self._packet_put(('coffee_source_captured',captured))
                     if direction=='Incoming':
                         kind=classify_room_packet(ext,Direction.TO_CLIENT,msg.packet,detail)
                         if kind=='RoomReady':
@@ -3512,6 +3750,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.whisper_hints.append((occurred,body))
                         self.whisper_hints=self.whisper_hints[-32:]
                 continue
+            if item[0]=='coffee_source_captured':
+                self._receive_captured_furniture(item[1])
+                continue
             if item[0]=='coffee_profile':
                 self._accept_coffee_profile(item[1],item[2])
                 continue
@@ -3624,6 +3865,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._coffee_furniture_capture_pending=False
                     self._own_account_id=None
                     self._own_name=''
                     self._own_room_index=None
