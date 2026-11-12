@@ -278,6 +278,9 @@ class CoffeeSessionRecorder:
         self.record('session_start',note=(
             f'delay={self.interval:g}s; sources={",".join(self.source_ids)}; '
             'observed hand events do not prove receipt by a recipient'))
+        if self.error:
+            self._handle.close()
+            raise OSError('Could not begin session recording: '+self.error)
 
     @staticmethod
     def _cell(value):
