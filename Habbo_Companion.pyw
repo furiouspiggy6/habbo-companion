@@ -477,6 +477,60 @@ def account_attempt_auto_play(debug_port,report):
     return 'timeout'
 
 
+def account_select_classic_launcher(timeout=16):
+    """Click a named Classic button in a Habbo Launcher window if accessible.
+
+    This does not dismiss Windows permission prompts, enter login details,
+    or click controls in arbitrary windows. Falls back to manual Classic.
+    """
+    if os.name!='nt':
+        return False
+    script=r'''
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root=[System.Windows.Automation.AutomationElement]::RootElement
+$max=(Get-Date).AddSeconds(TIMEOUT_SECONDS)
+while ((Get-Date) -lt $max) {
+    $windows=$root.FindAll(
+       [System.Windows.Automation.TreeScope]::Children,
+       [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($window in $windows) {
+        $title=$window.Current.Name
+        if ($title -notmatch '(?i)(habbo.*launcher|launcher.*habbo)') {
+            continue
+        }
+        $controls=$window.FindAll(
+          [System.Windows.Automation.TreeScope]::Descendants,
+          [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($button in $controls) {
+            if ($button.Current.Name -ne 'Classic' -or
+                -not $button.Current.IsEnabled) { continue }
+            try {
+                $invoke=$button.GetCurrentPattern(
+                  [System.Windows.Automation.InvokePattern]::Pattern)
+                $invoke.Invoke()
+                Write-Output 'CLASSIC_CLICKED'
+                exit 0
+            } catch { }
+        }
+    }
+    Start-Sleep -Milliseconds 450
+}
+exit 2
+'''.replace('TIMEOUT_SECONDS',str(int(max(1,min(30,timeout)))))
+    encoded=base64.b64encode(script.encode('utf-16-le')).decode('ascii')
+    flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+    try:
+        result=subprocess.run(
+            ['powershell.exe','-NoProfile','-NonInteractive',
+             '-EncodedCommand',encoded],
+            timeout=timeout+6,capture_output=True,text=True,
+            creationflags=flags)
+        return result.returncode==0 and 'CLASSIC_CLICKED' in result.stdout
+    except (OSError,subprocess.TimeoutExpired,ValueError):
+        return False
+
+
 def parse_coffee_group_names(raw):
     """Opt-in room activity list; never silently add people."""
     if not isinstance(raw,str):
