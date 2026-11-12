@@ -889,7 +889,7 @@ def account_fetch_ticket_from_signed_in_profile(debug_port):
         },timeout=13)
     if response.get('exceptionDetails'):
         raise ValueError('The official Habbo ticket request could not run.')
-    obj=response.get('result',{}).get('result',{}).get('value')
+    obj=response.get('result',{}).get('value')
     if not isinstance(obj,dict):
         raise ValueError('The official Habbo ticket response was unreadable.')
     if obj.get('kind')!='ticket':
