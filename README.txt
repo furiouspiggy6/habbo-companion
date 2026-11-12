@@ -1,66 +1,44 @@
-HABBO COMPANION v1.1.25 — AUTOMATIC COFFEE LOOP RECORDINGS
-==========================================================
+HABBO COMPANION v1.1.26 — FIX UNKNOWN ROOM INDEX AFTER ID CONFIRMED
+====================================================================
 
-WHAT CHANGED
-------------
-Every coffee session now automatically records a local timestamped CSV,
-including the original FAST 0.1-second loop. You do not need to watch
-the packet viewer, save any packet screenshots, run the slower confirmed
-speed test or record results manually.
+The problem:
+  Account confirmed: dan.alt100 (ID 69016008);
+  room index still unavailable. Re-enter the room if needed.
 
-Auto-recording starts when you confirm Give 1 cup, Start coffee pass
-loop, or Test speed (3 cycles). The NORMAL 0.1-second loop continues
-at its configured 0.1s packet delay. The recorder does not wait for
-server replies and never changes that delay.
+Your account ID lookup already worked. The problem was identifying the
+separate room avatar index from Habbo's incoming "Users" packet. The
+existing G-Python HEntity parser relies on variable entity tail fields
+which can change with Habbo client versions. Parsing the full room
+list could fail, leaving indexes unrecognized even when 50 players
+were detected.
 
-Automatic events saved:
-- Each successfully issued local UseFurniture pickup request with
-  the exact room furniture ID and chronological action number.
-- Each successfully issued PassCarryItem request with account ID,
-  participant name (when known) and chronological action number.
-- The observed server CarryObject event for YOUR avatar, including
-  item type (positive for held-item, 0 for empty hand), when the
-  game supplied your room avatar index.
-- The observed CarryObject event for the CURRENT recipient when the
-  recipient's room avatar index is known.
-- Session start/end time, selected sources, configured action delay,
-  and why the loop stopped or encountered a send/logging error.
+What changed:
+- Companion now reads a strongly validated binary prefix of each
+  Habbo room Users entity: account ID, username, motto, avatar figure,
+  room index, tile coordinates, height, direction and type.
+- It can recover indexes even when subsequent optional entity fields
+  change or cannot be parsed by the older G-Python entity decoder.
+- It matches the server-confirmed self account ID (69016008 on the
+  affected screenshot) with the corresponding room index. This does
+  not use account IDs as room indexes or invent numbers.
+- Old G-Earth expression and G-Python entity decoders remain as
+  fallbacks. Validated real binary indexes take priority.
+- The packet type is checked before decoding. Wrong or ambiguous
+  records are rejected rather than used for confirmed-hand coffee
+  transfers.
 
-The CSV contains timestamps with milliseconds and elapsed milliseconds.
-All session events are buffered and written to disk as they occur.
-The app synchronizes writer access for server events arriving from
-the G-Earth interception thread, and flushes frequently. If logging
-fails or reaches its 64MB per-session safety cap, the loop STOPS
-instead of silently continuing unrecorded.
+To use:
+1. Update Companion to 1.1.26 using Updates > Check online.
+2. Make sure G-Earth is connected and re-enter the Habbo room once.
+3. In Coffee Pass Loop, look for:
+       Your avatar: dan.alt100 — room index <number>
+4. If the index still cannot be decoded, leave the confirmed-hand
+   checkbox OFF and use the normal timed loop. Do not type your account
+   ID into the recipient room-index field.
 
-WHEN YOU PRESS STOP
--------------------
-A final human-readable .summary.txt file is saved beside the CSV,
-reporting configured delay, elapsed time, pickup requests, pass
-requests, own carrying and empty-hand updates, target carrying and
-empty-hand updates, per-furniture pickup requests, requests/minute
-and server holding-item events/minute.
+This preserves the original fast 0.1s loop, automatic CSV recording,
+bookcase sources, three-cycle speed test, group rotation, original
+Habbo chat PNGs, whispers and existing updater.
 
-Files are automatically created in:
-
-  %APPDATA%\HabboViewChat\coffee_sessions\
-
-Click "Open saved coffee results" on the Coffee Pass tab to open
-that folder directly. Files remain local: Companion does not upload
-anything to GitHub, ChatGPT or any external analytics service.
-You can share a CSV or summary voluntarily if you want deeper analysis.
-
-IMPORTANT: The fast sender loop cannot confirm every recipient received
-a hand item. These logs identify requests sent locally, incoming
-server carrying-item updates and their timestamps, NOT private
-recipient-side HandItemReceived events. If the recipient's room
-index is unavailable, the CSV still records all local coffee requests
-and your own carrying-item events, but there can be no target-side
-observations. Even when target-side events arrive, each one is not
-a guaranteed receipt for a specific request.
-
-Your original chat bubbles, whisper alignment, all sources including
-the bookcase, timed and acknowledged loops, group mode, opt-out
-and update workflow are otherwise unchanged.
-
-INSTALL: Habbo Companion > Updates > Check online.
+The change has offline regression tests including a simulated
+50-player room list. It still requires in-game validation.
