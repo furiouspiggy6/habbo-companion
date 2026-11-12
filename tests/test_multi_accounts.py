@@ -110,7 +110,7 @@ class MultiAccountTests(unittest.TestCase):
         self.assertIn("self.notebook.add(accounts,text='  Accounts  ')",code)
         self.assertIn('account_login_browser()',code)
         self.assertIn('account_browser_command(browser,folder,account[\'url\'])',code)
-        self.assertIn('one G-Earth',code.lower().replace('ONE G-Earth','one G-Earth'))
+        self.assertIn('one g-earth',code.lower())
         self.assertNotIn('self.account_password_var',code)
 
 if __name__=='__main__':
