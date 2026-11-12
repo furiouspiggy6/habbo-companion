@@ -482,14 +482,16 @@ HABBO_AUTO_PLAY_JS=r'''(() => {
     'a,button,[role=button],input[type=button],input[type=submit]'));
   const targets=[
     ['launch',/^(launch and log in|launch & log in|launch and login)$/i],
-    ['play-now',/^play now!?$/i],
-    ['play',/^play!?$/i],
+    ['play-now',/^play now!?(?:\s+h)?$/i],
+    // Habbo sometimes renders a small H badge as part of the PLAY text.
+    ['play',/^play!?(?:\s+h)?$/i],
     ['download',/^download!?$/i]
   ];
   for (const [kind,re] of targets) {
     for (const el of choices) {
       const text=(el.innerText || el.value ||
-                  el.getAttribute('aria-label') || '').trim().replace(/\s+/g,' ');
+                  el.getAttribute('aria-label') ||
+                  el.textContent || '').trim().replace(/\s+/g,' ');
       const rect=el.getBoundingClientRect();
       const style=getComputedStyle(el);
       if (!re.test(text) || !rect.width || !rect.height ||
@@ -612,7 +614,7 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                    'Checking whether Habbo accepted it...')
             time.sleep(1.6)
             continue
-        if login_only and kind in ('play','play-now','launch'):
+        if login_only and kind in ('play','play-now','launch','download'):
             report('Habbo session is signed in. Use Auto Play to launch Classic.')
             return 'signed_in'
         if kind=='not_habbo':
@@ -2307,12 +2309,11 @@ class ChatOverlayApp:
                  bg='#121a28',fg='#73c5ab',wraplength=620,
                  justify='left').pack(anchor='w',fill='x',pady=(0,9))
         tk.Label(f,
-            text='Open account login automatically signs in when a saved '
-                 'login exists. Auto Play also clicks Play/Launch and tries '
-                 'Classic in Habbo Launcher. A second account may launch while '
-                 'G-Earth is attached to the first, but its packets will NOT '
-                 'be intercepted by that existing proxy. CAPTCHA and Windows '
-                 'prompts may still need you.',
+            text='Auto Play all first opens/checks EVERY saved browser profile '
+                 'and then tries Classic launches one by one. If Classic or a '
+                 'browser permission prompt needs manual action, additional '
+                 'native launches pause to protect account identity. G-Earth '
+                 'routing to multiple game clients is NOT yet implemented.',
             fg='#8ea9c1',bg='#121a28',wraplength=620,
             justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
@@ -2527,74 +2528,128 @@ class ChatOverlayApp:
 
     def _account_auto_worker(self,accounts,generation,login_only=False,
                              packet_note=''):
+        """Prepare ALL account browser logins before launching any native client.
+
+        A failed profile must not prevent the other independent browser logins.
+        Native launches remain sequential to avoid mixing launcher tickets.
+        """
         def report(value):
             self._packet_put(('account_auto_status',generation,
                               (str(value)+packet_note)[:350]))
+
+        def ready_browser(account,browser):
+            ident=account['id']
+            folder=APP_DIR/'account_browser_profiles'/ident
+            debug_port=account_browser_debug_port(ident)
+            folder.mkdir(parents=True,exist_ok=True)
+            try:
+                account_browser_pages(debug_port)
+                return debug_port
+            except (OSError,ValueError,TimeoutError,
+                    urllib.error.URLError,UnicodeError):
+                pass
+            cmd=account_browser_command(browser,folder,account['url'],debug_port)
+            subprocess.Popen(cmd,cwd=str(browser.parent),
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+            for _ in range(28):
+                time.sleep(0.45)
+                try:
+                    account_browser_pages(debug_port)
+                    return debug_port
+                except (OSError,ValueError,TimeoutError,
+                        urllib.error.URLError,UnicodeError):
+                    continue
+            return None
+
         try:
             browser=account_login_browser()
             if browser is None:
                 report('Brave/Chrome/Edge not found; install one first.')
                 return
+            authenticated=[]
+            failures=[]
+            total=len(accounts)
+            # Phase 1: ensure each profile is signed in. This also opens all
+            # requested browser windows before any desktop launcher work begins.
             for n,account in enumerate(accounts,1):
-                ident=account['id']
                 label=account['label']
-                folder=APP_DIR/'account_browser_profiles'/ident
-                debug_port=account_browser_debug_port(ident)
-                report(f'{n}/{len(accounts)}: starting {label} browser...')
-                folder.mkdir(parents=True,exist_ok=True)
+                report(f'{n}/{total}: checking {label} browser login...')
                 try:
-                    account_browser_pages(debug_port)
-                    ready=True
-                except (OSError,ValueError,TimeoutError,
-                        urllib.error.URLError,UnicodeError):
-                    ready=False
-                if not ready:
-                    cmd=account_browser_command(browser,folder,account['url'],
-                                                debug_port)
-                    subprocess.Popen(
-                        cmd,cwd=str(browser.parent),
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL)
-                    for _ in range(28):
-                        time.sleep(0.45)
-                        try:
-                            account_browser_pages(debug_port)
-                            ready=True
-                            break
-                        except (OSError,ValueError,TimeoutError,
-                                urllib.error.URLError,UnicodeError):
-                            continue
-                if not ready:
-                    report(f'{label}: browser opened but automatic login '
-                           'could not connect to its local control endpoint. '
-                           'Close all dedicated Brave windows for this account '
-                           '(from previous Companion versions), then retry. '
-                           'Do not sign out of other account profiles.')
-                    break
+                    debug_port=ready_browser(account,browser)
+                except (OSError,ValueError,TimeoutError) as exc:
+                    report(f'{label}: could not open browser: '+str(exc)[:130])
+                    failures.append(label)
+                    continue
+                if debug_port is None:
+                    report(f'{label}: browser opened, but local browser control '
+                           'is unavailable. Close old dedicated account windows '
+                           'and retry; other accounts will still be checked.')
+                    failures.append(label)
+                    continue
                 try:
-                    credentials=account_saved_login_read(ident)
+                    credentials=account_saved_login_read(account['id'])
                 except (OSError,ValueError) as exc:
-                    report(f'{label}: local saved-login error: '+str(exc)[:140])
-                    break
+                    report(f'{label}: saved login unavailable: '+str(exc)[:130])
+                    failures.append(label)
+                    continue
                 result=account_attempt_auto_play(
-                    debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
-                    credentials=credentials,login_only=login_only)
+                    debug_port,
+                    lambda msg,name=label:report(f'{name}: {msg}'),
+                    credentials=credentials,login_only=True)
                 if result=='signed_in':
-                    report(f'{label}: signed in on Habbo website. '
-                           'Use Auto Play to launch the Classic client.')
-                elif result=='launched':
-                    report(f'{label}: website launch requested; '
-                           'checking for the native Classic button...')
-                    if account_select_classic_launcher(16):
-                        report(f'{label}: Classic selected automatically. '
-                               'G-Earth interception is not independently verified.')
-                    else:
-                        report(f'{label}: Habbo Launcher may require clicking '
-                               'Classic or approving an external-app prompt. '
-                               'Check the launcher window.')
-                        if len(accounts)>1:break
+                    authenticated.append((account,debug_port,credentials))
+                    report(f'{n}/{total}: {label} website login ready.')
                 else:
-                    if len(accounts)>1:break
+                    failures.append(label)
+                    report(f'{n}/{total}: {label} website login not confirmed '
+                           f'({result}); continuing with remaining accounts.')
+            if login_only:
+                report(f'Browser sign-in complete: {len(authenticated)}/{total} '
+                       f'ready. {len(failures)} need attention.')
+                return
+            if not authenticated:
+                report('No account logins were confirmed. Open a dedicated '
+                       'account browser and check the sign-in screen.')
+                return
+
+            # Phase 2: launch Classic, but never allow an unresolved native
+            # launcher window to consume a different account's login ticket.
+            attempted=0
+            classic_selected=0
+            unresolved=False
+            for n,(account,debug_port,credentials) in enumerate(authenticated,1):
+                label=account['label']
+                report(f'{n}/{len(authenticated)}: launching {label} Classic...')
+                result=account_attempt_auto_play(
+                    debug_port,
+                    lambda msg,name=label:report(f'{name}: {msg}'),
+                    credentials=credentials,login_only=False)
+                if result!='launched':
+                    report(f'{label}: Classic launch not requested ({result}); '
+                           'checking remaining accounts.')
+                    failures.append(label)
+                    continue
+                attempted+=1
+                report(f'{label}: website launch requested; checking '
+                       'for the native Classic button...')
+                if account_select_classic_launcher(16):
+                    classic_selected+=1
+                    report(f'{label}: Classic selected. G-Earth proxy '
+                           'interception has NOT been verified for this avatar.')
+                else:
+                    unresolved=True
+                    report(f'{label}: launcher requires manual Classic selection '
+                           'or a browser permission prompt. Pausing remaining '
+                           'native launches to avoid mixing account login tickets. '
+                           'All independent browser logins were checked.')
+                    break
+            report(f'Batch complete: {len(authenticated)}/{total} website logins '
+                   f'ready; {classic_selected} Classic button selection(s) '
+                   f'confirmed, {attempted} launch request(s). '
+                   + ('Manual launcher action needed; remaining native launches '
+                      'paused to protect account identity. ' if unresolved else '')
+                   + 'G-Earth routing for additional accounts is NOT automatic.')
         except Exception as exc:
             report('Auto Play stopped: '+type(exc).__name__+': '+str(exc)[:150])
         finally:
