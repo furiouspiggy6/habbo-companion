@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.40 — LOCAL DIRECT CLASSIC LAUNCH
+HABBO COMPANION v1.1.41 — LEGACY UPDATE COMPATIBILITY FIX
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -415,3 +415,37 @@ the local Windows installer. It uses Python's standard library only.
 No additional applications, developer tools, GitHub repositories or
 Bobba services are needed by this feature. Your existing saved
 accounts, credential vault and G-Earth configuration are preserved.
+
+
+v1.1.41 — FIX "UNEXPECTED FILES IN UPDATE PACKAGE"
+==================================================
+Older Companion update helpers only allowed the original three files:
+Habbo_Companion.pyw, Habbo_Update_Helper.py and README.txt (plus the
+habbo-update.json package manifest). Adding headless_transport.py in
+v1.1.39 and local_classic_launch.py in v1.1.40 caused the installed OLD
+updater to reject the ZIP before it could install the NEW helper.
+
+THIS RELEASE FIXES THE UPGRADE PATH:
+The ZIP contains only the three original application files and the
+manifest, so an old updater can verify and install it. Code for both
+Headless Test and Direct Classic is embedded into the shipped
+Habbo_Companion.pyw itself during release packaging. Both features are
+included and run without needing separate companion Python modules.
+The archive is still SHA-256 checked against the release manifest, and
+its file-level hashes are verified by the installed updater.
+
+This update preserves Windows Credential Manager logins, browser
+profiles, settings.json, G-Earth configuration and user files. No
+manual ZIP downloads, file replacement or reinstall is needed.
+Use Updates > Check online on any supported older installation.
+
+Fresh source installs may still ship the separate Python source
+modules. The verified ZIP update is self-contained by design, so
+future new Python modules must not add files to that legacy update
+archive without an explicit migration mechanism.
+
+There are still no Bobba third-party network services, tools, cloned
+clients or endpoints in the Direct Classic feature. The official
+Habbo.exe itself must connect to official Habbo game servers to play.
+This update does not implement credentialless headless live gameplay,
+per-client G-Earth proxy routing or avatar verification.
