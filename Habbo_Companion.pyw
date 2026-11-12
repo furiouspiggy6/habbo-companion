@@ -7,6 +7,7 @@ capture, remote access or gameplay automation. Uses only Python stdlib.
 """
 from __future__ import annotations
 import ctypes
+import csv
 from ctypes import wintypes
 from dataclasses import dataclass
 import json
@@ -234,6 +235,135 @@ def coffee_speed_test_report(elapsed,pickups,releases,requests,source_attempts,
             f'{requests} pass requests, {60*pickups/elapsed:.1f} confirmed '
             'own pickups/min. Sources: '+('; '.join(source_notes) or 'none')+
             '. Recipient deliveries NOT verified.')
+
+
+class CoffeeSessionRecorder:
+    """Buffered local CSV recorder for NORMAL and confirmed coffee loops.
+
+    Recording never changes packet timings or waits for acknowledgments.
+    Writes only this user's own hand updates and the selected target's
+    hand updates, never whole-room chat or arbitrary raw packet contents.
+    """
+    COLUMNS=('local_time','elapsed_ms','event','furniture_id',
+             'recipient_name','recipient_account_id','avatar_room_index',
+             'hand_item_type','action_number','cycle','note')
+    MAX_BYTES=64*1024*1024
+
+    def __init__(self,directory,interval,source_ids,recipients):
+        directory=Path(directory)
+        directory.mkdir(parents=True,exist_ok=True)
+        slug=datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        self.path=directory/('coffee_session_'+slug+'_'+uuid.uuid4().hex[:6]+'.csv')
+        self.summary_path=self.path.with_suffix('.summary.txt')
+        self._lock=threading.Lock()
+        self._handle=open(self.path,'w',newline='',encoding='utf-8',buffering=65536)
+        self._writer=csv.writer(self._handle)
+        self._writer.writerow(self.COLUMNS)
+        self.started=time.monotonic()
+        self.interval=float(interval)
+        self.source_ids=tuple(str(v) for v in source_ids)
+        self.recipients=tuple((str(n),str(uid)) for n,uid in recipients)
+        self.closed=False
+        self.error=None
+        self.bytes_written=0
+        self.events=0
+        self.pickup_requests=0
+        self.pass_requests=0
+        self.own_held_updates=0
+        self.own_empty_updates=0
+        self.target_held_updates=0
+        self.target_empty_updates=0
+        self.last_write_at=time.monotonic()
+        self.record('session_start',note=(
+            f'delay={self.interval:g}s; sources={",".join(self.source_ids)}; '
+            'observed hand events do not prove receipt by a recipient'))
+
+    @staticmethod
+    def _cell(value):
+        """Prevent user-chosen names becoming spreadsheet formulas in CSV."""
+        result=str(value if value is not None else '')
+        if result.startswith(('=','+','-','@','\t','\r','\n')):
+            return "'"+result
+        return result
+
+    def record(self,event,furniture='',name='',account_id='',room_index='',
+               hand_item='',action_number='',cycle='',note=''):
+        with self._lock:
+            if self.closed:
+                return False
+            try:
+                now=time.monotonic()
+                row=(datetime.now().astimezone().isoformat(timespec='milliseconds'),
+                     round((now-self.started)*1000),event,furniture,name,
+                     account_id,room_index,hand_item,action_number,cycle,note)
+                safe=tuple(self._cell(item) for item in row)
+                self.bytes_written+=sum(len(v.encode('utf-8'))+4 for v in safe)
+                if self.bytes_written>self.MAX_BYTES:
+                    raise OSError('Coffee recording reached 64 MB size limit')
+                self._writer.writerow(safe)
+                self.events+=1
+                if event=='pickup_request':self.pickup_requests+=1
+                elif event=='pass_request':self.pass_requests+=1
+                elif event=='own_held_update':self.own_held_updates+=1
+                elif event=='own_empty_update':self.own_empty_updates+=1
+                elif event=='target_held_update':self.target_held_updates+=1
+                elif event=='target_empty_update':self.target_empty_updates+=1
+                if self.events%25==0 or now-self.last_write_at>=3:
+                    self._handle.flush()
+                    self.last_write_at=now
+                return True
+            except (OSError,UnicodeError,ValueError) as exc:
+                self.error=str(exc)
+                return False
+
+    def stats(self):
+        with self._lock:
+            seconds=max(0.001,time.monotonic()-self.started)
+            return dict(seconds=seconds,pickups_sent=self.pickup_requests,
+                        passes_sent=self.pass_requests,
+                        own_held=self.own_held_updates,
+                        own_empty=self.own_empty_updates,
+                        target_held=self.target_held_updates,
+                        target_empty=self.target_empty_updates,
+                        events=self.events,error=self.error,
+                        pickup_requests_per_min=60*self.pickup_requests/seconds,
+                        own_held_updates_per_min=60*self.own_held_updates/seconds)
+
+    def finish(self,reason):
+        # Never leave a session without a saved CSV and a separate summary.
+        self.record('session_stop',note=str(reason))
+        stats=self.stats()
+        with self._lock:
+            if not self.closed:
+                self.closed=True
+                try:
+                    self._handle.flush()
+                finally:
+                    self._handle.close()
+        summary=(
+            'HABBO COMPANION COFFEE SESSION — LOCAL RECORDING\n'
+            f'CSV: {self.path}\n'
+            f'Delay configured: {self.interval:g}s per action\n'
+            f'Sources: {", ".join(self.source_ids)}\n'
+            f'Recipients: {", ".join(n for n,_ in self.recipients)}\n'
+            f'Elapsed: {stats["seconds"]:.2f}s\n'
+            f'Pickup requests sent locally: {stats["pickups_sent"]}\n'
+            f'Pass requests sent locally: {stats["passes_sent"]}\n'
+            f'Own avatar holding-item updates: {stats["own_held"]}\n'
+            f'Own avatar empty-hand updates: {stats["own_empty"]}\n'
+            f'Target avatar holding-item updates: {stats["target_held"]}\n'
+            f'Target avatar empty-hand updates: {stats["target_empty"]}\n'
+            f'Pickup requests/min: {stats["pickup_requests_per_min"]:.1f}\n'
+            f'Own holding-item updates/min: {stats["own_held_updates_per_min"]:.1f}\n'
+            f'End reason: {reason}\n'
+            f'Recording error: {stats["error"] or "none"}\n'
+            'NOTE: CarryObject events are observations, not per-cup receipts.\n'
+            'NOTE: Sent packets only confirm a local send, not server acceptance.\n'
+            'NOTE: Own/target room index must be known to classify their events.\n'
+            'Only the sender and actively selected recipient were monitored.\n'
+        )
+        self.summary_path.write_text(summary,encoding='utf-8')
+        return stats
 
 
 def build_coffee_group_sequence(cup_one,cup_two,recipients,extra_sources=()):
