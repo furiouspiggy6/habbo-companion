@@ -797,6 +797,79 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     return 'timeout'
 
 
+def account_is_native_habbo_window(title):
+    """Strict native AIR title filter; excludes Habbo webpages and Launcher."""
+    return bool(re.match(r'^HabboAir(?:Plus)?(?:\b|[\s\[\-])',
+                         str(title).strip(),re.I))
+
+
+def account_native_client_windows():
+    """Snapshot visible native HabboAir windows by (HWND, process ID).
+
+    Returns None if Windows enumeration fails, so an uncertain snapshot never
+    authorises an additional account launch. This is NOT avatar verification.
+    """
+    if os.name!='nt':
+        return None
+    try:
+        user32=ctypes.WinDLL('user32',use_last_error=True)
+        cbtype=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+        user32.EnumWindows.argtypes=[cbtype,wintypes.LPARAM]
+        user32.EnumWindows.restype=wintypes.BOOL
+        user32.IsWindowVisible.argtypes=[wintypes.HWND]
+        user32.IsWindowVisible.restype=wintypes.BOOL
+        user32.GetWindowTextLengthW.argtypes=[wintypes.HWND]
+        user32.GetWindowTextLengthW.restype=ctypes.c_int
+        user32.GetWindowTextW.argtypes=[
+            wintypes.HWND,wintypes.LPWSTR,ctypes.c_int]
+        user32.GetWindowTextW.restype=ctypes.c_int
+        user32.GetWindowThreadProcessId.argtypes=[
+            wintypes.HWND,ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype=wintypes.DWORD
+        windows=set()
+        @cbtype
+        def on_window(hwnd,_):
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            n=user32.GetWindowTextLengthW(hwnd)
+            if n<=0 or n>512:
+                return True
+            buf=ctypes.create_unicode_buffer(n+1)
+            if user32.GetWindowTextW(hwnd,buf,n+1)<=0:
+                return True
+            if not account_is_native_habbo_window(buf.value):
+                return True
+            pid=wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+            if pid.value:
+                windows.add((int(hwnd),int(pid.value)))
+            return True
+        if not user32.EnumWindows(on_window,0):
+            return None
+        return frozenset(windows)
+    except (OSError,ValueError,TypeError,AttributeError):
+        return None
+
+
+def account_wait_for_new_native_window(baseline,seconds=1.5):
+    """Confirm a NEW game window appeared after this account's launch request.
+
+    Existing game windows in the baseline do not count as success. Never
+    infer G-Earth proxy attachment or avatar ownership from a window title.
+    """
+    if baseline is None:
+        return False
+    end=time.monotonic()+max(0,float(seconds))
+    while True:
+        current=account_native_client_windows()
+        if current is not None and current.difference(baseline):
+            return True
+        remaining=end-time.monotonic()
+        if remaining<=0:
+            return False
+        time.sleep(min(0.3,remaining))
+
+
 def account_select_classic_launcher(timeout=16):
     """Click a named Classic button in a Habbo Launcher window if accessible.
 
@@ -2890,6 +2963,10 @@ class ChatOverlayApp:
                 label=account['label']
                 stage(account,'Requesting Classic launch')
                 report(f'{n}/{len(authenticated)}: launching {label} Classic...')
+                # Snapshot BEFORE the website Launch click. The AIR client
+                # sometimes opens directly, bypassing the Launcher Classic
+                # button. Never count a pre-existing game client as new.
+                native_before=account_native_client_windows()
                 result=account_attempt_auto_play(
                     debug_port,
                     lambda msg,name=label:report(f'{name}: {msg}'),
@@ -2904,12 +2981,27 @@ class ChatOverlayApp:
                 attempted_ids.add(account['id'])
                 report(f'{label}: website launch requested; checking '
                        'for the native Classic button...')
-                stage(account,'Finding native Classic button')
-                if account_select_classic_launcher(16):
+                stage(account,'Checking native game / Classic launcher')
+                # First check whether the direct HabboAirPlus window opened.
+                # On some setups the launch URL starts the game immediately
+                # and there is no visible Classic button to select.
+                if account_wait_for_new_native_window(native_before,2.5):
+                    stage(account,'New HabboAir window (account unverified)')
+                    report(f'{label}: new native HabboAir window appeared. '
+                           'Continuing to next profile; avatar and G-Earth '
+                           'interception are NOT verified.')
+                elif account_select_classic_launcher(16):
                     classic_selected+=1
                     stage(account,'Classic selected; client unverified')
                     report(f'{label}: Classic selected. G-Earth proxy '
                            'interception has NOT been verified for this avatar.')
+                elif account_wait_for_new_native_window(native_before,0.8):
+                    # Native game may appear during the Classic-selection
+                    # wait. It is still safe to distinguish it from a game
+                    # window that existed before this account's request.
+                    stage(account,'New HabboAir window (account unverified)')
+                    report(f'{label}: native HabboAir opened while checking '
+                           'Classic. Continuing to next account.')
                 else:
                     unresolved=True
                     stage(account,'Needs manual Classic / permission')
