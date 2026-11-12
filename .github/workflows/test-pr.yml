@@ -5,6 +5,7 @@ on:
     paths:
       - 'Habbo_Companion.pyw'
       - 'headless_transport.py'
+      - 'local_classic_launch.py'
       - 'Habbo_Update_Helper.py'
       - 'tests/**'
       - '.github/workflows/test-pr.yml'
@@ -17,6 +18,6 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check source syntax
-        run: python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py
+        run: python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py local_classic_launch.py
       - name: Run non-Windows unit tests
         run: python -m unittest discover -s tests -v
