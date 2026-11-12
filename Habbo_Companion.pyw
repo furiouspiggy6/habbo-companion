@@ -2838,9 +2838,12 @@ class ChatOverlayApp:
                     failures.append(label)
                     stage(account,'Saved login unavailable')
                     continue
+                issue_messages=[]
+                def relay_signin(msg,name=label):
+                    issue_messages.append(str(msg)[:190])
+                    report(f'{name}: {str(msg)[:190]}')
                 result=account_attempt_auto_play(
-                    debug_port,
-                    lambda msg,name=label:report(f'{name}: {msg}'),
+                    debug_port,relay_signin,
                     credentials=credentials,login_only=True)
                 if result=='signed_in':
                     authenticated.append((account,debug_port,credentials))
@@ -2855,7 +2858,14 @@ class ChatOverlayApp:
                         'waiting':'Website controls unrecognised',
                         'login':'Sign-in / verification required'
                     }.get(result,'Login not confirmed ('+str(result)+')')
-                    stage(account,reason)
+                    # Keep the low-level failure reason visible for this
+                    # specific profile even after the global batch message
+                    # changes. Never include credentials or cookie contents.
+                    detail=(issue_messages[-1][:93]
+                            if issue_messages and result in
+                            ('control_error','inspect_error','no_habbo_tab')
+                            else reason)
+                    stage(account,detail)
                     report(f'{n}/{total}: {label}: {reason}; '
                            'checking remaining accounts.')
             if login_only:
