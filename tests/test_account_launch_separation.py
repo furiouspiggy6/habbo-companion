@@ -49,6 +49,8 @@ class AccountLaunchSeparationTests(unittest.TestCase):
             _account_attached_port=9092,
             packet_started=True,
             _account_auto_generation=0,
+            _account_run_states={},
+            _accounts_render=lambda:None,
             account_status_var=Variable(),
             _account_auto_worker=lambda *_:None,
             _account_use_port=lambda:self.switched.append('selected'),
