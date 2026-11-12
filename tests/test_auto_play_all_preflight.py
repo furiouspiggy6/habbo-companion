@@ -35,6 +35,8 @@ class AutoPlayAllBatchTests(unittest.TestCase):
             'account_browser_command':lambda *args:[],
             'account_saved_login_read':lambda account_id:(
                 'account@example.com','local-placeholder'),
+            'account_native_client_windows':lambda:frozenset(),
+            'account_wait_for_new_native_window':lambda before,seconds=1.5:False,
             'account_select_classic_launcher':lambda timeout:(
                 self.selections.append(timeout) or True),
             'account_attempt_auto_play':self.fake_play,

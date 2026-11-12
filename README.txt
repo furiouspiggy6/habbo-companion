@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.37 — MULTI-TAB SIGN-IN DETECTION
+HABBO COMPANION v1.1.38 — DIRECT CLASSIC GAME DETECTION
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -261,3 +261,39 @@ windows and other profiles can remain open.
 A website sign-in is still not a Classic game client connection.
 G-Earth's extension socket port does NOT redirect a second game client.
 Per-client G-Earth proxy routing is still outstanding.
+
+
+v1.1.38 — AUTO PLAY ALL CONTINUES WHEN THE GAME OPENS DIRECTLY
+=============================================================
+A real Windows report showed 2/2 website logins, one native game
+(HabboAirPlus [OOM] | dan.alt100) visibly running, but "0 Classic
+selections" and a halted Account 2. The Classic button is not visible
+or exposed to Windows UI Automation on some launcher versions, because
+"Launch and log in" can create the HabboAirPlus client directly.
+
+Auto Play all now records visible native HabboAir/HabboAirPlus game
+windows (window handle + process ID) BEFORE each individual profile's
+Launch and log in request. If a NEW game window appears after that
+request, Companion reports "New HabboAir window (account unverified)"
+and proceeds to the next signed-in account without insisting on a
+separate Classic button that no longer exists.
+
+If no new game window appears, Companion still searches for the
+accessible Classic button. If the button is unavailable but a new
+game window appears during that search, the batch can still continue.
+If neither is verified, it keeps the previous safe pause/recovery
+behaviour and "Continue unfinished accounts" remains available.
+
+Important limitations:
+- An existing game client/window never counts as a newly launched
+  client for another account, preventing false successes.
+- A native window alone does NOT prove the particular avatar identity
+  or G-Earth interception. Only the timing of the launch request is
+  correlated with the new window.
+- Window checks are Windows-only, read title/process/window handle
+  metadata, never passwords, session cookies or launcher tickets.
+- Multiple independent G-Earth packet proxies are still NOT provided
+  by this patch; separate browser accounts do not automatically route
+  through separate G-Earth connections.
+- Windows/Habbo integration still requires verification on the user's
+  actual machine.
