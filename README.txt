@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.32 — MULTI-ACCOUNT LAUNCH FIX
+HABBO COMPANION v1.1.33 — AUTO PLAY ALL LOGIN PREFLIGHT
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -94,3 +94,40 @@ Passwords saved in the Windows vault remain saved after restarting
 Companion. A blank login-password input in the Accounts panel is intentional.
 If the green status reports missing saved credentials, save them once with
 Save login securely. A Habbo security challenge may still require you.
+
+
+v1.1.33 — AUTO PLAY ALL: EVERY BROWSER FIRST
+===========================================
+Auto Play all saved accounts now executes two separate phases:
+  PHASE 1: Open/check sign-in for every saved dedicated browser profile.
+           One account with failed login or blocked browser automation will
+           NOT prevent checking the remaining accounts.
+  PHASE 2: Attempt Classic launch for each confirmed signed-in profile,
+           sequentially. If the Habbo Launcher Classic button cannot be
+           automatically selected, further native launches PAUSE so the
+           launcher cannot consume the wrong account's login ticket.
+
+The website Play button matching also handles a visible "PLAY H" badge
+that may accompany PLAY in some Habbo layouts.
+
+The bottom status now reports how many browser logins were confirmed,
+how many Classic button selections occurred, and whether a manual native
+launcher action is required. A browser login does NOT imply a client
+started or packets were captured by G-Earth.
+
+IMPORTANT: G-EARTH MULTI-CLIENT LIMITATION
+==========================================
+G-Earth's Flash proxy is a single-client interception path, with a
+single connected HConnection proxy and extension connection. Port 9092
+or 9093 in Companion denotes the extension socket, NOT per-account
+proxy routing. G-Earth does not automatically assign a second Habbo AIR
+client to an extension socket because its browser used a different profile.
+
+Launching every Classic client THROUGH separate G-Earth connections needs
+a proper per-client local network routing and proxy architecture change.
+Simply starting two G-Earth executables against the same local game
+server host/port risks both clients reaching the same proxy, or address/
+port conflicts. This version deliberately does NOT claim to provide
+independent G-Earth interception for multiple accounts.
+
+Manual verification on a live Windows Habbo install is still necessary.
