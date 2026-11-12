@@ -145,6 +145,27 @@ def validate_replay_interval(value):
 
 
 
+def validate_coffee_interval(value):
+    """Coffee actions may run faster than 100ms; keep GUI/event loop responsive.
+
+    This limits *minimum spacing*, not how many total loop cycles a
+    participating recipient can choose to receive. Cycles=0 remains
+    unlimited until STOP or disconnection.
+    """
+    try:
+        interval=float(str(value).strip())
+    except (ValueError,TypeError,OverflowError):
+        raise ValueError('Enter a coffee delay in seconds (0.01 to 120).')
+    if not math.isfinite(interval) or not 0.01<=interval<=120.0:
+        raise ValueError('Coffee delay must be between 0.01 and 120 seconds.')
+    return interval
+
+
+def coffee_delay_ms(interval):
+    """A Tk after() callback must use an integer, nonzero millisecond wait."""
+    return max(10,round(validate_coffee_interval(interval)*1000))
+
+
 def parse_coffee_group_names(raw):
     """Opt-in room activity list; never silently add people."""
     if not isinstance(raw,str):
@@ -2051,8 +2072,8 @@ class ChatOverlayApp:
                    command=self._arm_coffee_furniture_capture).pack(anchor='w',pady=(0,5))
         ttk.Label(holder,textvariable=self.coffee_furniture_capture_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
-        entry('Delay per action (sec)',self.coffee_interval_var,'Minimum 0.1; maximum 120')
-        entry('Complete loop cycles',self.coffee_cycles_var,'0 = until stopped')
+        entry('Delay per action (sec)',self.coffee_interval_var,'0.01 minimum (10ms); 120 maximum')
+        entry('Complete loop cycles',self.coffee_cycles_var,'0 = unlimited cycles until STOP')
         ttk.Checkbutton(holder,text='Wait for my avatar to receive/pass each cup',
                         variable=self.coffee_wait_for_hand_var).pack(anchor='w',pady=(4,5))
         ttk.Label(holder,text='Optional: uses server CarryObject updates for your '
@@ -2388,7 +2409,7 @@ class ChatOverlayApp:
             self._coffee_target_name=''
             self._coffee_target_room_index=None
             self._coffee_after_id=self.root.after(
-                round(self._coffee_interval*1000),
+                coffee_delay_ms(self._coffee_interval),
                 lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
         self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
 
@@ -2510,7 +2531,7 @@ class ChatOverlayApp:
                 sequence=build_extended_coffee_sequence(
                     self.coffee_cup_one_var.get(),self.coffee_cup_two_var.get(),
                     extras,target_id,single_cup=single_cup)
-            interval=validate_replay_interval(self.coffee_interval_var.get())
+            interval=validate_coffee_interval(self.coffee_interval_var.get())
             if speed_test and self._own_room_index is None:
                 raise ValueError('Cannot test verified throughput without your own '
                                  'avatar room index. Click Detect my avatar.')
@@ -2714,7 +2735,7 @@ class ChatOverlayApp:
                 'Habbo confirms your hand is empty after the pass request. '
                 'Next: pick up another cup. Recipient receipt not proven.')
         self._coffee_after_id=self.root.after(
-            round(self._coffee_interval*1000),
+            coffee_delay_ms(self._coffee_interval),
             lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
 
     def _coffee_loop_tick(self,generation):
@@ -2837,7 +2858,7 @@ class ChatOverlayApp:
                     lambda gen=generation,expected=phase:
                     self._coffee_ack_timeout(gen,expected))
             else:
-                self._coffee_after_id=self.root.after(round(self._coffee_interval*1000),
+                self._coffee_after_id=self.root.after(coffee_delay_ms(self._coffee_interval),
                     lambda gen=generation:self._coffee_loop_tick(gen))
 
     def _stop_coffee_loop(self,reason=None):
