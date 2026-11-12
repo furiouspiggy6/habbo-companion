@@ -64,6 +64,8 @@ class BatchBrowserFirst(unittest.TestCase):
                 'brave.exe','--remote-debugging-port='+str(port),'--new-window',url],
             'account_saved_login_read':lambda i:('example@example.com','test-only'),
             'account_attempt_auto_play':play,
+            'account_native_client_windows':lambda:frozenset(),
+            'account_wait_for_new_native_window':lambda before,seconds=1.5:False,
             'account_select_classic_launcher':lambda timeout:True,
             'time':SimpleNamespace(sleep=lambda _:None),
             'urllib':SimpleNamespace(error=SimpleNamespace(URLError=OSError)),
