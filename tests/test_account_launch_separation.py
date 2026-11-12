@@ -50,6 +50,8 @@ class AccountLaunchSeparationTests(unittest.TestCase):
             packet_started=True,
             _account_auto_generation=0,
             _account_run_states={},
+            _account_remaining_ids=(),
+            _account_resume_requires_manual=False,
             _accounts_render=lambda:None,
             account_status_var=Variable(),
             _account_auto_worker=lambda *_:None,
