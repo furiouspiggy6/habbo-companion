@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import socket
 import struct
+import time
 import unittest
 
 import headless_transport as h
@@ -89,6 +90,9 @@ class HeadlessLocalSessionTests(unittest.TestCase):
         self.assertEqual(self.server.authenticated_ids, {A, B})
         ca.close()
         self.assertTrue(cb.ping())
+        end = time.monotonic() + 1.0
+        while A in self.server.authenticated_ids and time.monotonic() < end:
+            time.sleep(0.01)
         self.assertEqual(self.server.authenticated_ids, {B})
 
     def test_wrong_profile_token_cannot_authenticate(self):
@@ -141,6 +145,9 @@ class MultiAccountManagerTests(unittest.TestCase):
         self.assertTrue(all(s.endswith("ping OK")
                             for s in manager.ping_all().values()))
         manager.disconnect_all()
+        end = time.monotonic() + 1.0
+        while server.authenticated_ids and time.monotonic() < end:
+            time.sleep(0.01)
         self.assertFalse(server.authenticated_ids)
 
     def test_duplicate_profile_ids_and_more_than_16_refused(self):
