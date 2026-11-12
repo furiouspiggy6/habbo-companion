@@ -484,7 +484,7 @@ def classify_room_packet(extension,direction,packet,description=''):
     return None
 
 
-def room_users_from_binary_prefixes(packet):
+def room_users_from_binary_prefixes(packet,known_users=None):
     """Decode reliable Users entity prefixes without trusting old entity tails.
 
     G-Python's HEntity.parse reads the *whole* entity including optional
@@ -495,7 +495,12 @@ def room_users_from_binary_prefixes(packet):
     inside the actual Users packet. Validate all the fields before
     accepting an entry, and never overwrite with a guessed index.
     """
-    payload=getattr(packet,'bytearray',None)
+    # Bytewise prefix scanning must be constrained to server-identifiable
+    # account ID + username pairs, or it can find accidental false records.
+    if not isinstance(known_users,dict) or not known_users:
+        return {}
+    payload=(packet if isinstance(packet,(bytes,bytearray))
+             else getattr(packet,'bytearray',None))
     if not isinstance(payload,(bytes,bytearray)) or not 14<=len(payload)<=500000:
         return {}
     raw=bytes(payload)
@@ -523,6 +528,10 @@ def room_users_from_binary_prefixes(packet):
             continue
         name,cursor=name_result
         if not name.strip() or any(ord(ch)<32 for ch in name):
+            continue
+        trusted=known_users.get(name.casefold())
+        if (trusted is None or not isinstance(trusted,(tuple,list))
+            or len(trusted)<2 or trusted[1]!=account_id):
             continue
         motto_result=string_at(cursor,1024)
         if motto_result is None:
@@ -1392,6 +1401,7 @@ class ChatOverlayApp:
         self.coffee_username_var=tk.StringVar(value=str(self.config.get('coffee_username','')))
         self.coffee_users_status_var=tk.StringVar(value='Room users not detected yet. Join a room with G-Earth attached.')
         self._room_users={}
+        self._last_room_users_binary=None
         self._room_chat_names=set()
         self._room_profile_cache={}
         self._coffee_profile_pending=None
@@ -2273,6 +2283,25 @@ class ChatOverlayApp:
         self.coffee_own_status_var.set(
             'Habbo did not confirm your room index. Click Detect my avatar, '
             'or turn off Wait for my avatar to use the original timed loop.')
+
+    def _recover_own_room_index_from_snapshot(self):
+        """Re-check most recent Users snapshot when InfoRetrieve returns later."""
+        if (self._own_account_id is None or not self._own_name
+            or self._last_room_users_binary is None):
+            return False
+        name=self._own_name.casefold()
+        trusted={name:(self._own_name,self._own_account_id,None)}
+        recovered=room_users_from_binary_prefixes(
+            self._last_room_users_binary,trusted)
+        own=recovered.get(name)
+        if own is None or own[1]!=self._own_account_id:
+            return False
+        self._room_users[name]=own
+        self._own_room_index=own[2]
+        self.coffee_own_status_var.set(
+            f'Your avatar: {self._own_name} — room index {own[2]} '
+            '(verified from room roster).')
+        return True
 
     def _refresh_room_players(self):
         if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
@@ -4001,9 +4030,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             # G-Earth's best-effort predicted expression.
                             users.update(verified_prefix)
                             users.update(full_room_users_from_packet(msg.packet))
-                            # Raw binary prefixes can supply room indexes even
-                            # when G-Python fails to parse changed entity tails.
-                            users.update(room_users_from_binary_prefixes(msg.packet))
+                            # Trust only name/account pairs already parsed by the
+                            # named Users header, plus our own confirmed identity.
+                            trusted=dict(users)
+                            if self._own_account_id is not None and self._own_name:
+                                trusted.setdefault(
+                                    self._own_name.casefold(),
+                                    (self._own_name,self._own_account_id,None))
+                            users.update(room_users_from_binary_prefixes(
+                                msg.packet,trusted))
+                            raw=getattr(msg.packet,'bytearray',None)
+                            if isinstance(raw,(bytes,bytearray)) and len(raw)<=500000:
+                                self._packet_put(('room_users_binary',bytes(raw)))
                             self._packet_put(('room_users_observed',bool(users)))
                             if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
@@ -4102,6 +4140,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._own_room_index=(
                     own[2] if own is not None and own[1]==self._own_account_id
                     else None)
+                if self._own_room_index is None:
+                    self._recover_own_room_index_from_snapshot()
                 if self._own_room_index is not None:
                     self.coffee_own_status_var.set(
                         f'Your avatar: {self._own_name} — room index {self._own_room_index}')
@@ -4125,6 +4165,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 continue
             if item[0]=='room_users_reset':
                 self._own_room_index=None
+                self._last_room_users_binary=None
                 self.coffee_own_status_var.set(
                     'Your avatar room index: unknown after room change; waiting for Users.')
                 self._room_users.clear()
@@ -4139,6 +4180,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.coffee_users_status_var.set('Room users cleared. Waiting for the current room snapshot...')
                 if self._coffee_running:
                     self._stop_coffee_loop('Room changed; coffee pass stopped for safety.')
+                continue
+            if item[0]=='room_users_binary':
+                self._last_room_users_binary=item[1]
+                if self._own_account_id is not None and self._own_room_index is None:
+                    self._recover_own_room_index_from_snapshot()
                 continue
             if item[0]=='room_users_observed':
                 self._room_lookup_seen=True
@@ -4213,6 +4259,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self.coffee_own_status_var.set(
                         'Your avatar room index unavailable until Habbo reconnects.')
                     self._room_users.clear()
+                    self._last_room_users_binary=None
                     self._room_chat_names.clear()
                     self._room_profile_cache.clear()
                     self._coffee_profile_pending=None
