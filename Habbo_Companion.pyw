@@ -8,6 +8,8 @@ sockets on the same machine. Saved passwords are held in the local Windows Crede
 from __future__ import annotations
 from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
                                 MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)
+from local_classic_launch import (parse_classic_ticket, official_local_executable,
+                                  launch_local_classic)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -2156,6 +2158,15 @@ class ChatOverlayApp:
         self._account_run_states={}
         self._account_remaining_ids=()
         self._account_resume_requires_manual=False
+        self.direct_classic_exe_var=tk.StringVar(
+            value=str(self.config.get('direct_classic_executable','')))
+        self.direct_ticket_var=tk.StringVar(value='')
+        self.direct_status_var=tk.StringVar(
+            value='Direct Classic launches a local Habbo.exe from a valid '
+                  'ticket. No Bobba services; game login not verified.')
+        self._direct_ticket_queue={}
+        self._direct_launch_states={}
+        self._direct_launch_running=False
         self._headless_manager=HeadlessLocalManager()
         self._headless_server=None
         self._headless_account_states={}
@@ -2380,6 +2391,9 @@ class ChatOverlayApp:
         accounts=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(accounts,text='  Accounts  ')
         self._make_accounts_panel(accounts)
+        direct=ttk.Frame(self.notebook,style='Panel.TFrame')
+        self.notebook.add(direct,text='  Direct Classic  ')
+        self._make_direct_classic_panel(direct)
         headless=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(headless,text='  Headless Test  ')
         self._make_headless_panel(headless)
@@ -2613,6 +2627,216 @@ class ChatOverlayApp:
         self._headless_render()
         self.headless_status_var.set(
             'All local test sockets disconnected; no Habbo clients affected.')
+
+    def _make_direct_classic_panel(self,parent):
+        """Launch locally installed Habbo.exe via short-lived, user-given SSO."""
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        f.pack(fill='both',expand=True)
+        tk.Label(f,text='DIRECT CLASSIC LAUNCH',
+                 font=('Segoe UI Semibold',18),
+                 bg='#121a28',fg='#e6f1ff').pack(anchor='w',pady=(0,10))
+        tk.Label(
+            f,text='Use a Habbo.exe already installed ON YOUR PC and a valid '
+                   'Habbo.com SSO launch ticket. No Bobba servers, downloads, '
+                   'browser automation, or third-party APIs. The launched '
+                   'official game client still connects to Habbo.com. '
+                   'This does not generate or renew login tickets.',
+            fg='#9db7cb',bg='#121a28',justify='left',
+            wraplength=605).pack(anchor='w',pady=(0,12))
+        pathrow=ttk.Frame(f,style='Panel.TFrame')
+        pathrow.pack(fill='x',pady=(0,10))
+        ttk.Label(pathrow,text='Local Habbo.exe',style='Panel.TLabel',
+                  width=16).pack(side='left')
+        ttk.Entry(pathrow,textvariable=self.direct_classic_exe_var).pack(
+            side='left',fill='x',expand=True,padx=(0,6))
+        ttk.Button(pathrow,text='Browse',
+                   command=self._direct_choose_executable).pack(side='left')
+        self.direct_table=ttk.Treeview(
+            f,columns=('profile','ticket_state'),
+            show='headings',height=7,selectmode='browse')
+        self.direct_table.heading('profile',text='Saved account')
+        self.direct_table.heading('ticket_state',text='Ticket / local process')
+        self.direct_table.column('profile',width=165,stretch=False)
+        self.direct_table.column('ticket_state',width=390,stretch=True)
+        self.direct_table.pack(fill='x',pady=(0,10))
+        label=ttk.Label(f,text='Paste SSO ticket for the SELECTED account '
+                        '(cleared after queueing):',style='Panel.TLabel')
+        label.pack(anchor='w',pady=(0,4))
+        ttk.Entry(f,textvariable=self.direct_ticket_var,show='*').pack(
+            fill='x',pady=(0,8))
+        row=ttk.Frame(f,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,8))
+        ttk.Button(row,text='Queue ticket locally',
+                   command=self._direct_queue_selected).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(row,text='Clear selected ticket',
+                   command=self._direct_clear_selected).pack(side='left')
+        row=ttk.Frame(f,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,10))
+        ttk.Button(row,text='Launch selected',
+                   command=self._direct_launch_selected).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(row,text='Launch all queued',
+                   command=self._direct_launch_all).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(row,text='Refresh profiles',
+                   command=self._direct_render).pack(side='left')
+        tk.Label(f,textvariable=self.direct_status_var,
+                 bg='#121a28',fg='#73c5ab',wraplength=600,
+                 justify='left').pack(anchor='w',pady=(0,12))
+        tk.Label(f,text='Important: A ticket comes from the official Habbo '
+                 'login flow and may expire. Valid format does not mean a '
+                 'valid login. Tickets remain in RAM only, but Windows '
+                 'process arguments can be inspected by other local programs. '
+                 'A started Habbo.exe is not proof an avatar logged in. '
+                 'Per-account AIR storage and multi-client G-Earth routing '
+                 'are NOT implemented by this direct-launch option.',
+                 bg='#121a28',fg='#8ea9c1',wraplength=600,
+                 justify='left').pack(anchor='w')
+        self._direct_render()
+
+    def _direct_render(self):
+        table=self.direct_table
+        selection=table.selection()
+        selected=selection[0] if selection else None
+        for item in table.get_children():
+            table.delete(item)
+        active_ids={a['id'] for a in self._account_profiles}
+        # No secret from a removed profile is retained.
+        for account_id in tuple(self._direct_ticket_queue):
+            if account_id not in active_ids:
+                self._direct_ticket_queue.pop(account_id,None)
+        for item in self._account_profiles:
+            account_id=item['id']
+            state=('Ticket queued (RAM only)'
+                   if account_id in self._direct_ticket_queue
+                   else self._direct_launch_states.get(account_id,'No ticket queued'))
+            table.insert('', 'end',iid=account_id,
+                         values=(item['label'],state))
+        if selected and table.exists(selected):
+            table.selection_set(selected)
+        elif self._account_profiles:
+            table.selection_set(self._account_profiles[0]['id'])
+
+    def _direct_selected_profile(self):
+        sel=self.direct_table.selection()
+        if not sel:
+            self.direct_status_var.set('Select an account profile first.')
+            return None
+        return next((a for a in self._account_profiles if a['id']==sel[0]),None)
+
+    def _direct_choose_executable(self):
+        path=filedialog.askopenfilename(
+            parent=self.root,title='Choose a local Habbo.exe',
+            filetypes=[('Habbo executable','Habbo.exe'),('Executables','*.exe')])
+        if not path:
+            return
+        try:
+            exe=official_local_executable(path)
+        except ValueError as exc:
+            self.direct_status_var.set(str(exc))
+            return
+        self.direct_classic_exe_var.set(str(exe))
+        self.config['direct_classic_executable']=str(exe)
+        self.save()
+        self.direct_status_var.set(
+            'Selected local Habbo.exe. This does not install or contact '
+            'any third-party software.')
+
+    def _direct_queue_selected(self):
+        account=self._direct_selected_profile()
+        value=self.direct_ticket_var.get()
+        self.direct_ticket_var.set('')
+        if account is None:
+            return
+        try:
+            ticket=parse_classic_ticket(value)
+            if any(p.secret==ticket.secret and ident!=account['id']
+                   for ident,p in self._direct_ticket_queue.items()):
+                raise ValueError(
+                    'This same login ticket is already queued for another account.')
+        except (ValueError,TypeError) as exc:
+            self.direct_status_var.set('Ticket not queued: '+str(exc)[:155])
+            return
+        self._direct_ticket_queue[account['id']]=ticket
+        self._direct_launch_states.pop(account['id'],None)
+        self._direct_render()
+        label=(' Username suffix: '+ticket.username+'.'
+               if ticket.username else ' Username not included; confirm '
+               'the ticket belongs to this account.')
+        self.direct_status_var.set(
+            f'{account["label"]}: hhus ticket queued in RAM only.'+label)
+
+    def _direct_clear_selected(self):
+        account=self._direct_selected_profile()
+        self.direct_ticket_var.set('')
+        if account is None:
+            return
+        self._direct_ticket_queue.pop(account['id'],None)
+        self._direct_render()
+        self.direct_status_var.set(
+            f'{account["label"]}: pending local ticket cleared.')
+
+    def _direct_launch_selected(self):
+        account=self._direct_selected_profile()
+        if account is None:
+            return
+        self._direct_launch_profiles((account,))
+
+    def _direct_launch_all(self):
+        accounts=tuple(a for a in self._account_profiles
+                       if a['id'] in self._direct_ticket_queue)
+        if not accounts:
+            self.direct_status_var.set(
+                'Queue a separate valid SSO ticket for each account first.')
+            return
+        self._direct_launch_profiles(accounts)
+
+    def _direct_launch_profiles(self,accounts):
+        if self._direct_launch_running:
+            self.direct_status_var.set('A direct launch batch is already running.')
+            return
+        try:
+            exe=official_local_executable(self.direct_classic_exe_var.get())
+        except ValueError as exc:
+            self.direct_status_var.set('Local executable: '+str(exc)[:160])
+            return
+        queued=[(a['id'],a['label'],self._direct_ticket_queue[a['id']])
+                for a in accounts if a['id'] in self._direct_ticket_queue]
+        if not queued:
+            self.direct_status_var.set(
+                'No ticket queued for the selected account.')
+            return
+        # Consume tickets BEFORE spawning; never save, log or replay them.
+        for ident,_,_ in queued:
+            self._direct_ticket_queue.pop(ident,None)
+            self._direct_launch_states[ident]='Starting local Habbo.exe'
+        self.config['direct_classic_executable']=str(exe)
+        self.save()
+        self._direct_launch_running=True
+        self._direct_render()
+        self.direct_status_var.set(
+            f'Starting {len(queued)} local Classic process(es). '
+            'No Bobba services; login not verified.')
+        threading.Thread(
+            target=self._direct_launch_worker,
+            args=(exe,tuple(queued)),daemon=True,
+            name='companion-local-classic-launch').start()
+
+    def _direct_launch_worker(self,exe,queued):
+        for i,(ident,label,ticket) in enumerate(queued,1):
+            try:
+                pid=launch_local_classic(exe,ticket)
+                message=f'Local Habbo.exe started (PID {pid}); login unverified'
+            except (OSError,ValueError,subprocess.SubprocessError) as exc:
+                message='Local launch failed: '+type(exc).__name__
+            self._packet_put(('direct_launch_state',ident,message))
+            self._packet_put(('direct_launch_status',
+                f'{i}/{len(queued)} {label}: {message}. '
+                'G-Earth account routing is separate.'))
+            if i<len(queued):
+                time.sleep(1.0)
+        self._packet_put(('direct_launch_finished',))
 
     def _make_accounts_panel(self,parent):
         """Manage independent login cookies and separately configured ports."""
@@ -5647,6 +5871,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='direct_launch_state':
+                ident,status=item[1],item[2]
+                self._direct_launch_states[ident]=status
+                if self.direct_table.exists(ident):
+                    self.direct_table.set(ident,'ticket_state',status)
+                continue
+            if item[0]=='direct_launch_status':
+                self.direct_status_var.set(item[1])
+                continue
+            if item[0]=='direct_launch_finished':
+                self._direct_launch_running=False
+                continue
             if item[0]=='headless_state':
                 ident,status=item[1],item[2]
                 self._headless_account_states[ident]=status
@@ -6441,6 +6677,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.root.after(120,self.tick)
 
     def close(self):
+        # Tickets never outlive the Companion process.
+        self._direct_ticket_queue.clear()
+        self.direct_ticket_var.set('')
         self._headless_manager.disconnect_all()
         if self._headless_server is not None:
             self._headless_server.stop()

@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.39 — HEADLESS LOCAL CONNECTION PROTOTYPE
+HABBO COMPANION v1.1.40 — LOCAL DIRECT CLASSIC LAUNCH
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -345,3 +345,73 @@ No user settings are reset or migrated. Per-account test secrets exist
 only in memory. All local test sessions are closed on Companion exit.
 No separate client download, Chromium startup or Java install is
 needed for this local test feature.
+
+
+v1.1.40 — LOCAL DIRECT CLASSIC, NO BOBBA SERVICES
+=================================================
+New "Direct Classic" tab in the SAME Habbo Companion application. This
+feature implements the executable-launch method independently in
+Python. We did not copy Bobba-Packet GPL code, install its launcher,
+connect to its API/backend, or introduce any Bobba network endpoints.
+
+WHAT IT DOES
+------------
+- Uses a Habbo.exe file that YOU choose from your existing local PC.
+- Accepts user-supplied official Habbo.com (hhus) SSO launch tickets in
+  hhus.<opaque>.V4[.username] or
+  habbo://hab?server=hhus&token=<opaque>.V4[.username] form.
+- Holds distinct tickets for distinct saved Companion account profiles
+  IN MEMORY ONLY. Paste into the masked ticket field, then click
+  "Queue ticket locally". No credential/ticket content is written
+  to settings.json, a log, or GitHub.
+- Launches the selected account or every queued account as separate
+  native Habbo.exe processes using the normal Classic -server/-ticket
+  arguments. There are no website button clicks, Brave windows, or
+  Bobba services involved in this feature.
+- Includes no downloader and makes no outbound network connections
+  itself. The actual launched official Habbo.exe still contacts the
+  official Habbo.com servers to authenticate and play.
+- Keeps the old Accounts Auto Play and Headless Test workflows intact.
+
+HOW TO USE
+----------
+1. Get a valid login ticket from Habbo's normal login process. The
+   ticket must still be valid. THIS UPDATE DOES NOT GENERATE TICKETS.
+2. In Companion's new "Direct Classic" tab, click Browse and select
+   your ALREADY INSTALLED local Habbo.exe.
+3. Select a saved account row.
+4. Paste the account's own official Habbo.com launch ticket into the
+   masked field; click "Queue ticket locally".
+5. Repeat for other account rows with their OWN tickets.
+6. Click "Launch selected" or "Launch all queued". Tickets are
+   discarded from Companion memory before process launch and will not
+   be silently replayed; reacquire expired/used tickets as necessary.
+7. The status reports only whether the local Habbo.exe process was
+   STARTED. Authentication, avatar identity and G-Earth interception
+   are not inferred from a PID.
+
+IMPORTANT LIMITS
+----------------
+- Getting tickets still requires a valid official authentication
+  flow; this is not a headless Habbo.com login implementation.
+- Per-account AIR application identity / independent machine IDs are
+  NOT modified. Starting multiple executables may or may not allow
+  simultaneous AIR sessions depending on the client's installed build.
+- This does not create per-account G-Earth proxies. 9092/9093 remain
+  extension ports, not isolated game proxies.
+- A valid-looking ticket could be invalid or expired on Habbo.com.
+- The official Classic runtime's -ticket argument is visible in
+  Windows process arguments to sufficiently privileged local software.
+  Do not share tickets, screenshots of ticket-bearing commands or
+  process information. This is a limitation of the launch convention.
+- Habbo's terms may restrict unauthorised automation and modified
+  clients. Do not assume a ticket or local process grants permission.
+- Windows live integration is not verified by offline GitHub tests.
+
+FILES / UPDATES
+---------------
+local_classic_launch.py is included in the verified update ZIP and
+the local Windows installer. It uses Python's standard library only.
+No additional applications, developer tools, GitHub repositories or
+Bobba services are needed by this feature. Your existing saved
+accounts, credential vault and G-Earth configuration are preserved.
