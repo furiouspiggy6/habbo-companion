@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.34 — OPEN ALL BROWSERS FIRST
+HABBO COMPANION v1.1.35 — RECOGNISE SIGNED-IN ACCOUNTS
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -163,3 +163,37 @@ button establishes a verified independent G-Earth packet interception.
 The G-Earth per-game-client proxy routing described in issue #24 is
 still outstanding. Different extension ports (9092/9093) are not a
 solution by themselves.
+
+
+v1.1.35 — WEBSITE SIGN-IN DETECTION FIX AND DIAGNOSTICS
+=====================================================
+Previously an authenticated Habbo homepage could be rejected because
+Companion only accepted a text-labelled Play/Launch/Download button.
+The official website may render PLAY with a decorative H image or
+custom-styled clickable wrapper, and on some layouts the control
+isn't exposed as a semantic button at all.
+
+The detector now:
+1. Recognises visible PLAY / PLAY H and "Launch and log in" controls
+   without relying on their exact HTML structure.
+2. Uses the visible avatar-name dropdown at the top-right as an
+   additional indication that the website session is signed in.
+   A name on the page does not independently prove ownership of an
+   intercepted game connection.
+3. Never makes up a PLAY click if the control is not identifiable.
+4. Reports a separate reason if browser DOM inspection fails or an
+   HTTPS Habbo tab cannot be found.
+5. Replaces the generic "No account logins confirmed" message with
+   instructions to inspect each account's Browser / Classic status.
+
+The login button and profile checks inspect only visible elements
+on HTTPS *.habbo.com. No website cookies or authentication tickets
+are read. Existing Windows Credential Manager storage is unchanged.
+
+Note: if both profiles continue to report Browser control unavailable,
+the issue is browser remote debugging rather than the visual page
+recognition; close old Companion-created dedicated Brave windows and
+retry. A CAPTCHA or two-factor check requires manual completion.
+Native Classic launching remains sequential and multi-client G-Earth
+routing is NOT yet implemented. Real Windows + Habbo verification is
+still necessary.
