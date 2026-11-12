@@ -2401,7 +2401,7 @@ class ChatOverlayApp:
                  'Classic one at a time. If Classic or an external-app prompt '
                  'needs manual action, finish it and choose Continue unfinished '
                  'accounts. Already-requested Classic launches will NOT be '
-                 'replayed. This does NOT enable multi-client G-Earth routing.',
+                 'replayed. G-Earth routing to multiple game clients is NOT yet implemented.',
             fg='#8ea9c1',bg='#121a28',wraplength=620,
             justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
