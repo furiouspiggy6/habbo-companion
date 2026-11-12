@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parent.parent
 version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 if not re.fullmatch(r"\d+\.\d+\.\d+", version):
     raise SystemExit("Invalid VERSION")
-names = ("Habbo_Companion.pyw", "Habbo_Update_Helper.py", "README.txt")
+names = ("Habbo_Companion.pyw", "Habbo_Update_Helper.py", "headless_transport.py", "README.txt")
 files = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in names}
 package_name = f"Habbo_Companion_Update_v{version}.zip"
 meta = {"app_id": "habbo-companion", "format": 1, "version": version, "files": files}
