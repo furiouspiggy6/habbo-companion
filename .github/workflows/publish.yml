@@ -5,6 +5,7 @@ on:
     paths:
       - 'VERSION'
       - 'Habbo_Companion.pyw'
+      - 'headless_transport.py'
       - 'Habbo_Update_Helper.py'
       - 'README.txt'
       - 'scripts/build_release.py'
@@ -23,7 +24,7 @@ jobs:
           python-version: '3.12'
       - name: Validate code and build release
         run: |
-          python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py
+          python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py
           python scripts/build_release.py
           python Habbo_Update_Helper.py inspect --package "Habbo_Companion_Update_v$(cat VERSION).zip"
       - name: Test managed engine setup without network

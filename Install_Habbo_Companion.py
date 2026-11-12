@@ -12,7 +12,7 @@ import sys
 import traceback
 
 NAME='Habbo Companion'
-FILES=('Habbo_Companion.pyw','Habbo_Update_Helper.py','app_manifest.json',
+FILES=('Habbo_Companion.pyw','Habbo_Update_Helper.py','headless_transport.py','app_manifest.json',
        'START_Habbo_Companion.bat','DEBUG_Habbo_Companion.bat','README.txt')
 
 

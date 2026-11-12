@@ -1,4 +1,4 @@
-HABBO COMPANION v1.1.38 — DIRECT CLASSIC GAME DETECTION
+HABBO COMPANION v1.1.39 — HEADLESS LOCAL CONNECTION PROTOTYPE
 ===================================================
 
 Accounts > Open account login now opens that account's isolated browser
@@ -297,3 +297,51 @@ Important limitations:
   through separate G-Earth connections.
 - Windows/Habbo integration still requires verification on the user's
   actual machine.
+
+
+v1.1.39 — HEADLESS LOCAL CONNECTION ENGINE (TEST SERVER ONLY)
+============================================================
+The new "Headless Test" tab demonstrates multiple independent network
+sessions with zero Brave/Classic windows. It does not connect to Habbo.com.
+
+TEST IT
+-------
+1. Go to Accounts and create or retain 2–3 saved account profiles.
+2. Switch to "Headless Test".
+3. Click "Start/reset local test server". It binds ONLY to 127.0.0.1
+   on an available port selected by Windows.
+4. Click "Connect all (local test)". Every account gets its own TCP
+   socket, random single-use local TEST ticket and independent reply
+   validation. No website password or cookie is used.
+5. Click "Ping all test sessions" to verify each account's local
+   socket is still alive; click Disconnect all to close them.
+6. Refresh profiles if you change accounts.
+
+This is a controlled test server and test protocol, NOT the production
+Habbo protocol. A "Local test authenticated" status does NOT imply that
+the avatar is online in Habbo. This is independent of G-Earth, G-Python
+and the existing official browser/Classic launch workflow.
+
+NEXT TECHNICAL REQUIREMENT FOR A REAL HEADLESS HABBO CLIENT
+-----------------------------------------------------------
+A supported or authorised way to obtain official session credentials
+without website UI automation; the exact live handshake, encryption,
+packet versions and account identity validation. None of those have
+been established as supported. Companion therefore REFUSES to direct
+this prototype at any external server or replay an official login
+ticket. It never submits actual Habbo passwords or session cookies.
+
+Habbo's current rules restrict unauthorised bots and automation. Do
+not interpret this local test as permission to run custom clients
+against Habbo.com. The existing Accounts/Auto Play functionality
+remains available as before and is NOT replaced by an unverified
+live authentication implementation.
+
+SOURCE AND UPDATE SAFETY
+------------------------
+headless_transport.py ships with the release ZIP and is SHA-256 checked
+by the normal updater; the Windows installer payload also includes it.
+No user settings are reset or migrated. Per-account test secrets exist
+only in memory. All local test sessions are closed on Companion exit.
+No separate client download, Chromium startup or Java install is
+needed for this local test feature.

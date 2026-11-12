@@ -6,6 +6,8 @@ extension integration and per-profile local browser automation use network
 sockets on the same machine. Saved passwords are held in the local Windows Credential Manager vault only.
 """
 from __future__ import annotations
+from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
+                                MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -2154,6 +2156,11 @@ class ChatOverlayApp:
         self._account_run_states={}
         self._account_remaining_ids=()
         self._account_resume_requires_manual=False
+        self._headless_manager=HeadlessLocalManager()
+        self._headless_server=None
+        self._headless_account_states={}
+        self.headless_status_var=tk.StringVar(
+            value='Local headless prototype only — NOT connected to Habbo.com.')
         # Original Habbo artwork is mandatory. Older settings may have saved
         # this as False while replacement bubbles were supported.
         self.config['original_bubble_images']=True
@@ -2373,6 +2380,9 @@ class ChatOverlayApp:
         accounts=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(accounts,text='  Accounts  ')
         self._make_accounts_panel(accounts)
+        headless=ttk.Frame(self.notebook,style='Panel.TFrame')
+        self.notebook.add(headless,text='  Headless Test  ')
+        self._make_headless_panel(headless)
         manip=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(manip,text='  Packet Manipulator  ')
         self._make_manipulator_panel(manip)
@@ -2459,6 +2469,150 @@ class ChatOverlayApp:
         ttk.Button(opts,text='Clear local log',command=self.clear_log).pack(side='left',expand=True,fill='x',padx=(5,0))
         tk.Label(f,text='Ctrl + Shift + F6  ·  show/hide settings\nCtrl + Shift + F7  ·  toggle room background\nCtrl + Shift + PgUp/PgDn  ·  older/newer chat',font=('Segoe UI',9),justify='left',bg='#121a28',fg='#7f9db7').pack(anchor='w',pady=(13,0))
         tk.Label(f,text='Messages do not expire. Only recent bubbles are drawn; scroll for older.\nHistory is bounded in memory and cleared on exit (unless logging is enabled).\nOriginal artwork comes from your existing modified Habbo client.',font=('Segoe UI',8),justify='left',bg='#121a28',fg='#6f8299').pack(anchor='w',pady=(8,0))
+
+    def _make_headless_panel(self,parent):
+        """Socket-based per-account LOCAL test; never claims live Habbo login."""
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        f.pack(fill='both',expand=True)
+        tk.Label(f,text='HEADLESS CONNECTION TEST',
+                 font=('Segoe UI Semibold',17),fg='#e6f1ff',
+                 bg='#121a28').pack(anchor='w',pady=(0,9))
+        tk.Label(
+            f,text='Proof of concept: multiple independent TCP connections '
+                   'without Brave, Habbo Launcher, or Classic. This is a '
+                   'loopback test server (127.0.0.1), NOT the live Habbo.com '
+                   'game protocol, login or a G-Earth connection. The test '
+                   'never uses your stored Habbo passwords or cookies.',
+            fg='#a9c2d8',bg='#121a28',justify='left',
+            wraplength=590).pack(anchor='w',fill='x',pady=(0,12))
+        grid=ttk.Frame(f,style='Panel.TFrame')
+        grid.pack(fill='x',pady=(0,10))
+        self.headless_table=ttk.Treeview(
+            grid,columns=('account','state'),show='headings',height=7)
+        self.headless_table.heading('account',text='Saved account profile')
+        self.headless_table.column('account',width=175,stretch=False)
+        self.headless_table.heading('state',text='Local test socket status')
+        self.headless_table.column('state',width=370,stretch=True)
+        self.headless_table.pack(fill='x')
+        controls=ttk.Frame(f,style='Panel.TFrame')
+        controls.pack(fill='x',pady=(0,8))
+        ttk.Button(controls,text='Start/reset local test server',
+                   command=self._headless_start_test_server).pack(
+                       side='left',padx=(0,6))
+        ttk.Button(controls,text='Connect all (local test)',
+                   command=self._headless_connect_all).pack(
+                       side='left')
+        actions=ttk.Frame(f,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(0,12))
+        ttk.Button(actions,text='Ping all test sessions',
+                   command=self._headless_ping_all).pack(
+                       side='left',padx=(0,6))
+        ttk.Button(actions,text='Disconnect all',
+                   command=self._headless_disconnect_all).pack(
+                       side='left',padx=(0,6))
+        ttk.Button(actions,text='Refresh profiles',
+                   command=self._headless_render).pack(side='left')
+        tk.Label(f,textvariable=self.headless_status_var,
+                 fg='#73c5ab',bg='#121a28',wraplength=590,
+                 justify='left').pack(anchor='w',fill='x')
+        tk.Label(
+            f,text='No live account packets are sent by this mode. '
+                   'A verified, authorised official game authentication '
+                   'and protocol adapter would be required before this '
+                   'could replace the normal Habbo login/launcher.',
+            fg='#8ea9c1',bg='#121a28',wraplength=590,
+            justify='left').pack(anchor='w',pady=(10,0))
+        self._headless_render()
+
+    def _headless_render(self):
+        table=self.headless_table
+        for row in table.get_children():
+            table.delete(row)
+        for account in self._account_profiles:
+            ident=account['id']
+            table.insert('', 'end',iid=ident,
+                         values=(account['label'],
+                                 self._headless_account_states.get(
+                                     ident,'Not connected (local test)')))
+
+    def _headless_start_test_server(self):
+        accounts=tuple(a['id'] for a in self._account_profiles)
+        if not accounts:
+            self.headless_status_var.set('Add an account profile first.')
+            return
+        if len(accounts)>HEADLESS_TEST_MAX_ACCOUNTS:
+            self.headless_status_var.set(
+                f'Local test supports at most {HEADLESS_TEST_MAX_ACCOUNTS} profiles.')
+            return
+        self._headless_manager.disconnect_all()
+        if self._headless_server is not None:
+            self._headless_server.stop()
+            self._headless_server=None
+        try:
+            server=LocalHeadlessTestServer(accounts)
+            server.start()
+        except (OSError,ValueError,RuntimeError) as exc:
+            self.headless_status_var.set('Local test server unavailable: '+
+                                         type(exc).__name__)
+            return
+        self._headless_server=server
+        self._headless_account_states={}
+        self._headless_render()
+        self.headless_status_var.set(
+            f'Local test server ready on 127.0.0.1:{server.port}. '
+            'No Habbo.com network traffic or credentials used.')
+
+    def _headless_connect_all(self):
+        server=self._headless_server
+        if server is None or server.port is None:
+            self.headless_status_var.set(
+                'Start local test server before connecting account profiles.')
+            return
+        accounts=tuple(a['id'] for a in self._account_profiles)
+        if any(a not in server.tickets and
+               a not in self._headless_manager.sessions for a in accounts):
+            self.headless_status_var.set(
+                'Profile list changed or test ticket used. Reset local test server.')
+            return
+        self.headless_status_var.set(
+            f'Connecting {len(accounts)} isolated local test socket(s)...')
+        def work():
+            try:
+                results=self._headless_manager.connect_all(server,accounts)
+                for ident,status in results.items():
+                    self._packet_put(('headless_state',ident,status))
+                success=sum('ping OK' in x for x in results.values())
+                self._packet_put(('headless_status',
+                    f'{success}/{len(accounts)} local test sockets authenticated '
+                    f'and ping-verified. Not connected to Habbo.com.'))
+            except (OSError,RuntimeError,ValueError) as exc:
+                self._packet_put(('headless_status',
+                                  'Local test error: '+type(exc).__name__))
+        threading.Thread(target=work,daemon=True,
+                         name='headless-test-connect').start()
+
+    def _headless_ping_all(self):
+        if not self._headless_manager.sessions:
+            self.headless_status_var.set('No connected local test sessions.')
+            return
+        self.headless_status_var.set('Checking each local test socket...')
+        def work():
+            results=self._headless_manager.ping_all()
+            for ident,status in results.items():
+                self._packet_put(('headless_state',ident,status))
+            self._packet_put(('headless_status',
+                f'Local socket check: {sum("ping OK" in v for v in results.values())}'
+                f'/{len(results)} verified; not Habbo.com connections.'))
+        threading.Thread(target=work,daemon=True,
+                         name='headless-test-ping').start()
+
+    def _headless_disconnect_all(self):
+        self._headless_manager.disconnect_all()
+        for a in self._account_profiles:
+            self._headless_account_states[a['id']]='Disconnected'
+        self._headless_render()
+        self.headless_status_var.set(
+            'All local test sockets disconnected; no Habbo clients affected.')
 
     def _make_accounts_panel(self,parent):
         """Manage independent login cookies and separately configured ports."""
@@ -5493,6 +5647,15 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='headless_state':
+                ident,status=item[1],item[2]
+                self._headless_account_states[ident]=status
+                if self.headless_table.exists(ident):
+                    self.headless_table.set(ident,'state',status)
+                continue
+            if item[0]=='headless_status':
+                self.headless_status_var.set(item[1])
+                continue
             if item[0]=='account_auto_status':
                 if item[1]==self._account_auto_generation:
                     self.account_status_var.set(item[2])
@@ -6278,6 +6441,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.root.after(120,self.tick)
 
     def close(self):
+        self._headless_manager.disconnect_all()
+        if self._headless_server is not None:
+            self._headless_server.stop()
+            self._headless_server=None
         self._stop_packet_replay('Companion closed. Repeat stopped.')
         self._stop_coffee_loop('Companion closed. Coffee loop stopped.')
         if self.wheel_hook and os.name=='nt':
