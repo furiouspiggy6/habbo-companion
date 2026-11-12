@@ -25,9 +25,6 @@ WORKER=next(n for n in CLASS.body if isinstance(n,ast.FunctionDef)
 
 class NativeGameWindowDetection(unittest.TestCase):
     def test_exact_habbo_air_plus_window_title_from_user_screen(self):
-        space={'re':re}
-        exec(compile(ast.Module(body=FUNCS[:1],type_ignores=[]),
-                     str(SOURCE),'exec'),space) if FUNCS[0].name=='account_is_native_habbo_window' else None
         title=next(n for n in FUNCS if n.name=='account_is_native_habbo_window')
         space={'re':re}
         exec(compile(ast.Module(body=[title],type_ignores=[]),
