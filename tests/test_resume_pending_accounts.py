@@ -57,6 +57,8 @@ class ResumeBatchTests(unittest.TestCase):
             'account_browser_command':lambda *args:[],
             'account_saved_login_read':lambda i:('email@example.com','secret-only-local'),
             'account_attempt_auto_play':play,
+            'account_native_client_windows':lambda:frozenset(),
+            'account_wait_for_new_native_window':lambda before,seconds=1.5:False,
             'account_select_classic_launcher':lambda t:launch_selected,
             'urllib':SimpleNamespace(error=SimpleNamespace(URLError=OSError)),
             'subprocess':SimpleNamespace(Popen=Mock(),DEVNULL=-1),
