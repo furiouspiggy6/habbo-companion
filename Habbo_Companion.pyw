@@ -2309,9 +2309,10 @@ class ChatOverlayApp:
         tk.Label(f,
             text='Open account login automatically signs in when a saved '
                  'login exists. Auto Play also clicks Play/Launch and tries '
-                 'Classic in Habbo Launcher. CAPTCHA, two-factor checks, '
-                 'external-app prompts and Windows permissions may need you. '
-                 'No extra G-Earth proxies are created.',
+                 'Classic in Habbo Launcher. A second account may launch while '
+                 'G-Earth is attached to the first, but its packets will NOT '
+                 'be intercepted by that existing proxy. CAPTCHA and Windows '
+                 'prompts may still need you.',
             fg='#8ea9c1',bg='#121a28',wraplength=620,
             justify='left').pack(anchor='w',pady=(0,9))
         tk.Label(f,
@@ -2491,14 +2492,11 @@ class ChatOverlayApp:
         if not accounts:
             self.account_status_var.set('Add at least one account first.')
             return
-        if self.packet_started and not all_accounts and not login_only:
-            account=accounts[0]
-            if account['port']!=self._account_attached_port:
-                self.account_status_var.set(
-                    'G-Earth is attached to a different account endpoint. '
-                    'Restart Companion before launching this account with '
-                    'packet control, to prevent mixed account traffic.')
-                return
+        # Browser login/Classic launching is independent of the packet engine.
+        # Never block launching an Alt just because Main is attached to G-Earth.
+        # Equally, never switch or attribute the active packet feed to the Alt.
+        active_packet_port=(self._account_attached_port
+                            if self.packet_started else None)
         if len({account_browser_debug_port(a['id']) for a in accounts})!=len(accounts):
             self.account_status_var.set(
                 'Two account profiles share a browser control port. '
@@ -2512,16 +2510,26 @@ class ChatOverlayApp:
         self._account_auto_running=True
         self._account_auto_generation+=1
         generation=self._account_auto_generation
+        packet_note=(
+            f' Packet feed remains on G-Earth port {active_packet_port}; '
+            'launching another account does NOT intercept its packets.'
+            if active_packet_port is not None and
+            any(a['port']!=active_packet_port for a in accounts)
+            else '')
         self.account_status_var.set(
-            'Opening isolated browser session(s); using saved login if needed.')
+            'Opening isolated browser session(s); using saved login if needed.'
+            +packet_note)
         threading.Thread(
             target=self._account_auto_worker,
-            args=(tuple(dict(a) for a in accounts),generation,login_only),
+            args=(tuple(dict(a) for a in accounts),generation,login_only,
+                  packet_note),
             daemon=True).start()
 
-    def _account_auto_worker(self,accounts,generation,login_only=False):
+    def _account_auto_worker(self,accounts,generation,login_only=False,
+                             packet_note=''):
         def report(value):
-            self._packet_put(('account_auto_status',generation,str(value)[:350]))
+            self._packet_put(('account_auto_status',generation,
+                              (str(value)+packet_note)[:350]))
         try:
             browser=account_login_browser()
             if browser is None:
@@ -2557,9 +2565,11 @@ class ChatOverlayApp:
                                 urllib.error.URLError,UnicodeError):
                             continue
                 if not ready:
-                    report(f'{label}: browser automation unavailable. '
-                           'Close older windows for this account and retry; '
-                           'it may have opened without control enabled.')
+                    report(f'{label}: browser opened but automatic login '
+                           'could not connect to its local control endpoint. '
+                           'Close all dedicated Brave windows for this account '
+                           '(from previous Companion versions), then retry. '
+                           'Do not sign out of other account profiles.')
                     break
                 try:
                     credentials=account_saved_login_read(ident)
