@@ -280,6 +280,16 @@ class HeadlessLocalManager:
         if server.port is None:
             raise RuntimeError("Start the local test server before connecting")
         def start(account_id):
+            with self._lock:
+                existing = self.sessions.get(account_id)
+            if existing is not None:
+                try:
+                    existing.ping()
+                    return "Local test authenticated / ping OK"
+                except (OSError, ConnectionError, ProtocolError):
+                    # A one-use local test ticket cannot be silently replayed.
+                    # Users can explicitly reset the test server to reconnect.
+                    return "Local test socket lost; reset test server"
             client = HeadlessLocalSession(account_id)
             try:
                 client.connect(HOST, server.port, server.tickets[account_id])
