@@ -473,44 +473,109 @@ def account_cdp_call(websocket_url,method,params=None,timeout=4):
 # Intentionally no authentication fields or access to cookies/tokens.
 # Only inspect visible, text-labelled controls on the Habbo website.
 HABBO_AUTO_PLAY_JS=r'''(() => {
-  if (!/(^|\.)habbo\.com$/i.test(location.hostname))
+  if (!/^https:$/.test(location.protocol) ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'not_habbo'};
+  const visible=el => {
+    if (!el || el.disabled) return false;
+    const rect=el.getBoundingClientRect(),style=getComputedStyle(el);
+    return rect.width>0 && rect.height>0 &&
+      style.display!=='none' && style.visibility!=='hidden' &&
+      rect.bottom>0 && rect.top<innerHeight &&
+      rect.right>0 && rect.left<innerWidth;
+  };
+  const label=el => (el.innerText || el.value ||
+        el.getAttribute('aria-label') || el.textContent || '')
+        .replace(/\s+/g,' ').trim();
   const login=Array.from(document.querySelectorAll('input[type=password]'))
-    .some(el => el.getClientRects().length > 0);
-  if (login) return {kind:'login'};
-  const choices=Array.from(document.querySelectorAll(
-    'a,button,[role=button],input[type=button],input[type=submit]'));
-  const targets=[
-    ['launch',/^(launch and log in|launch & log in|launch and login)$/i],
-    ['play-now',/^play now!?(?:\s+h)?$/i],
-    // Habbo sometimes renders a small H badge as part of the PLAY text.
-    ['play',/^play!?(?:\s+h)?$/i],
-    ['download',/^download!?$/i]
-  ];
-  for (const [kind,re] of targets) {
-    for (const el of choices) {
-      const text=(el.innerText || el.value ||
-                  el.getAttribute('aria-label') ||
-                  el.textContent || '').trim().replace(/\s+/g,' ');
-      const rect=el.getBoundingClientRect();
-      const style=getComputedStyle(el);
-      if (!re.test(text) || !rect.width || !rect.height ||
-          style.display==='none' || style.visibility==='hidden' ||
-          el.hasAttribute('disabled') || rect.bottom<0 ||
-          rect.top>innerHeight || rect.right<0 || rect.left>innerWidth)
-        continue;
-      return {kind, label:text, x:rect.left+rect.width/2,
-              y:rect.top+rect.height/2, page:location.pathname};
+    .some(visible);
+  if (login) return {kind:'login',page:location.pathname};
+
+  // The Habbo top-right PLAY control can be an anchor containing a
+  // decorative H icon; don't rely on its exact innerHTML or child text.
+  const matchKind=text => {
+    if (/^launch\s*(?:and|&)\s*log\s*in!?$/i.test(text) ||
+        /^launch\s*(?:and|&)\s*login!?$/i.test(text)) return 'launch';
+    if (/^play\s*now!?(?:\s+h)?$/i.test(text)) return 'play-now';
+    if (/^play\b(?:\s*[\u24bd\u24d7h])?!?$/i.test(text)) return 'play';
+    if (/^download!?$/i.test(text)) return 'download';
+    return null;
+  };
+  const clickable='a,button,[role="button"],input[type=button],input[type=submit]';
+  const controls=Array.from(document.querySelectorAll(clickable));
+  const match=el => {
+    if (!visible(el)) return null;
+    const text=label(el);
+    if (!text || text.length>48) return null;
+    const kind=matchKind(text);
+    if (!kind) return null;
+    const rect=el.getBoundingClientRect();
+    return {kind,label:text,x:rect.left+rect.width/2,
+            y:rect.top+rect.height/2,page:location.pathname};
+  };
+  // Prioritise the later "Launch and log in" step if a page has
+  // both the older PLAY link and the launcher.
+  const ordered=['launch','play-now','play','download'];
+  const found=controls.map(match).filter(Boolean);
+  for (const target of ordered) {
+    const item=found.find(x=>x.kind===target);
+    if (item) return item;
+  }
+  // A few Habbo layouts draw PLAY inside a styled div/span rather than
+  // using a directly labelled button. Ascend to a clickable parent.
+  const smallLabels=Array.from(document.querySelectorAll('span,strong,div'))
+     .filter(el=>visible(el) && label(el).length<=32);
+  for (const target of ordered) {
+    for (const el of smallLabels) {
+      if (matchKind(label(el))!==target) continue;
+      let parent=el;
+      for (let depth=0;parent && depth<4;depth++,parent=parent.parentElement) {
+        if (parent.matches && parent.matches(clickable) && visible(parent)) {
+          const rect=parent.getBoundingClientRect();
+          return {kind:target,label:label(el),x:rect.left+rect.width/2,
+                  y:rect.top+rect.height/2,page:location.pathname};
+        }
+      }
     }
   }
-  return {kind:'waiting',page:location.pathname};
+
+  // On some authenticated home pages the PLAY control isn't exposed to
+  // browser automation. Habbo shows the avatar name + avatar icon in a
+  // dropdown at the top-right. That visible signed-in menu is separate
+  // evidence of login, but *does not* authorise any guessed Play click.
+  const menuItems=Array.from(document.querySelectorAll(
+       'header a,header button,header [role=button],' +
+       '[class*=header] a,[class*=header] button,' +
+       '[class*=user] a,[class*=user] button,' +
+       'a,button,[role=button]'));
+  const username=/^[a-z0-9][a-z0-9._:\-]{2,31}$/i;
+  const signedMenu=menuItems.find(el=>{
+    if (!visible(el)) return false;
+    const rect=el.getBoundingClientRect(),text=label(el);
+    if (rect.top>220 || rect.left<innerWidth*0.53 ||
+        rect.width>270 || rect.height>90 ||
+        !username.test(text)) return false;
+    const hasAvatar=!!el.querySelector('img,[class*=avatar],[class*=head]');
+    const menuHint=/user|avatar|profile|account/i.test(
+       String(el.className||'')+' '+String(el.getAttribute('aria-label')||''));
+    return hasAvatar || menuHint;
+  });
+  if (signedMenu) return {kind:'signed_in',page:location.pathname,
+                          evidence:'profile-menu'};
+  return {kind:'waiting',page:location.pathname,
+          reason:'no-visible-play-or-profile-menu'};
 })()'''
 
 
 def account_inspect_play_page(websocket_url):
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
         'expression':HABBO_AUTO_PLAY_JS,'returnByValue':True})
-    return result.get('result',{}).get('value',{'kind':'waiting'})
+    if result.get('exceptionDetails'):
+        raise RuntimeError('Habbo DOM inspection script failed.')
+    value=result.get('result',{}).get('value')
+    if not isinstance(value,dict) or not isinstance(value.get('kind'),str):
+        raise RuntimeError('Habbo DOM inspection returned no readable status.')
+    return value
 
 
 def account_click_play_button(websocket_url,step):
@@ -583,15 +648,20 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     identical=0
     login_submitted=False
     login_waits=0
+    last_issue='No Habbo website tab detected in this browser profile.'
     for iteration in range(28):
         page=account_habbo_page(debug_port)
         if page is None:
+            last_issue='No HTTPS Habbo website tab detected in this profile.'
             time.sleep(0.6);continue
         try:
             step=account_inspect_play_page(page['webSocketDebuggerUrl'])
-        except (OSError,RuntimeError,ValueError,socket.timeout):
+        except (OSError,RuntimeError,ValueError,socket.timeout) as exc:
+            last_issue=('Browser inspection failed ('+type(exc).__name__+
+                        '); close older dedicated browser windows and retry.')
             time.sleep(0.6);continue
         kind=step.get('kind')
+        last_issue='Visible Play button and signed-in profile menu not detected.'
         if kind=='login':
             if not credentials:
                 report('Sign in once manually or save email/password in the '
@@ -614,10 +684,18 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                    'Checking whether Habbo accepted it...')
             time.sleep(1.6)
             continue
-        if login_only and kind in ('play','play-now','launch','download'):
+        if login_only and kind in ('play','play-now','launch','download',
+                                  'signed_in'):
             report('Habbo session is signed in. Use Auto Play to launch Classic.')
             return 'signed_in'
+        if kind=='signed_in':
+            # Login is authenticated, but clicking an invented Play coordinate
+            # would risk sending clicks to the wrong website control.
+            last_issue='Signed in, but the PLAY control is not identifiable.'
+            time.sleep(0.6)
+            continue
         if kind=='not_habbo':
+            last_issue='Browser tab is not on the official HTTPS Habbo website.'
             return 'unknown'
         if kind=='launch':
             account_click_play_button(page['webSocketDebuggerUrl'],step)
@@ -641,10 +719,9 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
         else:
             time.sleep(0.6)
     if login_only:
-        report('Habbo sign-in status could not be verified. Check the browser.')
+        report('Habbo sign-in could not be verified: '+last_issue)
         return 'waiting'
-    report('Could not find the next Habbo launch button. '
-           'The website layout may have changed.')
+    report('Habbo launch incomplete: '+last_issue)
     return 'timeout'
 
 
@@ -2664,8 +2741,10 @@ class ChatOverlayApp:
                        f'ready. {len(failures)} need attention.')
                 return
             if not authenticated:
-                report('No account logins were confirmed. Open a dedicated '
-                       'account browser and check the sign-in screen.')
+                report('No account logins confirmed. Check the Browser / Classic '
+                       'status beside each account: missing browser control, '
+                       'verification required, or login page not recognised. '
+                       'A blank saved-password field is normal.')
                 return
 
             # Phase 3: launch Classic, but never allow an unresolved native
