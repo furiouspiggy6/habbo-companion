@@ -144,6 +144,12 @@ class MultiAccountManagerTests(unittest.TestCase):
         self.assertEqual(set(server.authenticated_ids), {A, B, C})
         self.assertTrue(all(s.endswith("ping OK")
                             for s in manager.ping_all().values()))
+        # Clicking Connect all a second time must not replay test tickets
+        # or replace healthy sockets.
+        original_sockets = dict(manager.sessions)
+        repeat = manager.connect_all(server, [A, B, C])
+        self.assertTrue(all(s.endswith("ping OK") for s in repeat.values()))
+        self.assertEqual(original_sockets, manager.sessions)
         manager.disconnect_all()
         end = time.monotonic() + 1.0
         while server.authenticated_ids and time.monotonic() < end:
