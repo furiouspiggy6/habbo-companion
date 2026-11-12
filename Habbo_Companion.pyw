@@ -530,7 +530,12 @@ HABBO_AUTO_PLAY_JS=r'''(() => {
       if (matchKind(label(el))!==target) continue;
       let parent=el;
       for (let depth=0;parent && depth<4;depth++,parent=parent.parentElement) {
-        if (parent.matches && parent.matches(clickable) && visible(parent)) {
+        const isClickable=parent.matches && parent.matches(clickable);
+        const clickableStyle=visible(parent) &&
+           getComputedStyle(parent).cursor==='pointer';
+        if (visible(parent) &&
+            (isClickable || typeof parent.onclick==='function' ||
+             clickableStyle)) {
           const rect=parent.getBoundingClientRect();
           return {kind:target,label:label(el),x:rect.left+rect.width/2,
                   y:rect.top+rect.height/2,page:location.pathname};
