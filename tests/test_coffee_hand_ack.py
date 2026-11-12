@@ -31,7 +31,16 @@ class Value:
     def set(self,x):self.value=x
 
 CL=next(n for n in TREE.body if isinstance(n,ast.ClassDef) and n.name=='ChatOverlayApp')
-methods={'carry_ack_matches':ns['carry_ack_matches']}
+delay_node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
+                and n.name=='coffee_delay_ms')
+validate_node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
+                   and n.name=='validate_coffee_interval')
+import math
+speed_scope={'math':math}
+exec(compile(ast.Module(body=[validate_node,delay_node],type_ignores=[]),
+             str(APP),'exec'),speed_scope)
+methods={'carry_ack_matches':ns['carry_ack_matches'],
+         'coffee_delay_ms':speed_scope['coffee_delay_ms']}
 for name in ('_on_own_carry_update','_coffee_ack_timeout'):
     n=next(n for n in CL.body if isinstance(n,ast.FunctionDef) and n.name==name)
     exec(compile(ast.Module(body=[n],type_ignores=[]),str(APP),'exec'),methods)
