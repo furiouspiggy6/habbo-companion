@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlsplit
 _SERVER = "hhus"  # Only the user's official Habbo.com hotel.
 _TICKET_RE = re.compile(
     r"^(?P<code>[A-Za-z0-9-]{8,160})\.(?P<version>V[1-9][0-9]?)"
-    r"(?:\.(?P<username>[A-Za-z0-9_:\-]{1,40}))?$",
+    r"(?:\.(?P<username>[A-Za-z0-9_.:\-]{1,40}))?$",
     re.IGNORECASE,
 )
 
@@ -53,7 +53,8 @@ def parse_classic_ticket(raw: str) -> ClassicTicket:
     if raw.lower().startswith("habbo://"):
         parsed = urlsplit(raw)
         if (parsed.scheme.lower() != "habbo" or parsed.netloc.lower() != "hab"
-            or parsed.fragment or parsed.username or parsed.password):
+            or parsed.fragment or parsed.path not in ("", "/")
+            or parsed.username or parsed.password):
             raise ValueError("Unsupported Habbo launch link")
         q = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True)
         if set(q) != {"server", "token"} or any(len(v) != 1 for v in q.values()):
