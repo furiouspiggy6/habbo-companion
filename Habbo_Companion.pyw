@@ -484,6 +484,87 @@ def classify_room_packet(extension,direction,packet,description=''):
     return None
 
 
+def room_users_from_binary_prefixes(packet):
+    """Decode reliable Users entity prefixes without trusting old entity tails.
+
+    G-Python's HEntity.parse reads the *whole* entity including optional
+    2026-dependent fields. If just one tail changes, it can reject the
+    complete roster, including our own avatar's room index. Instead find
+    the typed prefix:
+      [account ID, name, motto, figure, room index, x, y, z, facing, type]
+    inside the actual Users packet. Validate all the fields before
+    accepting an entry, and never overwrite with a guessed index.
+    """
+    payload=getattr(packet,'bytearray',None)
+    if not isinstance(payload,(bytes,bytearray)) or not 14<=len(payload)<=500000:
+        return {}
+    raw=bytes(payload)
+    count=int.from_bytes(raw[6:10],'big',signed=True)
+    if not 1<=count<=500:
+        return {}
+
+    def string_at(pos,maximum,minimum=0):
+        if pos+2>len(raw):
+            return None
+        length=int.from_bytes(raw[pos:pos+2],'big',signed=False)
+        if not minimum<=length<=maximum or pos+2+length>len(raw):
+            return None
+        return raw[pos+2:pos+2+length].decode('iso-8859-1'),pos+2+length
+
+    found={}
+    # A Users packet can contain many entities, each with variable tails.
+    # Searching the fixed typed prefix avoids needing to decode those tails.
+    for offset in range(10,len(raw)-30):
+        account_id=int.from_bytes(raw[offset:offset+4],'big',signed=True)
+        if not 1<=account_id<2147483648:
+            continue
+        name_result=string_at(offset+4,80,1)
+        if name_result is None:
+            continue
+        name,cursor=name_result
+        if not name.strip() or any(ord(ch)<32 for ch in name):
+            continue
+        motto_result=string_at(cursor,1024)
+        if motto_result is None:
+            continue
+        _,cursor=motto_result
+        figure_result=string_at(cursor,1024)
+        if figure_result is None:
+            continue
+        _,cursor=figure_result
+        if cursor+12>len(raw):
+            continue
+        room_index=int.from_bytes(raw[cursor:cursor+4],'big',signed=True)
+        x=int.from_bytes(raw[cursor+4:cursor+8],'big',signed=True)
+        y=int.from_bytes(raw[cursor+8:cursor+12],'big',signed=True)
+        if not (0<=room_index<=1000000 and 0<=x<=4096 and 0<=y<=4096):
+            continue
+        z_result=string_at(cursor+12,32)
+        if z_result is None:
+            continue
+        z,cursor=z_result
+        try:
+            if not z or not -1000<=float(z)<=1000:
+                continue
+        except ValueError:
+            continue
+        if cursor+8>len(raw):
+            continue
+        facing=int.from_bytes(raw[cursor:cursor+4],'big',signed=True)
+        entity_type=int.from_bytes(raw[cursor+4:cursor+8],'big',signed=True)
+        if not (0<=facing<=7 and 1<=entity_type<=4):
+            continue
+        key=name.casefold()
+        record=(name,account_id,room_index)
+        if key in found and found[key]!=record:
+            # Conflicting indexes are unsafe; discard this roster.
+            return {}
+        found[key]=record
+        if len(found)>count:
+            return {}
+    return found
+
+
 def first_room_user_from_raw_packet(packet):
     """Decode only the stable [count, id, name] prefix, no outdated entity tail."""
     try:
@@ -3914,6 +3995,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             # G-Earth's best-effort predicted expression.
                             users.update(verified_prefix)
                             users.update(full_room_users_from_packet(msg.packet))
+                            # Raw binary prefixes can supply room indexes even
+                            # when G-Python fails to parse changed entity tails.
+                            users.update(room_users_from_binary_prefixes(msg.packet))
                             self._packet_put(('room_users_observed',bool(users)))
                             if users:self._packet_put(('room_users',users))
                     if self.config.get('whispers_right',True):
@@ -4018,7 +4102,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 else:
                     self.coffee_own_status_var.set(
                         f'Account confirmed: {self._own_name} (ID {self._own_account_id}); '
-                        'room index still unavailable. Re-enter the room if needed.')
+                        'waiting for a room Users packet with a valid avatar index. '
+                        'Re-enter the room if needed.')
                 continue
             if item[0]=='coffee_carry_observed':
                 _,room_index,item_type,seen_at=item
