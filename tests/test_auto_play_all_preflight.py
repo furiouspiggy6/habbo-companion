@@ -85,7 +85,7 @@ class AutoPlayAllBatchTests(unittest.TestCase):
         self.worker.__globals__['account_select_classic_launcher']=lambda t:False
         self.worker(self.app,(self.a,self.b),3)
         self.assertEqual(len(self.calls),3)  # two login preflights, one launch
-        self.assertIn('remaining native launches paused',self.summary())
+        self.assertIn('Pausing remaining',self.summary())
         self.assertIn('manual classic selection',self.summary().lower())
         self.assertEqual(self.events[-1],('account_auto_finished',3))
 
