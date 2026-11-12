@@ -28,6 +28,9 @@ import uuid
 from pathlib import PurePosixPath
 import hashlib
 import math
+import base64
+import socket
+import struct
 import importlib.util
 from datetime import datetime
 import tkinter as tk
@@ -238,15 +241,243 @@ def account_login_browser():
     return None
 
 
-def account_browser_command(browser,folder,url):
+def account_browser_debug_port(account_id):
+    """Stable per-profile Chrome DevTools port; never a public listener."""
+    ident=str(account_id).lower()
+    if not re.fullmatch(r'[a-f0-9]{12}',ident):
+        raise ValueError('Invalid account profile identifier.')
+    return 43000+int(ident,16)%20000
+
+
+def account_browser_command(browser,folder,url,debug_port=None):
     """Chromium isolated user data, never passing a username or password."""
     url=validate_habbo_login_url(url)
     browser=Path(browser)
     folder=Path(folder)
     if browser.suffix.lower()!='.exe':
         raise ValueError('Select a supported Windows browser executable.')
-    return [str(browser),'--user-data-dir='+str(folder),
-            '--no-first-run','--new-window',url]
+    args=[str(browser),'--user-data-dir='+str(folder),
+          '--no-first-run','--new-window']
+    if debug_port is not None:
+        if not 1024<=int(debug_port)<=65535:
+            raise ValueError('Invalid local browser control port.')
+        args+=['--remote-debugging-address=127.0.0.1',
+               '--remote-debugging-port='+str(int(debug_port))]
+    return args+[url]
+
+
+def account_browser_pages(debug_port):
+    """Discover only page targets in a local, isolated Chromium profile."""
+    if not 1024<=int(debug_port)<=65535:
+        raise ValueError('Invalid local browser port.')
+    req=urllib.request.Request(
+        f'http://127.0.0.1:{int(debug_port)}/json/list',
+        headers={'User-Agent':'HabboCompanionLocal/1.0'})
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req,timeout=1.5) as response:
+        if response.status!=200:
+            raise OSError('Browser automation endpoint not ready.')
+        data=response.read(250000)
+    pages=json.loads(data.decode('utf-8'))
+    if not isinstance(pages,list):
+        raise ValueError('Unexpected browser debugging response.')
+    return [p for p in pages if isinstance(p,dict) and p.get('type')=='page'
+            and isinstance(p.get('url'),str)
+            and p.get('webSocketDebuggerUrl')]
+
+
+def account_habbo_page(debug_port):
+    """Never inspect or automate unrelated webpages in the browser profile."""
+    pages=account_browser_pages(debug_port)
+    for page in pages:
+        target=urllib.parse.urlsplit(page['url'])
+        if (target.scheme=='https' and target.hostname
+            and (target.hostname=='habbo.com'
+                 or target.hostname.endswith('.habbo.com'))):
+            return page
+    return None
+
+
+def account_cdp_call(websocket_url,method,params=None,timeout=4):
+    """Tiny one-shot Chrome DevTools client, using only Python stdlib.
+
+    CDP is bound to loopback, never launched against a normal browser
+    profile. A browser endpoint is not authentication for a Habbo avatar.
+    """
+    u=urllib.parse.urlsplit(websocket_url)
+    if (u.scheme!='ws' or u.hostname not in ('127.0.0.1','localhost')
+        or not u.port or not u.path.startswith('/devtools/page/')):
+        raise ValueError('Refusing an external/non-page DevTools connection.')
+    with socket.create_connection(('127.0.0.1',u.port),timeout=timeout) as sock:
+        sock.settimeout(timeout)
+        key=base64.b64encode(os.urandom(16)).decode('ascii')
+        handshake=(
+            f'GET {u.path} HTTP/1.1\r\n'
+            f'Host: 127.0.0.1:{u.port}\r\n'
+            'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+            f'Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n')
+        sock.sendall(handshake.encode('ascii'))
+        data=bytearray()
+        while b'\r\n\r\n' not in data and len(data)<8192:
+            chunk=sock.recv(4096)
+            if not chunk:break
+            data.extend(chunk)
+        header,sep,rest=bytes(data).partition(b'\r\n\r\n')
+        expected=base64.b64encode(hashlib.sha1(
+            (key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('ascii')
+            ).digest()).decode('ascii')
+        if (not sep or not header.startswith(b'HTTP/1.1 101 ')
+            or ('sec-websocket-accept: '+expected).encode('ascii').lower()
+               not in header.lower()):
+            raise OSError('Local browser refused WebSocket control.')
+
+        def send_frame(payload,opcode=1):
+            length=len(payload)
+            if length<126:
+                prefix=bytes([0x80|opcode,0x80|length])
+            elif length<=65535:
+                prefix=bytes([0x80|opcode,0x80|126])+struct.pack('!H',length)
+            else:
+                prefix=bytes([0x80|opcode,0x80|127])+struct.pack('!Q',length)
+            mask=os.urandom(4)
+            sock.sendall(prefix+mask+
+                         bytes(b^mask[i%4] for i,b in enumerate(payload)))
+
+        send_frame(json.dumps(
+            {'id':1,'method':method,'params':params or {}},
+            separators=(',',':')).encode('utf-8'))
+        buffer=bytearray(rest)
+        def read_n(n):
+            while len(buffer)<n:
+                chunk=sock.recv(4096)
+                if not chunk:
+                    raise OSError('Browser closed the debugging socket.')
+                buffer.extend(chunk)
+            value=bytes(buffer[:n]);del buffer[:n]
+            return value
+        for _ in range(80):
+            b0,b1=read_n(2)
+            size=b1&127
+            if size==126:size=struct.unpack('!H',read_n(2))[0]
+            elif size==127:size=struct.unpack('!Q',read_n(8))[0]
+            if size>2_000_000:
+                raise ValueError('Browser message too large.')
+            mask=read_n(4) if b1&128 else None
+            payload=read_n(size)
+            if mask:
+                payload=bytes(b^mask[i%4] for i,b in enumerate(payload))
+            opcode=b0&15
+            if opcode==9:
+                send_frame(payload,10)
+                continue
+            if opcode==8:
+                raise OSError('Browser closed the debugging socket.')
+            if opcode!=1:
+                continue
+            reply=json.loads(payload.decode('utf-8'))
+            if reply.get('id')!=1:
+                continue
+            if 'error' in reply:
+                raise RuntimeError(str(reply['error'].get('message','CDP error'))[:120])
+            return reply.get('result',{})
+        raise TimeoutError('Browser did not answer the requested command.')
+
+
+# Intentionally no authentication fields or access to cookies/tokens.
+# Only inspect visible, text-labelled controls on the Habbo website.
+HABBO_AUTO_PLAY_JS=r'''(() => {
+  if (!/(^|\\.)habbo\\.com$/i.test(location.hostname))
+    return {kind:'not_habbo'};
+  const login=Array.from(document.querySelectorAll('input[type=password]'))
+    .some(el => el.getClientRects().length > 0);
+  if (login) return {kind:'login'};
+  const choices=Array.from(document.querySelectorAll(
+    'a,button,[role=button],input[type=button],input[type=submit]'));
+  const targets=[
+    ['launch',/^(launch and log in|launch & log in|launch and login)$/i],
+    ['play-now',/^play now!?$/i],
+    ['play',/^play!?$/i],
+    ['download',/^download!?$/i]
+  ];
+  for (const [kind,re] of targets) {
+    for (const el of choices) {
+      const text=(el.innerText || el.value ||
+                  el.getAttribute('aria-label') || '').trim().replace(/\\s+/g,' ');
+      const rect=el.getBoundingClientRect();
+      const style=getComputedStyle(el);
+      if (!re.test(text) || !rect.width || !rect.height ||
+          style.display==='none' || style.visibility==='hidden' ||
+          el.hasAttribute('disabled') || rect.bottom<0 ||
+          rect.top>innerHeight || rect.right<0 || rect.left>innerWidth)
+        continue;
+      return {kind, label:text, x:rect.left+rect.width/2,
+              y:rect.top+rect.height/2, page:location.pathname};
+    }
+  }
+  return {kind:'waiting',page:location.pathname};
+})()'''
+
+
+def account_inspect_play_page(websocket_url):
+    result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_AUTO_PLAY_JS,'returnByValue':True})
+    return result.get('result',{}).get('value',{'kind':'waiting'})
+
+
+def account_click_play_button(websocket_url,step):
+    """Send a trusted Chrome mouse click, not a JS .click() fake gesture."""
+    x,y=step['x'],step['y']
+    for kind in ('mousePressed','mouseReleased'):
+        account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+            'type':kind,'x':x,'y':y,'button':'left','clickCount':1})
+
+
+def account_attempt_auto_play(debug_port,report):
+    """Move through saved-session Habbo pages; stop for a fresh login."""
+    previous=None
+    identical=0
+    for iteration in range(28):
+        page=account_habbo_page(debug_port)
+        if page is None:
+            time.sleep(0.6);continue
+        try:
+            step=account_inspect_play_page(page['webSocketDebuggerUrl'])
+        except (OSError,RuntimeError,ValueError,socket.timeout):
+            time.sleep(0.6);continue
+        kind=step.get('kind')
+        if kind=='login':
+            report('Sign in once in this account browser. '
+                   'Saved sessions can use Auto Play next time.')
+            return 'login'
+        if kind=='not_habbo':
+            return 'unknown'
+        if kind=='launch':
+            account_click_play_button(page['webSocketDebuggerUrl'],step)
+            report('Clicked Launch and log in. Approve any browser/Windows '
+                   'launcher permission prompt; then select Classic if asked.')
+            return 'launched'
+        if kind in ('play','play-now','download'):
+            identity=(page.get('url'),kind,step.get('page'))
+            if identity==previous:
+                identical+=1
+                if identical>=2:
+                    report('Habbo stayed on the same Play button. '
+                           'Click it manually if the browser blocked automation.')
+                    return 'stalled'
+            else:
+                identical=0
+            previous=identity
+            account_click_play_button(page['webSocketDebuggerUrl'],step)
+            report('Continuing through Habbo '+step.get('label','Play')+'...')
+            time.sleep(1.4)
+        else:
+            time.sleep(0.6)
+    report('Could not find the next Habbo launch button. '
+           'The website layout may have changed.')
+    return 'timeout'
+
+
+def parse_coffee_group_names(raw):
 
 
 def parse_coffee_group_names(raw):
