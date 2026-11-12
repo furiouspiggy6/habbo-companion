@@ -1,80 +1,66 @@
-HABBO COMPANION v1.1.24 — OPTIONAL BOOKCASE / EXTRA SOURCES + SPEED TEST
-=========================================================================
+HABBO COMPANION v1.1.25 — AUTOMATIC COFFEE LOOP RECORDINGS
+==========================================================
 
-MORE HAND-ITEM SOURCES
-----------------------
-The original Coffee Pass loop still performs:
-    UseFurniture Cup 1 -> PassCarryItem recipient
-    UseFurniture Cup 2 -> PassCarryItem recipient
-    repeat.
+WHAT CHANGED
+------------
+Every coffee session now automatically records a local timestamped CSV,
+including the original FAST 0.1-second loop. You do not need to watch
+the packet viewer, save any packet screenshots, run the slower confirmed
+speed test or record results manually.
 
-There is now a "Other furniture IDs" box for up to FOUR additional
-hand-item dispenser furniture instance IDs. A bookcase that gives books
-is one example. With one additional source, the cycle becomes:
-    pick up Cup 1 -> pass -> pick up Cup 2 -> pass
-    -> pick up Bookcase item -> pass -> repeat.
-Each source is used sequentially; the loop NEVER tries to hold several
-different items at the same time.
+Auto-recording starts when you confirm Give 1 cup, Start coffee pass
+loop, or Test speed (3 cycles). The NORMAL 0.1-second loop continues
+at its configured 0.1s packet delay. The recorder does not wait for
+server replies and never changes that delay.
 
-These must be instance IDs of furniture actually inside the Habbo room,
-NOT hand-item type numbers (for example, 1003 is a book hand-item type,
-not the instance ID of the bookcase in your room).
+Automatic events saved:
+- Each successfully issued local UseFurniture pickup request with
+  the exact room furniture ID and chronological action number.
+- Each successfully issued PassCarryItem request with account ID,
+  participant name (when known) and chronological action number.
+- The observed server CarryObject event for YOUR avatar, including
+  item type (positive for held-item, 0 for empty hand), when the
+  game supplied your room avatar index.
+- The observed CarryObject event for the CURRENT recipient when the
+  recipient's room avatar index is known.
+- Session start/end time, selected sources, configured action delay,
+  and why the loop stopped or encountered a send/logging error.
 
-CAPTURE THE BOOKCASE WITHOUT MANUAL PACKET INSPECTION
------------------------------------------------------
-1. Start Companion and G-Earth and enter the Habbo room.
-2. Stop any running coffee loop.
-3. In Coffee Pass click "Capture next furniture click".
-4. In Habbo, double-click your bookcase to use it.
-5. Companion records that one outgoing UseFurniture instance ID and
-   adds it to "Other furniture IDs" (if not already configured).
-6. You can repeat for up to four additional sources.
+The CSV contains timestamps with milliseconds and elapsed milliseconds.
+All session events are buffered and written to disk as they occur.
+The app synchronizes writer access for server events arriving from
+the G-Earth interception thread, and flushes frequently. If logging
+fails or reaches its 64MB per-session safety cap, the loop STOPS
+instead of silently continuing unrecorded.
 
-Only item-dispensing furniture will actually give you an item. Some
-bookcases are decorative; a captured ID does not prove a hand item was
-picked up. The ordinary Cup 1 and Cup 2 remain unchanged.
+WHEN YOU PRESS STOP
+-------------------
+A final human-readable .summary.txt file is saved beside the CSV,
+reporting configured delay, elapsed time, pickup requests, pass
+requests, own carrying and empty-hand updates, target carrying and
+empty-hand updates, per-furniture pickup requests, requests/minute
+and server holding-item events/minute.
 
-A consenting group rotation also accepts additional sources; each
-participant gets a turn for every source type over a complete group
-cycle. Group mode still requires 10 seconds per packet action and
-excludes anyone who opts out.
+Files are automatically created in:
 
-FINITE SPEED TEST / MEASURING PRACTICAL LIMITS
----------------------------------------------
-The "Test speed (3 cycles)" button is a finite single-recipient test
-(not available in group mode). It always uses the optional sender-side
-CarryObject confirmations whether or not the checkbox for confirmed
-pickup is enabled. It requires your own Habbo account's room avatar
-index to be recognized first: use "Detect my avatar" if necessary.
+  %APPDATA%\HabboViewChat\coffee_sessions\
 
-The test performs exactly THREE full source cycles at the entered
-Delay per action and then STOPS automatically. You must confirm the
-recipient before sending any test packets.
+Click "Open saved coffee results" on the Coffee Pass tab to open
+that folder directly. Files remain local: Companion does not upload
+anything to GitHub, ChatGPT or any external analytics service.
+You can share a CSV or summary voluntarily if you want deeper analysis.
 
-The displayed summary includes:
-- elapsed time;
-- the number of your own positive carrying-item updates (pickups);
-- the number of confirmed empty-hand updates following a pass request;
-- outgoing PassCarryItem request count;
-- confirmed own pickup events per minute; and
-- pickup confirmation counts for EACH source furniture ID.
+IMPORTANT: The fast sender loop cannot confirm every recipient received
+a hand item. These logs identify requests sent locally, incoming
+server carrying-item updates and their timestamps, NOT private
+recipient-side HandItemReceived events. If the recipient's room
+index is unavailable, the CSV still records all local coffee requests
+and your own carrying-item events, but there can be no target-side
+observations. Even when target-side events arrive, each one is not
+a guaranteed receipt for a specific request.
 
-These are measurements of the sender's client and server messages,
-NOT receipts on the recipient's client. If your own avatar cannot be
-identified, the test will not run rather than guessing. If a carry
-confirmation does not arrive, the test stops after its timeout and
-reports partial statistics. It does not silently claim a transfer
-succeeded or try to work around rate limits.
-
-To compare practical throughput, run a test at a chosen delay and note
-the confirmed pickup events per minute. Then repeat with a DIFFERENT
-delay, or compare two-cup rotation versus rotation including a
-bookcase. A larger furniture list does not necessarily increase item
-throughput; the Habbo server may enforce shared limits/cooldowns.
-The test does NOT automatically step through increasingly fast speeds.
-
-All previous features remain: original Habbo PNG speech bubbles,
-whispers on the right, optional confirmed hand state, username
-resolution, manual opt-out, unlimited regular cycles and updater.
+Your original chat bubbles, whisper alignment, all sources including
+the bookcase, timed and acknowledged loops, group mode, opt-out
+and update workflow are otherwise unchanged.
 
 INSTALL: Habbo Companion > Updates > Check online.

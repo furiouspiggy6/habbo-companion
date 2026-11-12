@@ -7,6 +7,7 @@ capture, remote access or gameplay automation. Uses only Python stdlib.
 """
 from __future__ import annotations
 import ctypes
+import csv
 from ctypes import wintypes
 from dataclasses import dataclass
 import json
@@ -234,6 +235,146 @@ def coffee_speed_test_report(elapsed,pickups,releases,requests,source_attempts,
             f'{requests} pass requests, {60*pickups/elapsed:.1f} confirmed '
             'own pickups/min. Sources: '+('; '.join(source_notes) or 'none')+
             '. Recipient deliveries NOT verified.')
+
+
+class CoffeeSessionRecorder:
+    """Buffered local CSV recorder for NORMAL and confirmed coffee loops.
+
+    Recording never changes packet timings or waits for acknowledgments.
+    Writes only this user's own hand updates and the selected target's
+    hand updates, never whole-room chat or arbitrary raw packet contents.
+    """
+    COLUMNS=('local_time','elapsed_ms','event','furniture_id',
+             'recipient_name','recipient_account_id','avatar_room_index',
+             'hand_item_type','action_number','cycle','note')
+    MAX_BYTES=64*1024*1024
+
+    def __init__(self,directory,interval,source_ids,recipients):
+        directory=Path(directory)
+        directory.mkdir(parents=True,exist_ok=True)
+        slug=datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        self.path=directory/('coffee_session_'+slug+'_'+uuid.uuid4().hex[:6]+'.csv')
+        self.summary_path=self.path.with_suffix('.summary.txt')
+        self._lock=threading.Lock()
+        self._handle=open(self.path,'w',newline='',encoding='utf-8',buffering=65536)
+        self._writer=csv.writer(self._handle)
+        self._writer.writerow(self.COLUMNS)
+        self.started=time.monotonic()
+        self.interval=float(interval)
+        self.source_ids=tuple(str(v) for v in source_ids)
+        self.recipients=tuple((str(n),str(uid)) for n,uid in recipients)
+        self.closed=False
+        self.error=None
+        self.bytes_written=0
+        self.events=0
+        self.pickup_requests=0
+        self.pass_requests=0
+        self.source_requests={}
+        self.own_held_updates=0
+        self.own_empty_updates=0
+        self.target_held_updates=0
+        self.target_empty_updates=0
+        self.last_write_at=time.monotonic()
+        self.record('session_start',note=(
+            f'delay={self.interval:g}s; sources={",".join(self.source_ids)}; '
+            'observed hand events do not prove receipt by a recipient'))
+        if self.error:
+            self._handle.close()
+            raise OSError('Could not begin session recording: '+self.error)
+
+    @staticmethod
+    def _cell(value):
+        """Prevent user-chosen names becoming spreadsheet formulas in CSV."""
+        result=str(value if value is not None else '')
+        if result.startswith(('=','+','-','@','\t','\r','\n')):
+            return "'"+result
+        return result
+
+    def record(self,event,furniture='',name='',account_id='',room_index='',
+               hand_item='',action_number='',cycle='',note=''):
+        with self._lock:
+            if self.closed:
+                return False
+            try:
+                now=time.monotonic()
+                row=(datetime.now().astimezone().isoformat(timespec='milliseconds'),
+                     round((now-self.started)*1000),event,furniture,name,
+                     account_id,room_index,hand_item,action_number,cycle,note)
+                safe=tuple(self._cell(item) for item in row)
+                self.bytes_written+=sum(len(v.encode('utf-8'))+4 for v in safe)
+                if self.bytes_written>self.MAX_BYTES:
+                    raise OSError('Coffee recording reached 64 MB size limit')
+                self._writer.writerow(safe)
+                self.events+=1
+                if event=='pickup_request':
+                    self.pickup_requests+=1
+                    source=str(furniture)
+                    self.source_requests[source]=self.source_requests.get(source,0)+1
+                elif event=='pass_request':self.pass_requests+=1
+                elif event=='own_held_update':self.own_held_updates+=1
+                elif event=='own_empty_update':self.own_empty_updates+=1
+                elif event=='target_held_update':self.target_held_updates+=1
+                elif event=='target_empty_update':self.target_empty_updates+=1
+                if self.events%25==0 or now-self.last_write_at>=3:
+                    self._handle.flush()
+                    self.last_write_at=now
+                return True
+            except (OSError,UnicodeError,ValueError) as exc:
+                self.error=str(exc)
+                return False
+
+    def stats(self):
+        with self._lock:
+            seconds=max(0.001,time.monotonic()-self.started)
+            return dict(seconds=seconds,pickups_sent=self.pickup_requests,
+                        passes_sent=self.pass_requests,
+                        own_held=self.own_held_updates,
+                        own_empty=self.own_empty_updates,
+                        target_held=self.target_held_updates,
+                        target_empty=self.target_empty_updates,
+                        events=self.events,error=self.error,
+                        source_requests=dict(self.source_requests),
+                        pickup_requests_per_min=60*self.pickup_requests/seconds,
+                        own_held_updates_per_min=60*self.own_held_updates/seconds)
+
+    def finish(self,reason):
+        # Never leave a session without a saved CSV and a separate summary.
+        self.record('session_stop',note=str(reason))
+        stats=self.stats()
+        with self._lock:
+            if not self.closed:
+                self.closed=True
+                try:
+                    self._handle.flush()
+                finally:
+                    self._handle.close()
+        summary=(
+            'HABBO COMPANION COFFEE SESSION — LOCAL RECORDING\n'
+            f'CSV: {self.path}\n'
+            f'Delay configured: {self.interval:g}s per action\n'
+            f'Sources: {", ".join(self.source_ids)}\n'
+            f'Recipients: {", ".join(n for n,_ in self.recipients)}\n'
+            f'Elapsed: {stats["seconds"]:.2f}s\n'
+            f'Pickup requests sent locally: {stats["pickups_sent"]}\n'
+            f'Pass requests sent locally: {stats["passes_sent"]}\n'
+            'Pickup requests by furniture: '+
+            ', '.join(f'{source}: {count}' for source,count
+                      in stats['source_requests'].items())+'\n'
+            f'Own avatar holding-item updates: {stats["own_held"]}\n'
+            f'Own avatar empty-hand updates: {stats["own_empty"]}\n'
+            f'Target avatar holding-item updates: {stats["target_held"]}\n'
+            f'Target avatar empty-hand updates: {stats["target_empty"]}\n'
+            f'Pickup requests/min: {stats["pickup_requests_per_min"]:.1f}\n'
+            f'Own holding-item updates/min: {stats["own_held_updates_per_min"]:.1f}\n'
+            f'End reason: {reason}\n'
+            f'Recording error: {stats["error"] or "none"}\n'
+            'NOTE: CarryObject events are observations, not per-cup receipts.\n'
+            'NOTE: Sent packets only confirm a local send, not server acceptance.\n'
+            'NOTE: Own/target room index must be known to classify their events.\n'
+            'Only the sender and actively selected recipient were monitored.\n'
+        )
+        self.summary_path.write_text(summary,encoding='utf-8')
+        return stats
 
 
 def build_coffee_group_sequence(cup_one,cup_two,recipients,extra_sources=()):
@@ -1196,6 +1337,9 @@ class ChatOverlayApp:
         self._coffee_group_active=False
         self.coffee_status_var=tk.StringVar(value='Coffee pass loop OFF. Choose a recipient and start manually.')
         self.coffee_delivery_var=tk.StringVar(value='Pass requests sent: 0. No recipient delivery evidence yet.')
+        self.coffee_recording_var=tk.StringVar(
+            value='Automatic recording starts with each coffee run (including 0.1s loops).')
+        self._coffee_recorder=None
         self.coffee_speed_var=tk.StringVar(value='Speed test not run. Requires your own avatar room index.')
         self._coffee_speed_active=False
         self._coffee_speed_started=0.0
@@ -1856,7 +2000,13 @@ class ChatOverlayApp:
         ttk.Label(holder,textvariable=self.coffee_delivery_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         ttk.Label(holder,textvariable=self.coffee_speed_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,8))
+        ttk.Label(holder,text='AUTOMATIC COFFEE SESSION RECORDING',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,3))
+        ttk.Label(holder,textvariable=self.coffee_recording_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Button(holder,text='Open saved coffee results',
+                   command=self._open_coffee_recordings).pack(anchor='w',pady=(0,10))
         ttk.Label(holder,text='No chat required: if the room list is missing, '
                    'the exact username is resolved through Habbo profile lookup. '
                    'Confirm the ID and ensure the recipient is in your room. '
@@ -2126,6 +2276,35 @@ class ChatOverlayApp:
                 lambda gen=self._coffee_generation:self._coffee_loop_tick(gen))
         self.coffee_status_var.set(f'{name} excluded. No automatic checks or retries.')
 
+    def _open_coffee_recordings(self):
+        """Open local recordings on Windows; never uploads recorded game data."""
+        folder=APP_DIR/'coffee_sessions'
+        try:
+            folder.mkdir(parents=True,exist_ok=True)
+            if os.name=='nt':
+                os.startfile(str(folder))
+            else:
+                self.coffee_recording_var.set('Results folder: '+str(folder))
+        except (OSError,AttributeError) as exc:
+            self.coffee_recording_var.set('Cannot open results folder: '+str(exc)[:130])
+
+    def _record_coffee_carry(self,room_index,item_type):
+        """Called by G-Earth interception thread; no Tk operations allowed."""
+        recorder=getattr(self,'_coffee_recorder',None)
+        if recorder is None:
+            return
+        own_index=self._own_room_index
+        target_index=self._coffee_target_room_index
+        if own_index is not None and room_index==own_index:
+            event=('own_held_update' if item_type>0 else 'own_empty_update')
+            recorder.record(event,room_index=room_index,hand_item=item_type,
+                            note='server CarryObject about own avatar')
+        elif target_index is not None and room_index==target_index:
+            event=('target_held_update' if item_type>0 else 'target_empty_update')
+            recorder.record(event,name=self._coffee_target_name,
+                            room_index=room_index,hand_item=item_type,
+                            note='server CarryObject about current recipient; not receipt proof')
+
     def _run_coffee_speed_test(self):
         """One finite measurement for one willing recipient, no automatic speed ramp."""
         if self.coffee_group_enabled_var.get():
@@ -2292,6 +2471,23 @@ class ChatOverlayApp:
                            coffee_wait_for_hand=bool(self.coffee_wait_for_hand_var.get()),
                            coffee_extra_furniture=self.coffee_extra_furniture_var.get().strip())
         self.save()
+        # The normal fast loop always writes a complete local CSV. Failure to
+        # create the file stops startup rather than silently running unlogged.
+        source_ids=(self.coffee_cup_one_var.get().strip(),) if single_cup else (
+            self.coffee_cup_one_var.get().strip(),
+            self.coffee_cup_two_var.get().strip(),*extras)
+        recording_recipients=(targets if group_mode else
+                              [(target_name or target_id,str(target_id))])
+        try:
+            self._coffee_recorder=CoffeeSessionRecorder(
+                APP_DIR/'coffee_sessions',interval,source_ids,recording_recipients)
+        except (OSError,ValueError,UnicodeError) as exc:
+            self.coffee_recording_var.set(
+                'Recording could not start: '+str(exc)[:140])
+            self.coffee_status_var.set('No coffee sent: session recording could not start.')
+            return
+        self.coffee_recording_var.set(
+            'Recording automatically: '+str(self._coffee_recorder.path))
         self._coffee_generation+=1
         self._coffee_running=True
         self._coffee_sequence=sequence
@@ -2434,9 +2630,44 @@ class ChatOverlayApp:
             if ext.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the send.')
         except Exception as exc:
+            recorder=getattr(self,'_coffee_recorder',None)
+            if recorder is not None:
+                recorder.record('send_error',action_number=self._coffee_sent+1,
+                                note=str(exc)[:160])
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
         self._coffee_sent+=1
+        recorder=getattr(self,'_coffee_recorder',None)
+        if recorder is not None:
+            pickup=self._coffee_index%2==0
+            match=re.search(
+                r'\{out:(?:UseFurniture|PassCarryItem)\}\{i:([0-9]+)\}',
+                expression)
+            numeric_id=match.group(1) if match else ''
+            current_name=self._coffee_target_name
+            saved=recorder.record(
+                'pickup_request' if pickup else 'pass_request',
+                furniture=numeric_id if pickup else '',
+                name=current_name,
+                account_id=numeric_id if not pickup else '',
+                room_index=(self._own_room_index if pickup else
+                            self._coffee_target_room_index),
+                action_number=self._coffee_sent,
+                cycle=self._coffee_completed+1,
+                note='local G-Earth send accepted; server/recipient acceptance unknown')
+            if not saved:
+                self._stop_coffee_loop(
+                    'Automatic recording stopped unexpectedly: '+
+                    str(recorder.error or 'CSV file closed')[:110])
+                return
+            if self._coffee_sent==1 or self._coffee_sent%25==0:
+                stats=recorder.stats()
+                self.coffee_recording_var.set(
+                    f'Recording to {recorder.path.name} — '
+                    f'{stats["pickups_sent"]} pickup requests, '
+                    f'{stats["passes_sent"]} pass requests, '
+                    f'{stats["own_held"]} own held-item updates. '
+                    'No server confirmations required to continue.')
         if self._coffee_speed_active and self._coffee_index%2==0:
             # Count only the particular source whose UseFurniture was just sent.
             matched=re.search(r'\{out:UseFurniture\}\{i:([0-9]+)\}',expression)
@@ -2494,6 +2725,22 @@ class ChatOverlayApp:
                     lambda gen=generation:self._coffee_loop_tick(gen))
 
     def _stop_coffee_loop(self,reason=None):
+        recorder=getattr(self,'_coffee_recorder',None)
+        self._coffee_recorder=None
+        if recorder is not None:
+            try:
+                stats=recorder.finish(reason or 'Stopped by user')
+                self.coffee_recording_var.set(
+                    f'CSV + summary saved: {recorder.path.parent} | '
+                    f'{stats["pickups_sent"]} pickup requests, '
+                    f'{stats["passes_sent"]} pass requests, '
+                    f'{stats["own_held"]} own holding updates, '
+                    f'{stats["own_empty"]} own empty-hand updates. '
+                    'Recipient receipt unverified.')
+            except (OSError,ValueError) as exc:
+                self.coffee_recording_var.set(
+                    'Recording saved partially but could not finalize: '+
+                    str(exc)[:140])
         if getattr(self,'_coffee_speed_active',False):
             elapsed=time.monotonic()-self._coffee_speed_started
             report=coffee_speed_test_report(
@@ -3646,6 +3893,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         elif kind=='CarryObject':
                             carry=carry_object_from_packet(msg.packet)
                             if carry is not None:
+                                self._record_coffee_carry(carry[0],carry[1])
                                 self._packet_put(('coffee_carry_observed',carry[0],
                                                   carry[1],time.time()))
                         elif kind=='Users':
