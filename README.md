@@ -63,3 +63,26 @@ website session, the account must be signed into Habbo again through the
 official authentication flow before direct TCP can connect. Verification
 codes, MFA and server authentication checks are not bypassed. A positive
 connection status requires the live server AuthenticationOK packet.
+
+
+## v1.1.45 — More reliable direct TCP packet reads
+
+Reviewed the architecture of [Bobba Launcher](https://github.com/Bobba-Packet/bobba-launcher)
+and [Bobba Client](https://github.com/Bobba-Packet/bobba-client) as external
+references. Both projects require an official Habbo SSO ticket for game login;
+neither provides a password-only headless authentication method. Their GPL-3.0
+code, AIR client assets, and Bobba-specific backend connection are **not** used.
+
+For our independent Direct TCP adapter, fix a real transport problem:
+an incomplete incoming TCP header or payload must survive a socket timeout
+without losing bytes or moving the RC4 keystream ahead twice. Each account
+now preserves the partial frame and completes it on a later read. The original
+per-account sessions and official-only authentication boundaries remain
+unchanged. New offline tests cover fragmented plaintext and encrypted frames,
+timeouts mid-packet, and malformed length rejection. Timeouts now indicate
+which handshake/authentication phase failed.
+
+**Still experimental:** CI cannot verify live Habbo server acceptance.
+The website session must still be authenticated through Habbo's normal login
+flow, then Companion can request SSO from its own HTTPS connection. No
+third-party Bobba server, client or launcher is required.
