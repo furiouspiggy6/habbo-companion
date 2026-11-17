@@ -277,6 +277,72 @@ class AutomaticLoginAndImport(TestCase):
                           ' '.join(launches[0]).replace('\\','/'))
             self.assertEqual(closed,['Browser.close'])
 
+    def test_cold_headless_restores_session_before_requesting_ticket(self):
+        """A single cold-start attempt waits for the saved trusted profile."""
+        with tempfile.TemporaryDirectory() as folder:
+            events=[]
+            states=iter(['waiting','login','play'])
+            class Proc:
+                def terminate(self):
+                    events.append('terminated')
+            calls={'browser':0,'ready':0}
+            def browser_pages(port):
+                calls['browser']+=1
+                if calls['browser']==1:
+                    raise OSError('not running')
+                return [signed_in_page(port)]
+            def current_page(port):
+                calls['ready']+=1
+                step=next(states,'play')
+                events.append(('inspect',step))
+                return {'url':'https://www.habbo.com/',
+                        'webSocketDebuggerUrl':
+                        'ws://127.0.0.1:43111/devtools/page/demo',
+                        '_preflight_step':{'kind':step}}
+            ticket=SimpleNamespace(secret='test-ticket-not-for-logs.V4')
+            def fetch_browser_ticket(port):
+                self.assertEqual(port,43111)
+                self.assertIn(('inspect','play'),events)
+                events.append('ticket')
+                return ticket
+            ns=execute(
+                APP_DIR=Path(folder),
+                _account_credential_target=lambda ident:ident,
+                account_browser_debug_port=lambda ident:43111,
+                account_login_browser=lambda:Path('/mock/brave.exe'),
+                validate_habbo_login_url=lambda url:url,
+                account_saved_login_read=lambda ident:None,
+                account_browser_pages=browser_pages,
+                account_browser_command=lambda browser,dir,url,port:[
+                    str(browser),'--user-data-dir='+str(dir),
+                    '--remote-debugging-port='+str(port),url],
+                subprocess=SimpleNamespace(
+                    Popen=lambda cmd,**kwargs:(
+                        events.append(('spawn',cmd)) or Proc()),DEVNULL=-3),
+                time=SimpleNamespace(sleep=lambda seconds:None),
+                account_habbo_page=current_page,
+                account_cdp_call=lambda ws,method,timeout=2:(
+                    events.append(method) or {}),
+                account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                    (_ for _ in ()).throw(ValueError('legacy pair absent')),
+                account_fetch_ticket_from_signed_in_profile=fetch_browser_ticket,
+                account_attempt_auto_play=lambda *args,**kwargs:self.fail(
+                    'Restored session should not re-submit saved login'),
+                account_session_cookie_write=lambda *args:self.fail(
+                    'Do not store nonexistent legacy cookies'),
+            )
+            logs=[]
+            result=ns['account_import_session_automatically'](
+                account(),logs.append)
+            self.assertIs(result,ticket)
+            self.assertGreaterEqual(calls['ready'],3)
+            self.assertEqual(len([x for x in events if isinstance(x,tuple)
+                                  and x[0]=='spawn']),1)
+            self.assertEqual(events[-1],'Browser.close')
+            self.assertTrue(any('waiting for' in x.lower() for x in logs))
+            self.assertTrue(any('restored signed-in' in x for x in logs))
+            self.assertNotIn('test-ticket-not-for-logs.V4',' '.join(logs))
+
     def test_no_valid_cookie_and_no_login_reports_setup_action(self):
         calls=[]
         ns=execute(
