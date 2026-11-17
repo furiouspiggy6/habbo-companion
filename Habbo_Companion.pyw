@@ -2164,130 +2164,303 @@ def account_playwright_safe_error(exc):
     return 'browser action failed ('+type(exc).__name__+')'
 
 
+def account_playwright_safe_result_flag(body):
+    """Read only allowlisted JSON login result flags, never user-supplied text."""
+    if not isinstance(body,str) or len(body)>8192:
+        return None
+    try:
+        obj=json.loads(body)
+    except (TypeError,ValueError):
+        return None
+    if not isinstance(obj,dict):
+        return None
+    candidates=[obj]
+    if isinstance(obj.get('data'),dict):
+        candidates.append(obj['data'])
+    for payload in candidates:
+        for name in ('success','authenticated','loggedIn','logged_in'):
+            value=payload.get(name)
+            if type(value) is bool:
+                return name+'='+('true' if value else 'false')
+        for name in ('status','result','state'):
+            value=payload.get(name)
+            if isinstance(value,str) and value.lower() in (
+                    'success','failed','failure','error','unauthorized',
+                    'forbidden','pending','verification_required',
+                    'captcha_required','invalid_credentials'):
+                return name+'='+value.lower()
+    return None
+
+
+def account_playwright_safe_service(url):
+    """Only show known service labels; never log arbitrary external hostnames."""
+    try:
+        parts=urllib.parse.urlsplit(url)
+        host=(parts.hostname or '').lower()
+        if parts.scheme!='https' or parts.port not in (None,443):
+            return None
+    except (TypeError,ValueError):
+        return None
+    if host=='habbo.com' or host.endswith('.habbo.com'):
+        return 'Habbo'
+    labels={
+        'accounts.google.com':'Google identity',
+        'www.google.com':'Google',
+        'appleid.apple.com':'Apple identity',
+        'login.microsoftonline.com':'Microsoft identity',
+        'www.facebook.com':'Facebook identity',
+        'web.facebook.com':'Facebook identity',
+        'challenges.cloudflare.com':'Cloudflare challenge',
+        'www.hcaptcha.com':'hCaptcha challenge',
+        'hcaptcha.com':'hCaptcha challenge',
+        'www.recaptcha.net':'reCAPTCHA challenge',
+    }
+    return labels.get(host,'external HTTPS')
+
+
 class AccountPlaywrightMonitor:
-    """Safe request/response and console diagnostics for one Habbo page."""
+    """Account-scoped Playwright HTTPS diagnostics, with strict secret redaction.
+
+    Covers login requests and redirects, response status, completion, failures,
+    JSON outcomes and browser errors. Never log request/response payloads,
+    cookies, token-bearing URLs, headers, usernames or raw console messages.
+    """
     def __init__(self,page,report):
         self.page=page
         self.context=page.context
         self.report=report
         self.requests={}
-        self.failure_responses=[]
+        self.response_candidates=[]
         self.outgoing=0
         self.received=0
         self.failures=0
-        self.max_lines=18
+        self.failed_after_response=0
+        self.finished=0
+        self.redirects=0
+        self.first_party_posts=0
+        self.errors=0
+        self.max_lines=120
+        self.max_important_lines=65
         self.lines=0
+        self.important_lines=0
+        self.suppressed=0
 
     def _log(self,description,important=False):
-        if self.lines>=self.max_lines and not important:
-            return
-        if self.lines>=self.max_lines+5:
-            return
-        self.lines+=1
+        if important:
+            if self.important_lines>=self.max_important_lines:
+                self.suppressed+=1
+                return
+            self.important_lines+=1
+        else:
+            if self.lines>=self.max_lines:
+                self.suppressed+=1
+                return
+            self.lines+=1
         self.report(description)
 
     def on_request(self,req):
         try:
             url=req.url
-            kind=req.resource_type
+            # Check verified first-party origin before consulting the
+            # optional service-label helper (also works in isolated tests).
+            service=('Habbo' if account_playwright_is_official(url) else
+                     account_playwright_safe_service(url))
+            if service is None:
+                return
             method=req.method
-            if not account_playwright_is_official(url):
-                # External identity providers may be involved, but their
-                # hostnames, request URLs, headers and bodies remain private.
-                u=urllib.parse.urlsplit(url)
-                if u.scheme!='https':
-                    return
-                site='external HTTPS'
-                path='[hidden]'
-            else:
-                site='Habbo'
-                path=account_login_safe_endpoint_path(url)
+            kind=req.resource_type
             if kind not in ('xhr','fetch','document') and method not in (
                     'POST','PUT','PATCH','DELETE'):
                 return
             self.outgoing+=1
-            if len(self.requests)>=60:
+            if len(self.requests)>=240:
+                self.suppressed+=1
                 return
             num=self.outgoing
-            self.requests[req]=(num,path,site)
-            if self.lines<11:
-                self._log('CLIENT -> #'+str(num)+' '+method+' '+path+
-                          ' ('+site+', '+kind+').')
+            path=account_login_safe_endpoint_path(url)
+            auth_path=bool(re.search(
+                r'auth|login|sign.in|session|sso|identity|verify|captcha|oauth',
+                path,re.I))
+            significant=auth_path or method in ('POST','PUT','PATCH')
+            if service=='Habbo' and method in ('POST','PUT','PATCH'):
+                self.first_party_posts+=1
+            rec={'number':num,'path':path,'service':service,
+                 'method':method,'kind':kind,'significant':significant,
+                 'status':None,'completed':False,'failed':False}
+            self.requests[req]=rec
+            self._log('CLIENT -> #'+str(num)+' '+method+' '+path+
+                      ' ('+service+', '+kind+
+                      (', login-related' if significant else '')+').',
+                      important=significant)
         except Exception:
-            pass
+            self.errors+=1
 
     def on_response(self,res):
         try:
-            info=self.requests.get(res.request)
-            if info is None:
+            rec=self.requests.get(res.request)
+            if rec is None:
                 return
-            num,path,site=info
             code=res.status
             if type(code) is not int or not 100<=code<=599:
                 return
+            if rec['status'] is not None:
+                return
+            rec['status']=code
             self.received+=1
-            self._log('SERVER <- #'+str(num)+' HTTP '+str(code)+' '+path+
-                      ' ('+site+').',important=code>=400)
-            if code>=400 and site=='Habbo':
-                self.failure_responses.append(res)
+            redirect=300<=code<=399
+            if redirect:
+                self.redirects+=1
+            detail=' redirect' if redirect else ''
+            headers=res.headers
+            retry=''
+            if code==429:
+                seconds=str(headers.get('retry-after','')).strip()
+                if seconds.isdigit() and int(seconds)<=3600:
+                    retry='; retry-after '+seconds+'s'
+            self._log('SERVER <- #'+str(rec['number'])+
+                      ' HTTP '+str(code)+detail+' '+rec['path']+
+                      ' ('+rec['service']+')'+retry+'.',
+                      important=rec['significant'] or code>=400 or redirect)
+            # Only first-party JSON response bodies are ever read, and only
+            # to extract generic error codes / allowlisted outcome metadata.
+            content_type=str(headers.get('content-type','')).lower()
+            declared=str(headers.get('content-length','')).strip()
+            fits=(not declared or (declared.isdigit() and
+                                   int(declared)<=8192))
+            if (rec['service']=='Habbo' and 'json' in content_type and fits
+                    and (rec['significant'] or code>=400)
+                    and len(self.response_candidates)<20):
+                self.response_candidates.append((rec,res))
         except Exception:
-            pass
+            self.errors+=1
+
+    def on_finished(self,req):
+        try:
+            rec=self.requests.get(req)
+            if rec is None or rec['completed']:
+                return
+            rec['completed']=True
+            self.finished+=1
+            if rec['significant']:
+                self._log('NETWORK <- #'+str(rec['number'])+
+                          ' request completed'+(
+                              ' after HTTP '+str(rec['status'])
+                              if rec['status'] is not None else
+                              ' (no HTTP status recorded)')+'.')
+        except Exception:
+            self.errors+=1
 
     def on_failed(self,req):
-        info=self.requests.get(req)
-        if info is None:
-            return
-        self.failures+=1
-        self._log('NETWORK <- #'+str(info[0])+
-                  ' request failed (no HTTP response confirmed).',important=True)
+        try:
+            rec=self.requests.get(req)
+            if rec is None or rec['failed']:
+                return
+            rec['failed']=True
+            self.failures+=1
+            failure=req.failure
+            reason=''
+            if isinstance(failure,str):
+                match=re.search(r'net::ERR_[A-Z_]{3,50}',failure)
+                if match:
+                    reason=' ('+match.group(0)+')'
+            if rec['status'] is None:
+                text=' request failed before an HTTP response'
+            else:
+                self.failed_after_response+=1
+                text=' transfer interrupted after HTTP '+str(rec['status'])
+            self._log('NETWORK <- #'+str(rec['number'])+text+reason+'.',
+                      important=True)
+        except Exception:
+            self.errors+=1
 
     def on_pageerror(self,exc):
-        self._log('BROWSER <- '+account_login_safe_browser_error(str(exc))+
-                  ' (exception contents withheld).',important=True)
+        self._log('BROWSER <- '+
+                  account_login_safe_browser_error(str(exc))+
+                  ' (JavaScript exception, contents withheld).',
+                  important=True)
 
     def on_console(self,msg):
         if msg.type=='error':
-            self._log('BROWSER <- '+account_login_safe_browser_error(
-                msg.text)+' (console contents withheld).',important=True)
+            self._log('BROWSER <- '+
+                      account_login_safe_browser_error(msg.text)+
+                      ' (console error, contents withheld).',important=True)
 
     def start(self):
-        # Context request events include network activity from workers.
+        # Context-wide events include workers and preserve per-account
+        # separation; the selected page alone supplies DOM/console events.
         self.context.on('request',self.on_request)
         self.context.on('response',self.on_response)
+        self.context.on('requestfinished',self.on_finished)
         self.context.on('requestfailed',self.on_failed)
         self.page.on('pageerror',self.on_pageerror)
         self.page.on('console',self.on_console)
 
     def finish(self):
-        # Parse *only* failed official JSON responses. Never inspect success
-        # bodies, arbitrary external responses, headers, passwords or tokens.
-        for resp in self.failure_responses[:2]:
+        # Response.text() is read after the browser has completed submission,
+        # not within network callbacks (which could re-enter Playwright).
+        # A HTTP 200 may still contain an application-level login rejection.
+        for rec,resp in self.response_candidates:
             try:
-                headers=resp.headers
-                kind=headers.get('content-type','')
-                size=headers.get('content-length','')
-                if 'json' not in kind or (
-                        size and size.isdigit() and int(size)>8192):
-                    continue
                 body=resp.text()
-                if len(body)>8192:
+                if not isinstance(body,str) or len(body)>8192:
                     continue
                 code=account_login_safe_error_code(body)
+                if code and re.fullmatch(r'[A-Z][A-Z0-9_]{2,48}',code):
+                    self._log('SERVER <- #'+str(rec['number'])+
+                              ' safe error code: '+code+'.',important=True)
                 message=account_login_safe_server_message(body)
-                if code:
-                    self._log('SERVER <- Safe error code '+code+'.',important=True)
                 if message:
-                    self._log('SERVER <- '+message,important=True)
+                    self._log('SERVER <- #'+str(rec['number'])+
+                              ' safe error message: '+message+'.',
+                              important=True)
+                flag=account_playwright_safe_result_flag(body)
+                if flag:
+                    self._log('SERVER <- #'+str(rec['number'])+
+                              ' application result '+flag+
+                              ' (HTTP '+str(rec['status'])+').',
+                              important=True)
             except Exception:
-                pass
+                self.errors+=1
         self.report('Login network: '+str(self.outgoing)+' request(s), '+
                     str(self.received)+' HTTP response(s), '+
-                    str(self.failures)+' transport failure(s).')
+                    str(self.finished)+' completed, '+
+                    str(self.failures)+' transport failure(s) ('+
+                    str(self.failed_after_response)+' after an HTTP response, '+
+                    str(self.failures-self.failed_after_response)+
+                    ' before a response); '+str(self.redirects)+
+                    ' redirect(s); '+str(self.first_party_posts)+
+                    ' Habbo POST/PUT/PATCH request(s).')
+        if self.suppressed:
+            self.report('NETWORK <- '+str(self.suppressed)+
+                        ' low-priority or excess diagnostics omitted; '
+                        'authentication and errors were prioritised.')
+        if self.errors:
+            self.report('NETWORK <- '+str(self.errors)+
+                        ' diagnostic event(s) could not be inspected; '
+                        'authentication remains unverified.')
+        try:
+            cookies=self.context.cookies([
+                'https://www.habbo.com/','https://habbo.com/'])
+            present=set()
+            for item in cookies:
+                if item.get('name') in ('session.id','browser_token') and (
+                        str(item.get('domain','')).lstrip('.').lower() in (
+                            'habbo.com','www.habbo.com')) and (
+                        item.get('secure') is True):
+                    present.add(item['name'])
+            self.report('SESSION <- Secure Habbo cookies present: '
+                        'session.id='+('yes' if 'session.id' in present else 'no')+
+                        ', browser_token='+(
+                            'yes' if 'browser_token' in present else 'no')+
+                        '. Cookie values never logged.')
+        except Exception:
+            self.report('SESSION <- Cookie-presence inspection unavailable.')
 
     def stop(self):
         for emitter,event,callback in (
             (self.context,'request',self.on_request),
             (self.context,'response',self.on_response),
+            (self.context,'requestfinished',self.on_finished),
             (self.context,'requestfailed',self.on_failed),
             (self.page,'pageerror',self.on_pageerror),
             (self.page,'console',self.on_console)):
@@ -2401,6 +2574,32 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                         # security challenge or a failed browser handler.
                         report('Habbo still shows the password field after '
                                'Playwright clicked login.')
+                        # Classify any visible security/validation message,
+                        # without returning raw page text or account values.
+                        try:
+                            finding=page.evaluate(HABBO_LOGIN_DIAGNOSTIC_JS)
+                            kind=finding.get('kind') if isinstance(
+                                finding,dict) else None
+                            findings={
+                                'invalid-credentials':
+                                    'login form reports invalid credentials',
+                                'rate-limit':
+                                    'login page reports a rate limit',
+                                'captcha':
+                                    'visible human-verification challenge',
+                                'verification':
+                                    'verification or one-time code required',
+                                'still-on-form':
+                                    'login form still visible; no recognised '
+                                    'validation message',
+                                'unverified-page':
+                                    'page origin could not be verified',
+                            }
+                            if kind in findings:
+                                report('BROWSER <- '+findings[kind]+'.')
+                        except Exception:
+                            report('BROWSER <- Could not classify login-page '
+                                   'validation state.')
                 if login_only:
                     if account_playwright_control(page,'play') is not None or (
                             account_playwright_control(page,'launch') is not None):
