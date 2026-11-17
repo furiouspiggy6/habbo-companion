@@ -13,10 +13,11 @@ SOURCE=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 TEXT=SOURCE.read_text(encoding='utf-8')
 TREE=ast.parse(TEXT)
 WANTED={'account_capture_habbo_session_cookies',
-        'account_import_session_automatically'}
+        'account_import_session_automatically',
+        'account_wait_for_background_session'}
 NODES=[node for node in TREE.body
        if isinstance(node,ast.FunctionDef) and node.name in WANTED]
-assert len(NODES)==2
+assert len(NODES)==3
 CODE=compile(ast.Module(body=NODES,type_ignores=[]),str(SOURCE),'exec')
 
 
@@ -144,6 +145,54 @@ class SessionCookieCapture(TestCase):
                 ns['account_cdp_call']=lambda *a,**k:{'cookies':cookies}
                 with self.assertRaises(ValueError):
                     ns['account_capture_habbo_session_cookies'](43111)
+
+
+class BackgroundSessionReadiness(TestCase):
+    def test_waits_for_login_to_restore_without_clicking_or_requesting_ticket(self):
+        seen=[]
+        states=iter(['waiting','login','play'])
+        ticks=[]
+        ns=execute(
+            account_habbo_page=lambda port:(
+                seen.append(port) or {'_preflight_step':{'kind':next(states)}}),
+            time=SimpleNamespace(sleep=lambda seconds:ticks.append(seconds)),
+        )
+        messages=[]
+        self.assertTrue(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=5))
+        self.assertEqual(seen,[43111,43111,43111])
+        self.assertEqual(ticks,[0.6,0.6])
+        self.assertTrue(any('restored signed-in' in x for x in messages))
+
+    def test_timeout_waits_bounded_checks_and_does_not_invent_signin(self):
+        seen=[]
+        ticks=[]
+        ns=execute(
+            account_habbo_page=lambda port:(
+                seen.append(port) or {'_preflight_step':{'kind':'login'}}),
+            time=SimpleNamespace(sleep=lambda seconds:ticks.append(seconds)),
+        )
+        messages=[]
+        self.assertFalse(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=3))
+        self.assertEqual(len(seen),3)
+        self.assertEqual(ticks,[0.6,0.6])
+        self.assertTrue(any('manual verification may' in x for x in messages))
+        with self.assertRaises(ValueError):
+            ns['account_wait_for_background_session'](
+                43111,messages.append,max_checks=50)
+
+    def test_restoration_ignores_uninspectable_page_until_signed_in(self):
+        states=iter([None,{'_inspect_error':'unavailable'},
+                     {'_preflight_step':{'kind':'play'}}])
+        ns=execute(
+            account_habbo_page=lambda port:next(states),
+            time=SimpleNamespace(sleep=lambda seconds:None),
+        )
+        messages=[]
+        self.assertTrue(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=3))
+        self.assertTrue(any('signed-in' in x for x in messages))
 
 
 class AutomaticLoginAndImport(TestCase):
