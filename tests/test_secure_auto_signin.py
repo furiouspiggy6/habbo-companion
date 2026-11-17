@@ -77,13 +77,16 @@ class AutoSigninTests(unittest.TestCase):
         a['account_cdp_call']=cdp
         a['time']=SimpleNamespace(sleep=lambda _:None)
         a['account_click_play_button']=lambda url,step:clicks.append(step)
+        diagnostics=[]
+        a['account_submit_with_network_diagnostics']=lambda ws,report:(
+            diagnostics.append('DOM submit') or True)
         self.assertTrue(a['account_submit_saved_login'](
             'ws://127.0.0.1:44321/devtools/page/abc','email@example.com',
             'super-secret-password'))
         values=[entry[2]['text'] for entry in sent if entry[1]=='Input.insertText']
         self.assertEqual(values,['email@example.com','super-secret-password'])
-        self.assertEqual(clicks,[{'x':10,'y':30},{'x':20,'y':40},
-                                 {'x':80,'y':90}])
+        self.assertEqual(clicks,[{'x':10,'y':30},{'x':20,'y':40}])
+        self.assertEqual(diagnostics,['DOM submit'])
         self.assertEqual(sent[0][1],'Runtime.evaluate')
         self.assertNotIn('super-secret-password',sent[0][2]['expression'])
 
@@ -148,7 +151,7 @@ class AutoSigninTests(unittest.TestCase):
         ])
         a['account_inspect_play_page']=lambda url:next(steps)
         typed=[]
-        a['account_submit_saved_login']=lambda ws,email,password:(
+        a['account_submit_saved_login']=lambda ws,email,password,report=None:(
             typed.append((email,password)) or True)
         clicked=[]
         a['account_click_play_button']=lambda ws,step:clicked.append(step['kind'])
