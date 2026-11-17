@@ -891,15 +891,16 @@ def account_login_input_confirmed(websocket_url,field):
 # the actual submit element, then use a browser key event. This operates only
 # on the verified official Habbo HTTPS origin and never exposes field values.
 HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
+  // Inspects the real Habbo form and installs only non-secret event counters.
+  // Browser Input.dispatchMouseEvent will perform the actual trusted click.
   if (location.protocol!=='https:' ||
       !/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'unverified-page'};
   const visible=el=>{
-    if (!el || el.disabled || el.getAttribute('aria-disabled')==='true')
-      return false;
+    if (!el) return false;
     const r=el.getBoundingClientRect(),s=getComputedStyle(el);
     return r.width>0 && r.height>0 && s.display!=='none' &&
-      s.visibility!=='hidden';
+      s.visibility!=='hidden' && r.right>0 && r.bottom>0;
   };
   const password=Array.from(document.querySelectorAll(
       'input[type=password]')).find(visible);
@@ -907,22 +908,70 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   const form=password.closest('form');
   const root=form || password.closest(
       '[role=dialog],dialog,[class*=modal]') || document;
+  const candidates=Array.from(root.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).filter(visible);
+  const email=candidates.find(el=>el.type==='email') ||
+      candidates.find(el=>/username/i.test(el.autocomplete||'') ||
+        /e-?mail/i.test((el.placeholder||'')+' '+
+          (el.getAttribute('aria-label')||''))) ||
+      (form ? candidates.find(el=>el.type==='text') : null);
   const controls=Array.from(root.querySelectorAll(
       'button,input[type=submit],[role=button]')).filter(visible);
   const text=el=>(el.innerText || el.value ||
       el.getAttribute('aria-label') || '').trim();
   const submit=controls.find(el=>/^(let'?s go!?|sign in|log in|login|continue)$/i
       .test(text(el))) || controls.find(el=>el.type==='submit');
-  if (!submit) return {kind:'no-submit'};
-  // The previous Enter-key approach could focus a button without invoking
-  // the site's click handler. Element.click() dispatches a normal DOM click
-  // event to the exact identified control, without any X/Y screen coordinates.
-  try {
-    submit.click();
-    return {kind:'clicked'};
-  } catch (e) {
-    return {kind:'click-error'};
+  if (!email || !submit) return {kind:'no-submit-or-email'};
+  if (!email.value) return {kind:'empty-email'};
+  if (!password.value) return {kind:'empty-password'};
+  if (email.validity && !email.validity.valid) return {kind:'invalid-email'};
+  if (password.validity && !password.validity.valid)
+    return {kind:'invalid-password'};
+  if (form && typeof form.checkValidity==='function' &&
+      !form.checkValidity()) return {kind:'invalid-form'};
+  if (submit.disabled || submit.getAttribute('aria-disabled')==='true')
+    return {kind:'button-disabled'};
+  if (!visible(submit)) return {kind:'button-not-visible'};
+  try { submit.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); }
+  catch (_) { submit.scrollIntoView(); }
+  const r=submit.getBoundingClientRect();
+  const x=r.left+r.width/2,y=r.top+r.height/2;
+  if (!(x>=0 && y>=0 && x<innerWidth && y<innerHeight))
+    return {kind:'button-offscreen'};
+  const hit=document.elementFromPoint(x,y);
+  if (!hit || (hit!==submit && !submit.contains(hit)))
+    return {kind:'button-obstructed'};
+  // Lightweight event instrumentation to check whether the browser generated
+  // a trusted click and whether the native form submitted. No input values.
+  if (!window.__hcLoginEventTrace) {
+    const trace={trustedClicks:0,untrustedClicks:0,formSubmits:0};
+    document.addEventListener('click',event=>{
+      const target=event.target;
+      if (target && (target===submit || submit.contains(target))) {
+        if (event.isTrusted) trace.trustedClicks++;
+        else trace.untrustedClicks++;
+      }
+    },true);
+    document.addEventListener('submit',event=>{
+      if (form && event.target===form) trace.formSubmits++;
+    },true);
+    window.__hcLoginEventTrace=trace;
   }
+  return {kind:'ready',x,y};
+})()'''
+
+
+HABBO_LOGIN_CLICK_TRACE_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const t=window.__hcLoginEventTrace;
+  if (!t) return {kind:'not-observed'};
+  return {kind:'trace',
+          trusted:Math.min(3,t.trustedClicks||0),
+          untrusted:Math.min(3,t.untrustedClicks||0),
+          submits:Math.min(3,t.formSubmits||0)};
 })()'''
 
 
