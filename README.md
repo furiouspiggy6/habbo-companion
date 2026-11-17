@@ -182,3 +182,37 @@ real test on a user's machine is required. If the server still rejects
 the client, stop retrying and compare its protocol with an authorised
 capture from the genuine current AIR client. No Brave/Habbo.exe/G-Earth
 process is launched by Direct TCP.
+
+
+## v1.1.49 — Habbo Classic WSS connectivity probe (no account required)
+
+After v1.1.48 produced **zero game-server bytes** during the raw
+\`game-us.habbo.com:30000\` AIR handshake, inspection of September 2026
+Habbo Classic client source found a **different transport**:
+\`wss://game-us.habbo.com:30001/websocket\`, with required
+\`Sec-WebSocket-Protocol: habbo-classic\`. Its packaged release manifest
+identifies \`FLASH29\`. Sources:
+- [Habbo Classic Hotels.json](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/02_app_estratto/Hotels.json)
+- [WebSocket transport implementation](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/05_sorgenti_per_classe/_unmatched/UnkEventDispatcherWrapperSubclass_28a7b5.js)
+- [AIR versus Classic comparison](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/CHANGES_AIR15_CLASSIC.md)
+
+The **Direct TCP** tab now includes **Test Classic WSS connection (no
+login)**. The probe uses only the standard Python library, establishes
+certificate-verified TLS, sends a single WebSocket HTTP Upgrade request
+to that fixed Habbo.com hostname, validates the HTTP 101 response,
+\`Sec-WebSocket-Accept\` and negotiated \`habbo-classic\` subprotocol,
+then sends a correctly masked WebSocket close and disconnects.
+
+**No cookies, SSO tickets, saved accounts, game packets or passwords are
+read or transmitted by this test.** It doesn't launch any browser,
+game executable, G-Earth, or Bobba service. The app uses distinct,
+static error categories rather than exposing server response bodies.
+The raw AIR TCP mode remains unchanged, and its authentication remains
+unverified.
+
+**A successful WSS upgrade proves endpoint and protocol reachability
+only**. It does NOT prove game login, correct \`FLASH29\` packet IDs,
+cryptographic negotiation, room state, or multi-account support. These
+would require separately implementing and testing the modern Classic
+binary protocol before offering a full headless login. No private
+session is uploaded or kept by this probe.
