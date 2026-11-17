@@ -900,8 +900,13 @@ HABBO_LOGIN_INPUT_EVENTS_JS=r'''(() => {
     const counts={email:0,password:0,emailTrusted:0,passwordTrusted:0};
     document.addEventListener('input',e=>{
       if (!e.target || e.target.tagName!=='INPUT') return;
+      const isEmail=(e.target.type==='email' ||
+        e.target.autocomplete==='username' ||
+        /e-?mail|username/i.test(
+          (e.target.placeholder||'')+' '+
+          (e.target.getAttribute('aria-label')||'')));
       const kind=e.target.type==='password'?'password':
-        (e.target.type==='email'?'email':null);
+        (isEmail?'email':null);
       if (!kind) return;
       counts[kind]=Math.min(10,counts[kind]+1);
       if (e.isTrusted)
@@ -1671,15 +1676,12 @@ def account_submit_saved_login(websocket_url,email,password,report=None):
         if fields.get('kind')!='form':
             return False
         for attempt in range(2):
-            if attempt==0:
-                account_click_play_button(websocket_url,fields[field])
-            else:
-                # A React rerender or headless coordinate mismatch can
-                # invalidate the prior click; focus the actual selected
-                # Habbo form input. This does not write credentials via JS.
-                if account_login_field_action(
-                        websocket_url,field,'focus')!='focused':
-                    return False
+            # Focus the selected form input directly rather than relying on
+            # browser viewport coordinates. Actual typing still uses trusted
+            # CDP keyboard/input events, not JS setting element.value.
+            if account_login_field_action(
+                    websocket_url,field,'focus')!='focused':
+                return False
             account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
                 'type':'keyDown','key':'a','code':'KeyA',
                 'windowsVirtualKeyCode':65,'modifiers':2})
