@@ -1,5 +1,10 @@
 """Offline tests for passive G-Earth metadata + loopback-only boofuzz lab."""
 import ast
+import importlib.util
+import socketserver
+import tempfile
+import threading
+from datetime import datetime
 from pathlib import Path
 import unittest
 
@@ -65,6 +70,22 @@ class ProtocolLabTests(unittest.TestCase):
         self.assertIn("'fuzz_observation'",source)
         self.assertIn('msg.packet.header_id()',source)
         self.assertNotIn("send_to_server(packet)",source.split("if self.fuzz_monitoring:",1)[1].split("if not (self.packet_active",1)[0])
+
+
+    @unittest.skipUnless(importlib.util.find_spec('boofuzz') is not None,
+                         'boofuzz optional dependency not installed')
+    def test_local_boofuzz_executes_only_against_loopback(self):
+        nodes=[node for node in TREE.body if isinstance(node,ast.FunctionDef)
+               and node.name in ('validate_local_habbo_frame','run_local_boofuzz')]
+        namespace={'Path':Path,'threading':threading,'socketserver':socketserver,
+                   'datetime':datetime}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),
+                     str(SOURCE),'exec'),namespace)
+        with tempfile.TemporaryDirectory() as temp:
+            result=namespace['run_local_boofuzz'](seed_id=896,cases=3,output_dir=temp)
+        self.assertGreater(result['requests'],0)
+        self.assertEqual(result['scope'],'localhost synthetic mock only')
+        self.assertEqual(result['requests'],result['accepted']+result['rejected'])
 
 if __name__=='__main__':
     unittest.main()
