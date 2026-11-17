@@ -23,7 +23,8 @@ HEADLESS_IMPORT = (
     "from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,\n"
     "                                MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)\n"
 )
-TCP_IMPORT = "from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket)\n"
+TCP_IMPORT = ("from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,\n"
+              "                       probe_classic_websocket)\n")
 DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
     "                                  launch_local_classic)\n"

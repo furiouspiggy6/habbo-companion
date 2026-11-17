@@ -7,11 +7,13 @@ Packet IDs and crypto parameters are version-specific and may change.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
 import secrets
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -200,6 +202,124 @@ def _rsa_encipher_decimal(integer):
         padding.extend(b for b in secrets.token_bytes(pad_count - len(padding)) if b)
     message = b"\x00\x02" + bytes(padding) + b"\x00" + payload
     return pow(int.from_bytes(message, "big"), TCP_RSA_E, TCP_RSA_N).to_bytes(size, "big").hex()
+
+
+
+# Habbo Classic's 2026 Electron client uses a TLS WebSocket, not the legacy
+# AIR raw-TCP endpoint (SimoLeoLife/habbo-decompiled Hotels.json, Sept 2026).
+# This is a CONNECTIVITY PROBE ONLY. It does not send session credentials,
+# game packets, authentication tickets or account identifiers.
+CLASSIC_WS_HOST = "game-us.habbo.com"
+CLASSIC_WS_PORT = 30001
+CLASSIC_WS_PATH = "/websocket"
+CLASSIC_WS_SUBPROTOCOL = "habbo-classic"
+_CLASSIC_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def _classic_ws_request(key):
+    """Build a single RFC 6455 upgrade request for the fixed official host."""
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9+/]{22}==", key):
+        raise ValueError("Invalid public WebSocket handshake nonce")
+    return (
+        "GET /websocket HTTP/1.1\r\n"
+        "Host: game-us.habbo.com:30001\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: " + key + "\r\n"
+        "Sec-WebSocket-Protocol: habbo-classic\r\n"
+        "Origin: https://www.habbo.com\r\n"
+        "\r\n"
+    ).encode("ascii")
+
+
+def _classic_ws_upgrade_response(raw, key):
+    """Validate 101, accept digest and required subprotocol, not merely a socket."""
+    if not isinstance(raw, bytes) or len(raw) > 8192 or b"\r\n\r\n" not in raw:
+        raise HabboTcpError("Classic WebSocket: incomplete or oversized HTTP response")
+    header = raw.split(b"\r\n\r\n", 1)[0]
+    try:
+        lines = header.decode("ascii").split("\r\n")
+    except UnicodeDecodeError:
+        raise HabboTcpError("Classic WebSocket: non-ASCII HTTP response") from None
+    status = lines[0].split()
+    if len(status) < 2 or not status[0].startswith("HTTP/1."):
+        raise HabboTcpError("Classic WebSocket: invalid HTTP status")
+    if status[1] != "101":
+        # Only expose a three-digit status; do not leak raw response bodies.
+        if not re.fullmatch(r"\d{3}", status[1]):
+            raise HabboTcpError("Classic WebSocket: invalid HTTP status")
+        raise HabboTcpError("Classic WebSocket: HTTP " + status[1]
+                            + " instead of 101 Switching Protocols")
+    pairs = {}
+    for line in lines[1:]:
+        if ":" not in line:
+            raise HabboTcpError("Classic WebSocket: malformed response header")
+        k, v = line.split(":", 1)
+        k = k.strip().lower()
+        if k in pairs:
+            raise HabboTcpError("Classic WebSocket: duplicate response header")
+        pairs[k] = v.strip()
+    tokens = lambda x: [v.strip().lower() for v in x.split(",")]
+    if "upgrade" not in tokens(pairs.get("connection", "")) or (
+        pairs.get("upgrade", "").lower() != "websocket"
+    ):
+        raise HabboTcpError("Classic WebSocket: missing HTTP upgrade confirmation")
+    expected = base64.b64encode(hashlib.sha1(
+        (key + _CLASSIC_WS_GUID).encode("ascii")).digest()).decode("ascii")
+    if not secrets.compare_digest(pairs.get("sec-websocket-accept", ""), expected):
+        raise HabboTcpError("Classic WebSocket: invalid upgrade accept signature")
+    if pairs.get("sec-websocket-protocol") != CLASSIC_WS_SUBPROTOCOL:
+        raise HabboTcpError("Classic WebSocket: habbo-classic subprotocol not negotiated")
+    return True
+
+
+def probe_classic_websocket(timeout=8):
+    """One unauthenticated WSS upgrade, then close. Never sends game packets.
+
+    Returns public protocol status only; errors are deliberately classified,
+    not printed with arbitrary server responses or socket contents.
+    """
+    if not isinstance(timeout, (int, float)) or not 1 <= timeout <= 15:
+        raise ValueError("Invalid WebSocket probe timeout")
+    key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+    try:
+        with socket.create_connection((CLASSIC_WS_HOST, CLASSIC_WS_PORT),
+                                      timeout=timeout) as tcp_sock:
+            tcp_sock.settimeout(timeout)
+            context = ssl.create_default_context()
+            with context.wrap_socket(tcp_sock,
+                                     server_hostname=CLASSIC_WS_HOST) as tls:
+                tls.settimeout(timeout)
+                tls.sendall(_classic_ws_request(key))
+                reply = bytearray()
+                while b"\r\n\r\n" not in reply and len(reply) <= 8192:
+                    chunk = tls.recv(min(2048, 8193 - len(reply)))
+                    if not chunk:
+                        raise HabboTcpError(
+                            "Classic WebSocket: peer closed during HTTP upgrade")
+                    reply.extend(chunk)
+                _classic_ws_upgrade_response(bytes(reply), key)
+                # RFC6455 clients must mask close-control frames, including
+                # status 1000 (normal closure). No app data is transmitted.
+                mask = secrets.token_bytes(4)
+                payload = struct.pack(">H", 1000)
+                frame = b"\x88\x82" + mask + bytes(
+                    byte ^ mask[i % 4] for i, byte in enumerate(payload))
+                tls.sendall(frame)
+                return ("Classic WSS upgrade successful: TLS verified, HTTP 101, "
+                        "habbo-classic subprotocol negotiated. No login attempted.")
+    except HabboTcpError:
+        raise
+    except ssl.SSLError:
+        raise HabboTcpError("Classic WebSocket: TLS handshake/certificate failed") from None
+    except (socket.timeout, TimeoutError):
+        raise HabboTcpError("Classic WebSocket: timed out connecting or upgrading") from None
+    except OSError as exc:
+        # Do not echo arbitrary platform errors; only safe exception category.
+        raise HabboTcpError(
+            "Classic WebSocket: network connection failed ("+type(exc).__name__+")"
+        ) from None
 
 
 class _ArcFour:
