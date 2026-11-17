@@ -34,7 +34,7 @@ class LoginRedirectTests(unittest.TestCase):
         self.events=[]
         self.scope['account_click_play_button']=lambda ws,step:(
             self.events.append('clicked:'+step['kind']))
-        self.scope['account_submit_saved_login']=lambda ws,email,password:(
+        self.scope['account_submit_saved_login']=lambda ws,email,password,report=None:(
             self.events.append('submitted') or True)
 
     def test_temporary_navigation_does_not_abort_saved_login(self):
