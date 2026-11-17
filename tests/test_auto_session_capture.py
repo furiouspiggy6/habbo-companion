@@ -13,10 +13,11 @@ SOURCE=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 TEXT=SOURCE.read_text(encoding='utf-8')
 TREE=ast.parse(TEXT)
 WANTED={'account_capture_habbo_session_cookies',
-        'account_import_session_automatically'}
+        'account_import_session_automatically',
+        'account_wait_for_background_session'}
 NODES=[node for node in TREE.body
        if isinstance(node,ast.FunctionDef) and node.name in WANTED]
-assert len(NODES)==2
+assert len(NODES)==3
 CODE=compile(ast.Module(body=NODES,type_ignores=[]),str(SOURCE),'exec')
 
 
@@ -146,6 +147,54 @@ class SessionCookieCapture(TestCase):
                     ns['account_capture_habbo_session_cookies'](43111)
 
 
+class BackgroundSessionReadiness(TestCase):
+    def test_waits_for_login_to_restore_without_clicking_or_requesting_ticket(self):
+        seen=[]
+        states=iter(['waiting','login','play'])
+        ticks=[]
+        ns=execute(
+            account_habbo_page=lambda port:(
+                seen.append(port) or {'_preflight_step':{'kind':next(states)}}),
+            time=SimpleNamespace(sleep=lambda seconds:ticks.append(seconds)),
+        )
+        messages=[]
+        self.assertTrue(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=5))
+        self.assertEqual(seen,[43111,43111,43111])
+        self.assertEqual(ticks,[0.6,0.6])
+        self.assertTrue(any('restored signed-in' in x for x in messages))
+
+    def test_timeout_waits_bounded_checks_and_does_not_invent_signin(self):
+        seen=[]
+        ticks=[]
+        ns=execute(
+            account_habbo_page=lambda port:(
+                seen.append(port) or {'_preflight_step':{'kind':'login'}}),
+            time=SimpleNamespace(sleep=lambda seconds:ticks.append(seconds)),
+        )
+        messages=[]
+        self.assertFalse(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=3))
+        self.assertEqual(len(seen),3)
+        self.assertEqual(ticks,[0.6,0.6])
+        self.assertTrue(any('manual verification may' in x for x in messages))
+        with self.assertRaises(ValueError):
+            ns['account_wait_for_background_session'](
+                43111,messages.append,max_checks=50)
+
+    def test_restoration_ignores_uninspectable_page_until_signed_in(self):
+        states=iter([None,{'_inspect_error':'unavailable'},
+                     {'_preflight_step':{'kind':'play'}}])
+        ns=execute(
+            account_habbo_page=lambda port:next(states),
+            time=SimpleNamespace(sleep=lambda seconds:None),
+        )
+        messages=[]
+        self.assertTrue(ns['account_wait_for_background_session'](
+            43111,messages.append,max_checks=3))
+        self.assertTrue(any('signed-in' in x for x in messages))
+
+
 class AutomaticLoginAndImport(TestCase):
     def test_valid_existing_browser_session_skips_signin_and_saves_after_validation(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -227,6 +276,72 @@ class AutomaticLoginAndImport(TestCase):
             self.assertIn('account_browser_profiles/abcdef123456',
                           ' '.join(launches[0]).replace('\\','/'))
             self.assertEqual(closed,['Browser.close'])
+
+    def test_cold_headless_restores_session_before_requesting_ticket(self):
+        """A single cold-start attempt waits for the saved trusted profile."""
+        with tempfile.TemporaryDirectory() as folder:
+            events=[]
+            states=iter(['waiting','login','play'])
+            class Proc:
+                def terminate(self):
+                    events.append('terminated')
+            calls={'browser':0,'ready':0}
+            def browser_pages(port):
+                calls['browser']+=1
+                if calls['browser']==1:
+                    raise OSError('not running')
+                return [signed_in_page(port)]
+            def current_page(port):
+                calls['ready']+=1
+                step=next(states,'play')
+                events.append(('inspect',step))
+                return {'url':'https://www.habbo.com/',
+                        'webSocketDebuggerUrl':
+                        'ws://127.0.0.1:43111/devtools/page/demo',
+                        '_preflight_step':{'kind':step}}
+            ticket=SimpleNamespace(secret='test-ticket-not-for-logs.V4')
+            def fetch_browser_ticket(port):
+                self.assertEqual(port,43111)
+                self.assertIn(('inspect','play'),events)
+                events.append('ticket')
+                return ticket
+            ns=execute(
+                APP_DIR=Path(folder),
+                _account_credential_target=lambda ident:ident,
+                account_browser_debug_port=lambda ident:43111,
+                account_login_browser=lambda:Path('/mock/brave.exe'),
+                validate_habbo_login_url=lambda url:url,
+                account_saved_login_read=lambda ident:None,
+                account_browser_pages=browser_pages,
+                account_browser_command=lambda browser,dir,url,port:[
+                    str(browser),'--user-data-dir='+str(dir),
+                    '--remote-debugging-port='+str(port),url],
+                subprocess=SimpleNamespace(
+                    Popen=lambda cmd,**kwargs:(
+                        events.append(('spawn',cmd)) or Proc()),DEVNULL=-3),
+                time=SimpleNamespace(sleep=lambda seconds:None),
+                account_habbo_page=current_page,
+                account_cdp_call=lambda ws,method,timeout=2:(
+                    events.append(method) or {}),
+                account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                    (_ for _ in ()).throw(ValueError('legacy pair absent')),
+                account_fetch_ticket_from_signed_in_profile=fetch_browser_ticket,
+                account_attempt_auto_play=lambda *args,**kwargs:self.fail(
+                    'Restored session should not re-submit saved login'),
+                account_session_cookie_write=lambda *args:self.fail(
+                    'Do not store nonexistent legacy cookies'),
+            )
+            logs=[]
+            result=ns['account_import_session_automatically'](
+                account(),logs.append)
+            self.assertIs(result,ticket)
+            self.assertGreaterEqual(calls['ready'],3)
+            self.assertEqual(len([x for x in events if isinstance(x,tuple)
+                                  and x[0]=='spawn']),1)
+            self.assertEqual(events[-1],'Browser.close')
+            self.assertTrue(any('waiting for' in x.lower() for x in logs))
+            self.assertTrue(any('restored signed-in' in x for x in logs))
+            self.assertNotIn('test-ticket-not-for-logs.V4',' '.join(logs))
 
     def test_no_valid_cookie_and_no_login_reports_setup_action(self):
         calls=[]
