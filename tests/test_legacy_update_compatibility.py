@@ -3,6 +3,7 @@
 The v1.1.38 updater permits only:
   Habbo_Companion.pyw, Habbo_Update_Helper.py, README.txt, habbo-update.json
 v1.1.39 also permits headless_transport.py; v1.1.40 added a second module.
+The direct TCP module is likewise bundled into the three-file legacy ZIP.
 Any newly named file in a ZIP must NOT be required for upgrade.
 """
 from hashlib import sha256
@@ -28,16 +29,18 @@ class LegacyUpdaterCompatibilityTests(unittest.TestCase):
         self.assertIn("class HeadlessLocalSession:", text)
         self.assertIn("def launch_local_classic(", text)
         self.assertIn("def parse_classic_ticket(", text)
+        self.assertIn("class HabboTcpSession:", text)
         self.assertIn("HEADLESS_TEST_MAX_ACCOUNTS = MAX_ACCOUNTS", text)
         self.assertNotIn("from headless_transport import",text)
         self.assertNotIn("from local_classic_launch import",text)
+        self.assertNotIn("from habbo_tcp import",text)
 
     def test_zip_is_accepted_by_legacy_allowlist_and_current_verifier(self):
         with tempfile.TemporaryDirectory() as tmp:
             target=Path(tmp)
             for path in ("VERSION", "README.txt", "Habbo_Companion.pyw",
                          "Habbo_Update_Helper.py", "headless_transport.py",
-                         "local_classic_launch.py"):
+                         "local_classic_launch.py", "habbo_tcp.py"):
                 shutil.copy2(ROOT/path,target/path)
             build(target)
             version=(target/"VERSION").read_text(encoding="utf-8").strip()
@@ -52,6 +55,8 @@ class LegacyUpdaterCompatibilityTests(unittest.TestCase):
                 for name,digest in manifest["files"].items():
                     self.assertEqual(sha256(zf.read(name)).hexdigest(),digest)
                 self.assertNotIn(b"from local_classic_launch import",
+                                 zf.read("Habbo_Companion.pyw"))
+                self.assertNotIn(b"from habbo_tcp import",
                                  zf.read("Habbo_Companion.pyw"))
                 self.assertNotIn(b"from headless_transport import",
                                  zf.read("Habbo_Companion.pyw"))
