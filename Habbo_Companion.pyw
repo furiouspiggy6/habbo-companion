@@ -890,16 +890,58 @@ def account_login_input_confirmed(websocket_url,field):
 # The login form itself is selected by DOM, not its screen coordinates. Focus
 # the actual submit element, then use a browser key event. This operates only
 # on the verified official Habbo HTTPS origin and never exposes field values.
+# Count browser input events only; do not read credentials. CDP's
+# Input.insertText should create trusted events that website handlers receive.
+HABBO_LOGIN_INPUT_EVENTS_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  if (!window.__hcInputEventTrace) {
+    const counts={email:0,password:0,emailTrusted:0,passwordTrusted:0};
+    document.addEventListener('input',e=>{
+      if (!e.target || e.target.tagName!=='INPUT') return;
+      const isEmail=(e.target.type==='email' ||
+        e.target.autocomplete==='username' ||
+        /e-?mail|username/i.test(
+          (e.target.placeholder||'')+' '+
+          (e.target.getAttribute('aria-label')||'')));
+      const kind=e.target.type==='password'?'password':
+        (isEmail?'email':null);
+      if (!kind) return;
+      counts[kind]=Math.min(10,counts[kind]+1);
+      if (e.isTrusted)
+        counts[kind+'Trusted']=Math.min(10,counts[kind+'Trusted']+1);
+    },true);
+    window.__hcInputEventTrace=counts;
+  }
+  return {kind:'ready'};
+})()'''
+
+
+HABBO_LOGIN_INPUT_EVENTS_RESULT_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const c=window.__hcInputEventTrace;
+  if (!c) return {kind:'not-observed'};
+  return {kind:'counts',email:c.email,password:c.password,
+          emailTrusted:c.emailTrusted,passwordTrusted:c.passwordTrusted};
+})()'''
+
+
+# Inspect the actual login control and native form validity, then use a
+# trusted browser-synthesized pointer click on its current DOM hit point.
 HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
+  // Inspects the real Habbo form and installs only non-secret event counters.
+  // Browser Input.dispatchMouseEvent will perform the actual trusted click.
   if (location.protocol!=='https:' ||
       !/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'unverified-page'};
   const visible=el=>{
-    if (!el || el.disabled || el.getAttribute('aria-disabled')==='true')
-      return false;
+    if (!el) return false;
     const r=el.getBoundingClientRect(),s=getComputedStyle(el);
     return r.width>0 && r.height>0 && s.display!=='none' &&
-      s.visibility!=='hidden';
+      s.visibility!=='hidden' && r.right>0 && r.bottom>0;
   };
   const password=Array.from(document.querySelectorAll(
       'input[type=password]')).find(visible);
@@ -907,22 +949,70 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   const form=password.closest('form');
   const root=form || password.closest(
       '[role=dialog],dialog,[class*=modal]') || document;
+  const candidates=Array.from(root.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).filter(visible);
+  const email=candidates.find(el=>el.type==='email') ||
+      candidates.find(el=>/username/i.test(el.autocomplete||'') ||
+        /e-?mail/i.test((el.placeholder||'')+' '+
+          (el.getAttribute('aria-label')||''))) ||
+      (form ? candidates.find(el=>el.type==='text') : null);
   const controls=Array.from(root.querySelectorAll(
       'button,input[type=submit],[role=button]')).filter(visible);
   const text=el=>(el.innerText || el.value ||
       el.getAttribute('aria-label') || '').trim();
   const submit=controls.find(el=>/^(let'?s go!?|sign in|log in|login|continue)$/i
       .test(text(el))) || controls.find(el=>el.type==='submit');
-  if (!submit) return {kind:'no-submit'};
-  // The previous Enter-key approach could focus a button without invoking
-  // the site's click handler. Element.click() dispatches a normal DOM click
-  // event to the exact identified control, without any X/Y screen coordinates.
-  try {
-    submit.click();
-    return {kind:'clicked'};
-  } catch (e) {
-    return {kind:'click-error'};
+  if (!email || !submit) return {kind:'no-submit-or-email'};
+  if (!email.value) return {kind:'empty-email'};
+  if (!password.value) return {kind:'empty-password'};
+  if (email.validity && !email.validity.valid) return {kind:'invalid-email'};
+  if (password.validity && !password.validity.valid)
+    return {kind:'invalid-password'};
+  if (form && typeof form.checkValidity==='function' &&
+      !form.checkValidity()) return {kind:'invalid-form'};
+  if (submit.disabled || submit.getAttribute('aria-disabled')==='true')
+    return {kind:'button-disabled'};
+  if (!visible(submit)) return {kind:'button-not-visible'};
+  try { submit.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); }
+  catch (_) { submit.scrollIntoView(); }
+  const r=submit.getBoundingClientRect();
+  const x=r.left+r.width/2,y=r.top+r.height/2;
+  if (!(x>=0 && y>=0 && x<innerWidth && y<innerHeight))
+    return {kind:'button-offscreen'};
+  const hit=document.elementFromPoint(x,y);
+  if (!hit || (hit!==submit && !submit.contains(hit)))
+    return {kind:'button-obstructed'};
+  // Lightweight event instrumentation to check whether the browser generated
+  // a trusted click and whether the native form submitted. No input values.
+  if (!window.__hcLoginEventTrace) {
+    const trace={trustedClicks:0,untrustedClicks:0,formSubmits:0};
+    document.addEventListener('click',event=>{
+      const target=event.target;
+      if (target && (target===submit || submit.contains(target))) {
+        if (event.isTrusted) trace.trustedClicks++;
+        else trace.untrustedClicks++;
+      }
+    },true);
+    document.addEventListener('submit',event=>{
+      if (form && event.target===form) trace.formSubmits++;
+    },true);
+    window.__hcLoginEventTrace=trace;
   }
+  return {kind:'ready',x,y};
+})()'''
+
+
+HABBO_LOGIN_CLICK_TRACE_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const t=window.__hcLoginEventTrace;
+  if (!t) return {kind:'not-observed'};
+  return {kind:'trace',
+          trusted:Math.min(3,t.trustedClicks||0),
+          untrusted:Math.min(3,t.untrustedClicks||0),
+          submits:Math.min(3,t.formSubmits||0)};
 })()'''
 
 
@@ -1005,6 +1095,89 @@ def account_login_safe_server_message(body):
                     return msg.strip()
     return None
 
+
+# URLs, query parameters, source text, JS exception bodies and arbitrary
+# path segments may contain secrets. Only pass this bounded data to logs.
+HABBO_SAFE_URL_PARTS=frozenset({
+    'api','auth','authentication','authorize','login','logout','signin',
+    'sign-in','session','sso','client','clientnative','url','account',
+    'accounts','user','users','profile','home','public','native','status',
+    'email','verify','verification','config','settings','feature','flags',
+    'ping','token','ticket','security','challenge','captcha','loginpage',
+    'login-form','external','v1','v2','v3','v4','v5','web','hotel',
+    'system','info','identity','connect','oauth','authorize','callback',
+    'validate','availability','graphql','action','credentials'
+})
+
+
+def account_login_safe_endpoint_path(url):
+    """Reveal only recognised public route words, never opaque URL parts."""
+    if not isinstance(url,str):
+        return '/[hidden]'
+    try:
+        path=urllib.parse.urlsplit(url).path
+    except (ValueError,TypeError):
+        return '/[hidden]'
+    parts=[p for p in path.split('/') if p]
+    if not parts:
+        return '/'
+    result=[]
+    for part in parts[:6]:
+        if re.fullmatch(r'[A-Za-z][A-Za-z0-9-]{0,23}',part) and (
+                part.lower() in HABBO_SAFE_URL_PARTS):
+            result.append(part.lower())
+        else:
+            result.append('[hidden]')
+    if len(parts)>6:
+        result.append('[more]')
+    return '/'+'/'.join(result)
+
+
+def account_login_safe_browser_error(text):
+    """Categorise untrusted console/exception text without quoting secrets."""
+    if not isinstance(text,str):
+        return 'unknown error'
+    if re.search(r'content.security.policy|\bcsp\b',text,re.I):
+        return 'Content Security Policy blocked a resource'
+    if re.search(r'cross.origin|\bcors\b',text,re.I):
+        return 'CORS restriction'
+    if re.search(r'failed to fetch|fetch failed',text,re.I):
+        return 'Failed to fetch'
+    if re.search(r'failed to load resource',text,re.I):
+        code=re.search(r'\b(?:HTTP\s*)?(4\d\d|5\d\d)\b',text,re.I)
+        if code:
+            return 'Resource load HTTP '+code.group(1)
+        return 'Resource failed to load'
+    if re.search(r'net::ERR_[A-Z_]{3,50}',text):
+        return re.search(r'net::ERR_[A-Z_]{3,50}',text).group(0)
+    for error in ('TypeError','ReferenceError','SyntaxError','RangeError',
+                  'NetworkError','SecurityError','NotAllowedError',
+                  'AbortError','URIError','ChunkLoadError','EvalError'):
+        if re.search(r'\b'+error+r'\b',text):
+            return error
+    if re.search(r'uncaught.*promise|unhandled.*rejection',text,re.I):
+        return 'Uncaught promise rejection'
+    return 'unclassified error'
+
+
+def account_login_safe_error_location(url,line):
+    """Allow only a broad source origin class and non-secret line number."""
+    if not isinstance(url,str):
+        return ''
+    try:
+        parts=urllib.parse.urlsplit(url)
+        host=(parts.hostname or '').lower()
+        if parts.scheme!='https':
+            return ''
+        source=('Habbo script' if host=='habbo.com' or
+                host.endswith('.habbo.com') else 'external script')
+    except (TypeError,ValueError):
+        return ''
+    if type(line) is int and 0<=line<=100000:
+        return ' ('+source+', line '+str(line)+')'
+    return ' ('+source+')'
+
+
 class AccountLoginNetworkProbe:
     """Short-lived, account-specific page traffic monitor.
 
@@ -1037,6 +1210,7 @@ class AccountLoginNetworkProbe:
         self.report=None
         self.lines_printed=0
         self.important_lines=0
+        self.phase='startup'
 
     def __enter__(self):
         url=urllib.parse.urlsplit(self.url)
@@ -1167,7 +1341,8 @@ class AccountLoginNetworkProbe:
                 self.redirect_count+=1
                 status=redirect.get('status')
                 if isinstance(status,(int,float)) and 300<=status<=399:
-                    self._emit('SERVER <- HTTP '+str(int(status))+
+                    self._emit('SERVER <- #'+str(prior['ref'])+
+                               ' HTTP '+str(int(status))+
                                ' redirect ('+prior['site']+').')
             is_habbo=(host=='habbo.com' or host.endswith('.habbo.com'))
             site='Habbo site' if is_habbo else 'external HTTPS site'
@@ -1189,11 +1364,15 @@ class AccountLoginNetworkProbe:
                 method='HTTP'
             self.requests[ident]={'site':site,'method':method,
                                   'resource':resource,'status':None,
-                                  'mime':'','failed':None}
+                                  'mime':'','failed':None,
+                                  'ref':self.interesting_count,
+                                  'path':account_login_safe_endpoint_path(url)}
             if account_login_auth_request(url,method):
                 self.auth_ids.add(ident)
                 self.seen=True
-            self._emit('CLIENT -> '+method+' ('+site+', '+resource+').')
+            self._emit('CLIENT -> #'+str(self.interesting_count)+
+                       ' '+method+' '+self.requests[ident]['path']+
+                       ' ('+site+', '+resource+').')
         elif name=='Network.responseReceived' and ident in self.requests:
             rec=self.requests[ident]
             response=data.get('response') or {}
@@ -1202,7 +1381,8 @@ class AccountLoginNetworkProbe:
                 rec['status']=int(code)
                 self.http_status=int(code)
                 self.responses+=1
-                self._emit('SERVER <- HTTP '+str(int(code))+
+                self._emit('SERVER <- #'+str(rec['ref'])+' HTTP '+
+                           str(int(code))+' '+rec['path']+
                            ' ('+rec['site']+', '+rec['resource']+').',
                            important=int(code)>=400)
             mime=response.get('mimeType')
@@ -1221,8 +1401,8 @@ class AccountLoginNetworkProbe:
             rec['failed']=kind
             self.failed=kind
             self.failure_count+=1
-            self._emit('NETWORK <- '+kind+' ('+rec['site']+').',
-                       important=True)
+            self._emit('NETWORK <- #'+str(rec['ref'])+' '+kind+
+                       ' ('+rec['site']+').',important=True)
         elif name=='Network.loadingFinished' and ident in self.requests:
             rec=self.requests[ident]
             if (rec['status'] is not None and rec['status']>=400 and
@@ -1232,18 +1412,28 @@ class AccountLoginNetworkProbe:
                 self.finished_id=ident
         elif name=='Runtime.exceptionThrown':
             self.javascript_exceptions+=1
-            if self.javascript_exceptions<=2:
-                self._emit('BROWSER <- JavaScript exception detected '
-                           '(details withheld; no server response implied).',
+            if self.javascript_exceptions<=3:
+                details=data.get('exceptionDetails') or {}
+                exception=details.get('exception') or {}
+                # The raw description may include credentials or app state.
+                # Only return a tightly bounded recognised error category.
+                category=account_login_safe_browser_error(
+                    exception.get('description') or details.get('text'))
+                location=account_login_safe_error_location(
+                    details.get('url'),details.get('lineNumber'))
+                self._emit('BROWSER <- '+self.phase+' JS '+category+location+
+                           ' (not necessarily the login failure).',
                            important=True)
         elif name=='Log.entryAdded':
             entry=data.get('entry') or {}
             if entry.get('level')=='error':
                 self.javascript_exceptions+=1
-                if self.javascript_exceptions<=2:
-                    self._emit('BROWSER <- Page console error '
-                               '(details withheld for account safety).',
-                               important=True)
+                if self.javascript_exceptions<=3:
+                    category=account_login_safe_browser_error(entry.get('text'))
+                    location=account_login_safe_error_location(
+                        entry.get('url'),entry.get('lineNumber'))
+                    self._emit('BROWSER <- '+self.phase+' console '+category+
+                               location+'.',important=True)
 
     def _command(self,method,params=None,timeout=3):
         self.sequence+=1
@@ -1326,42 +1516,143 @@ class AccountLoginNetworkProbe:
         return result
 
 
-def account_focus_and_submit_login(websocket_url):
-    """Activate the verified Habbo login element directly, not X/Y or Enter."""
+def account_login_submit_readiness(websocket_url):
+    """Return only safe form readiness and an ephemeral viewport hit point."""
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
         'expression':HABBO_LOGIN_SUBMIT_FOCUS_JS,'returnByValue':True})
     if result.get('exceptionDetails'):
-        return False
+        return {'kind':'inspection-error'}
     value=result.get('result',{}).get('value',{})
-    return isinstance(value,dict) and value.get('kind')=='clicked'
+    if not isinstance(value,dict):
+        return {'kind':'inspection-error'}
+    allowed=('unverified-page','no-form','no-submit-or-email',
+             'empty-email','empty-password','invalid-email',
+             'invalid-password','invalid-form','button-disabled',
+             'button-not-visible','button-offscreen',
+             'button-obstructed','ready')
+    kind=value.get('kind')
+    if kind not in allowed:
+        return {'kind':'inspection-error'}
+    if kind!='ready':
+        return {'kind':kind}
+    x,y=value.get('x'),value.get('y')
+    if (isinstance(x,bool) or isinstance(y,bool) or
+        not isinstance(x,(int,float)) or not isinstance(y,(int,float)) or
+        not math.isfinite(x) or not math.isfinite(y) or
+        not 0<=x<=5000 or not 0<=y<=5000):
+        return {'kind':'inspection-error'}
+    return {'kind':'ready','x':x,'y':y}
+
+
+def account_login_click_trace(websocket_url):
+    """Read bounded click/submit event counts, never login field contents."""
+    try:
+        result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_CLICK_TRACE_JS,'returnByValue':True},
+            timeout=2)
+        value=result.get('result',{}).get('value',{})
+        if not isinstance(value,dict) or value.get('kind')!='trace':
+            return None
+        counts=[]
+        for name in ('trusted','untrusted','submits'):
+            count=value.get(name)
+            if not isinstance(count,int) or isinstance(count,bool) or not 0<=count<=3:
+                return None
+            counts.append(count)
+        return counts
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        return None
+
+
+def account_focus_and_submit_login(websocket_url,ready=None):
+    """Trusted Chrome pointer click on the verified DOM button.
+
+    The viewport hit point comes from the inspected element immediately
+    before the click. It is not a stored screen coordinate or a JS .click().
+    This works in headless Chromium without moving the Windows OS cursor.
+    """
+    if ready is None:
+        ready=account_login_submit_readiness(websocket_url)
+    if ready.get('kind')!='ready':
+        return False
+    x,y=ready['x'],ready['y']
+    account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+        'type':'mouseMoved','x':x,'y':y,'button':'none'})
+    account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+        'type':'mousePressed','x':x,'y':y,'button':'left','clickCount':1})
+    # Do not issue the click a second time if navigation immediately closes
+    # the page socket during release. Let the existing session checks decide.
+    try:
+        account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+            'type':'mouseReleased','x':x,'y':y,'button':'left','clickCount':1})
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        pass
+    return True
 
 
 def account_submit_with_network_diagnostics(websocket_url,report):
-    """Arm passive first-party network monitoring before one DOM submission."""
+    """Monitor safe browser & HTTP evidence before one trusted DOM click."""
     started=False
     try:
         with AccountLoginNetworkProbe(websocket_url) as probe:
             probe.report=report
             probe.enable()
             started=True
-            report('BROWSER -> Activating Habbo LETS GO login control via DOM.')
-            submitted=account_focus_and_submit_login(websocket_url)
-            if not submitted:
-                report('BROWSER <- Habbo login button was not activated; '
-                       'no login submission was confirmed.')
+            ready=account_login_submit_readiness(websocket_url)
+            report('FORM <- '+ready['kind']+
+                   (' (fields populated, native validity passed).'
+                    if ready['kind']=='ready' else
+                    ' (no login submission attempted).'))
+            if ready['kind']!='ready':
                 return False
-            probe.observe()
+            probe.phase='after-submit'
+            report('BROWSER -> Trusted browser click on Habbo LETS GO element.')
+            submitted=account_focus_and_submit_login(websocket_url,ready)
+            if not submitted:
+                report('BROWSER <- Habbo submit element could not be activated.')
+                return False
+            probe.observe(seconds=7.0)
+            trace=account_login_click_trace(websocket_url)
+            if trace is not None:
+                report('BROWSER <- Login button trusted click event(s): '+
+                       str(trace[0])+', untrusted: '+str(trace[1])+
+                       ', native form submit event(s): '+str(trace[2])+'.')
+            else:
+                report('BROWSER <- Click/submit events unavailable after '
+                       'login attempt (possibly due to navigation).')
             report(probe.summary())
             return True
     except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
         if started:
-            # Never retry a click whose result may already have reached Habbo.
-            report('Login network observer was interrupted; '
-                   'the submission outcome is unverified.')
+            # Never retry after a click might already have reached Habbo.
+            report('Login diagnostics interrupted; the submit outcome is '
+                   'unverified. No automatic duplicate request sent.')
             return True
-        report('Login network diagnostics unavailable in this browser; '
-               'trying normal DOM submit without traffic inspection.')
-        return account_focus_and_submit_login(websocket_url)
+        report('Login network observer unavailable. Checking the Habbo form '
+               'before one trusted browser click without traffic capture.')
+        ready=account_login_submit_readiness(websocket_url)
+        report('FORM <- '+ready['kind']+'.')
+        return account_focus_and_submit_login(websocket_url,ready)
+
+
+def account_login_input_event_counts(websocket_url):
+    """Return bounded browser input-event counters, never input contents."""
+    try:
+        result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_INPUT_EVENTS_RESULT_JS,
+            'returnByValue':True},timeout=2)
+        val=result.get('result',{}).get('value',{})
+        if not isinstance(val,dict) or val.get('kind')!='counts':
+            return None
+        out={}
+        for key in ('email','password','emailTrusted','passwordTrusted'):
+            n=val.get(key)
+            if type(n) is not int or not 0<=n<=10:
+                return None
+            out[key]=n
+        return out
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        return None
 
 
 def account_submit_saved_login(websocket_url,email,password,report=None):
@@ -1371,20 +1662,26 @@ def account_submit_saved_login(websocket_url,email,password,report=None):
             'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
         return result.get('result',{}).get('value',{})
 
+    # Observe the browser's input events before entering credentials.
+    # Failure to instrument does not block legitimate website login.
+    if report is not None:
+        try:
+            account_cdp_call(websocket_url,'Runtime.evaluate',{
+                'expression':HABBO_LOGIN_INPUT_EVENTS_JS,
+                'returnByValue':True},timeout=2)
+        except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+            report('FORM <- Browser input event tracing unavailable.')
     for field,value in (('email',email),('password',password)):
         fields=fields_now()
         if fields.get('kind')!='form':
             return False
         for attempt in range(2):
-            if attempt==0:
-                account_click_play_button(websocket_url,fields[field])
-            else:
-                # A React rerender or headless coordinate mismatch can
-                # invalidate the prior click; focus the actual selected
-                # Habbo form input. This does not write credentials via JS.
-                if account_login_field_action(
-                        websocket_url,field,'focus')!='focused':
-                    return False
+            # Focus the selected form input directly rather than relying on
+            # browser viewport coordinates. Actual typing still uses trusted
+            # CDP keyboard/input events, not JS setting element.value.
+            if account_login_field_action(
+                    websocket_url,field,'focus')!='focused':
+                return False
             account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
                 'type':'keyDown','key':'a','code':'KeyA',
                 'windowsVirtualKeyCode':65,'modifiers':2})
@@ -1398,6 +1695,15 @@ def account_submit_saved_login(websocket_url,email,password,report=None):
                 break
         else:
             return False
+    if report is not None:
+        counts=account_login_input_event_counts(websocket_url)
+        if counts is None:
+            report('FORM <- Browser input event counts unavailable.')
+        else:
+            report('FORM <- Email input events '+str(counts['email'])+
+                   ' (trusted '+str(counts['emailTrusted'])+
+                   '); password input events '+str(counts['password'])+
+                   ' (trusted '+str(counts['passwordTrusted'])+').')
     # The form can move or enable its submit button after input changes.
     fields=fields_now()
     if fields.get('kind')!='form':

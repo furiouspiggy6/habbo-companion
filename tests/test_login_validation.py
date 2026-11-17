@@ -36,23 +36,32 @@ function el(props){
     getBoundingClientRect:()=>rect(100,100),
     closest:()=>null,
     focus(){ global.document.activeElement=this; },
-    click(){ global.__lastClicked=this; }
+    click(){ global.__lastClicked=this; },
+    contains(node){return false;},
+    scrollIntoView(){}
   },props||{});
 }
 const outside=el({type:'text',getBoundingClientRect:()=>rect(20,20)});
 const email=el({type:'email',value:scenario.emailValue||'',
+  validity:{valid:scenario.emailValid!==false},
   getBoundingClientRect:()=>rect(100,200)});
 const pwd=el({type:'password',value:scenario.passwordValue||'',
+  validity:{valid:scenario.passwordValid!==false},
   getBoundingClientRect:()=>rect(100,250)});
 const submit=el({type:'submit',innerText:'Log in',
+  disabled:!!scenario.buttonDisabled,
   getBoundingClientRect:()=>rect(150,300)});
-const form={querySelectorAll:s=>s.startsWith('button')?[submit]:[email]};
+const form={querySelectorAll:s=>s.startsWith('button')?[submit]:[email],
+  checkValidity:()=>scenario.formValid!==false};
 pwd.closest=selector=>selector==='form'?form:null;
 const notices=(scenario.alert||'')?[el({innerText:scenario.alert})]:[];
 global.location={protocol:'https:',hostname:scenario.hostname||'www.habbo.com',pathname:'/login'};
 global.innerWidth=1200;global.innerHeight=900;
+global.window={};
 global.getComputedStyle=()=>({display:'block',visibility:'visible'});
 global.document={
+  addEventListener:()=>{},
+  elementFromPoint:()=>scenario.obstructed?outside:submit,
   activeElement:scenario.inputKind?
     el({tagName:'INPUT',type:scenario.inputKind,
         value:scenario.populated?'test-value':''}):null,
@@ -145,11 +154,27 @@ class SafeDiagnosticsTests(unittest.TestCase):
 
     def test_element_based_login_submit_uses_official_form_and_no_coordinates(self):
         js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
-        self.assertEqual(run_js(js,{})['kind'],'clicked')
+        status=run_js(js,{'emailValue':'person@example.com',
+                          'passwordValue':'abcdef'})
+        self.assertEqual(status['kind'],'ready')
+        self.assertEqual((status['x'],status['y']),(195,315))
         self.assertEqual(run_js(js,{'hostname':'habbo.com.fake.example'}),
                          {'kind':'unverified-page'})
         self.assertNotIn('getBoundingClientRect().left+',js)
         self.assertNotIn('document.cookie',js)
+
+    def test_login_preflight_detects_invalid_fields_and_obstruction(self):
+        js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
+        base={'emailValue':'user@example.com','passwordValue':'pw'}
+        for change,reason in [
+            ({'emailValue':''},'empty-email'),
+            ({'passwordValue':''},'empty-password'),
+            ({'emailValid':False},'invalid-email'),
+            ({'formValid':False},'invalid-form'),
+            ({'buttonDisabled':True},'button-disabled'),
+            ({'obstructed':True},'button-obstructed'),
+        ]:
+            self.assertEqual(run_js(js,{**base,**change})['kind'],reason)
 
     def test_diagnostic_adapter_whitelists_returned_codes(self):
         node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)

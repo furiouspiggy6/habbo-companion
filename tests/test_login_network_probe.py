@@ -11,8 +11,10 @@ import urllib.parse
 SOURCE=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 TREE=ast.parse(SOURCE.read_text(encoding='utf-8'))
 NAMES={'account_login_auth_request','account_login_safe_error_code',
-       'account_login_safe_server_message',
-       'AccountLoginNetworkProbe','account_focus_and_submit_login',
+       'account_login_safe_server_message','account_login_safe_endpoint_path',
+       'account_login_safe_browser_error','account_login_safe_error_location',
+       'AccountLoginNetworkProbe','account_login_submit_readiness',
+       'account_login_click_trace','account_focus_and_submit_login',
        'account_submit_with_network_diagnostics'}
 
 
@@ -20,18 +22,49 @@ def scope():
     nodes=[n for n in TREE.body if (
         isinstance(n,(ast.FunctionDef,ast.ClassDef)) and n.name in NAMES)]
     values={'json':json,'re':re,'urllib':SimpleNamespace(parse=urllib.parse),
-            'time':time,'socket':__import__('socket')}
+            'time':time,'socket':__import__('socket'),
+            'math':__import__('math')}
     for n in TREE.body:
-        if (isinstance(n,ast.Assign) and any(
-            isinstance(t,ast.Name) and t.id=='HABBO_LOGIN_SUBMIT_FOCUS_JS'
-            for t in n.targets)):
-            values['HABBO_LOGIN_SUBMIT_FOCUS_JS']=ast.literal_eval(n.value)
+        if not isinstance(n,ast.Assign):
+            continue
+        for target in n.targets:
+            if not isinstance(target,ast.Name):
+                continue
+            if target.id=='HABBO_SAFE_URL_PARTS':
+                exec(compile(ast.Module(body=[n],type_ignores=[]),
+                             str(SOURCE),'exec'),values)
+            if target.id in ('HABBO_LOGIN_SUBMIT_FOCUS_JS',
+                             'HABBO_LOGIN_CLICK_TRACE_JS'):
+                values[target.id]=ast.literal_eval(n.value)
     exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),'exec'),
          values)
     return values
 
 
 class NetworkClassificationTests(unittest.TestCase):
+    def test_safe_endpoint_path_is_precise_only_for_public_route_words(self):
+        fn=scope()['account_login_safe_endpoint_path']
+        self.assertEqual(fn('https://www.habbo.com/api/auth/login?email=PRIVATE'),
+                         '/api/auth/login')
+        self.assertEqual(fn('https://www.habbo.com/api/user/DanSecret0987?token=ABC'),
+                         '/api/user/[hidden]')
+        self.assertEqual(fn('https://www.habbo.com/login/NEW_TOKEN_123'),
+                         '/login/[hidden]')
+        self.assertNotIn('PRIVATE',fn('https://www.habbo.com/api/auth/login?email=PRIVATE'))
+
+    def test_real_console_errors_are_categorised_not_printed_verbatim(self):
+        a=scope()
+        fn=a['account_login_safe_browser_error']
+        self.assertEqual(fn('Uncaught TypeError: password=MY_SECRET'),
+                         'TypeError')
+        self.assertEqual(fn('Failed to load resource: the server responded with a status of 403'),
+                         'Resource load HTTP 403')
+        self.assertEqual(fn('Access blocked by CORS policy from account@mail.com'),
+                         'CORS restriction')
+        self.assertEqual(a['account_login_safe_error_location'](
+            'https://www.habbo.com/assets/app.js?ticket=SECRET',42),
+            ' (Habbo script, line 42)')
+
     def test_observes_only_first_party_login_requests(self):
         fn=scope()['account_login_auth_request']
         self.assertTrue(fn('https://www.habbo.com/api/auth/login','POST'))
@@ -107,7 +140,7 @@ class NetworkClassificationTests(unittest.TestCase):
         self.assertIn('HTTP 403',' '.join(out))
         self.assertIn('HTTP 422',' '.join(out))
         self.assertIn('external HTTPS site',' '.join(out))
-        for secret in ('identity.example.com','user/action','?secret=123'):
+        for secret in ('identity.example.com','?secret=123'):
             self.assertNotIn(secret,' '.join(out))
 
     def test_only_failed_first_party_json_body_yields_safe_server_details(self):
@@ -198,26 +231,30 @@ class NetworkClassificationTests(unittest.TestCase):
 
 
 class DomSubmissionTests(unittest.TestCase):
-    def test_dom_click_never_uses_mouse_coords_or_enter(self):
+    def test_browser_trusted_click_uses_current_dom_hit_point(self):
         ns=scope()
         calls=[]
         def cdp(ws,method,params):
             calls.append((method,params))
-            if method=='Runtime.evaluate':
-                return {'result':{'value':{'kind':'clicked'}}}
             return {}
         ns['account_cdp_call']=cdp
-        self.assertTrue(ns['account_focus_and_submit_login']('ws'))
-        self.assertEqual([method for method,_ in calls],['Runtime.evaluate'])
-        self.assertNotIn('dispatchMouseEvent',str(calls))
+        self.assertTrue(ns['account_focus_and_submit_login'](
+            'ws',{'kind':'ready','x':241,'y':109}))
+        self.assertEqual([m for m,p in calls],
+                         ['Input.dispatchMouseEvent']*3)
+        self.assertEqual([p['type'] for m,p in calls],
+                         ['mouseMoved','mousePressed','mouseReleased'])
+        self.assertEqual([(p['x'],p['y']) for m,p in calls],[(241,109)]*3)
+        self.assertNotIn('Runtime.evaluate',str(calls))
 
     def test_unverified_submit_never_dispatches_click(self):
         ns=scope()
         calls=[]
         ns['account_cdp_call']=lambda ws,method,params:(
             calls.append(method) or {'result':{'value':{'kind':'unverified-page'}}})
-        self.assertFalse(ns['account_focus_and_submit_login']('ws'))
-        self.assertEqual(calls,['Runtime.evaluate'])
+        self.assertFalse(ns['account_focus_and_submit_login'](
+            'ws',{'kind':'unverified-page'}))
+        self.assertEqual(calls,[])
 
     def test_monitor_is_enabled_before_single_dom_submission(self):
         ns=scope()
@@ -232,12 +269,15 @@ class DomSubmissionTests(unittest.TestCase):
                 events.append('close')
             def enable(self):
                 events.append('enable')
-            def observe(self):
+            def observe(self,seconds=7.0):
                 events.append('observe')
             def summary(self):
                 return 'Login diagnostic: Habbo authentication HTTP 403.'
         ns['AccountLoginNetworkProbe']=FakeProbe
-        ns['account_focus_and_submit_login']=lambda ws:(
+        ns['account_login_submit_readiness']=lambda ws:(
+            {'kind':'ready','x':50,'y':70})
+        ns['account_login_click_trace']=lambda ws:[1,0,0]
+        ns['account_focus_and_submit_login']=lambda ws,ready=None:(
             events.append('submit') or True)
         messages=[]
         self.assertTrue(ns['account_submit_with_network_diagnostics'](
@@ -253,9 +293,11 @@ class DomSubmissionTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self,*args): pass
             def enable(self): pass
-            def observe(self): raise OSError('observer dropped')
+            def observe(self,seconds=7.0): raise OSError('observer dropped')
         ns['AccountLoginNetworkProbe']=BrokenProbe
-        ns['account_focus_and_submit_login']=lambda ws:(
+        ns['account_login_submit_readiness']=lambda ws:(
+            {'kind':'ready','x':50,'y':70})
+        ns['account_focus_and_submit_login']=lambda ws,ready=None:(
             calls.append('submit') or True)
         messages=[]
         self.assertTrue(ns['account_submit_with_network_diagnostics'](
