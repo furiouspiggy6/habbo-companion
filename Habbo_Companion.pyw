@@ -10,7 +10,8 @@ from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
                                 MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)
 from local_classic_launch import (parse_classic_ticket, official_local_executable,
                                   launch_local_classic)
-from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket)
+from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,
+                       probe_classic_websocket)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -2347,6 +2348,7 @@ class ChatOverlayApp:
         self._tcp_inflight=set()
         self._tcp_generation={}
         self._tcp_states={}
+        self._classic_probe_running=False
         self.tcp_status_var=tk.StringVar(
             value='Real TCP: enter an official ticket or save an authenticated Habbo session.')
         self.tcp_ticket_var=tk.StringVar(value='')
@@ -2740,6 +2742,16 @@ class ChatOverlayApp:
                    command=self._tcp_disconnect_all).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Refresh account list',
                    command=self._tcp_render).pack(side='left')
+        tk.Label(
+            f,
+            text='Habbo Classic (2026) uses a separate secure WebSocket '
+                 'endpoint. Test its TLS/HTTP upgrade without using any '
+                 'cookies, SSO tickets, saved accounts or game packets.',
+            bg='#121a28',fg='#9db7cb',justify='left',
+            wraplength=615).pack(anchor='w',fill='x',pady=(1,7))
+        ttk.Button(f,text='Test Classic WSS connection (no login)',
+                   command=self._tcp_test_classic_websocket).pack(
+                   anchor='w',pady=(0,9))
         tk.Label(f,textvariable=self.tcp_status_var,bg='#121a28',
                  fg='#73c5ab',justify='left',wraplength=615).pack(
                  anchor='w',fill='x',pady=(0,9))
@@ -2756,6 +2768,29 @@ class ChatOverlayApp:
                  bg='#121a28',fg='#8ea9c1',justify='left',
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
+
+    def _tcp_test_classic_websocket(self):
+        # One read-only protocol reachability check, independent of accounts.
+        if self._classic_probe_running:
+            self.tcp_status_var.set('Classic WebSocket probe already running.')
+            return
+        self._classic_probe_running=True
+        self._tcp_log_event('classic','Probing wss://game-us.habbo.com:30001/websocket')
+        self.tcp_status_var.set('Testing Classic WebSocket TLS and protocol upgrade...')
+        threading.Thread(target=self._classic_ws_probe_worker,
+                         daemon=True,name='companion-classic-wss-probe').start()
+
+    def _classic_ws_probe_worker(self):
+        try:
+            result=probe_classic_websocket()
+            self._packet_put(('classic_ws_probe',result))
+        except HabboTcpError as exc:
+            # Error strings are static protocol diagnostics without URL query,
+            # HTTP response body, cookies, SSO tickets or user identifiers.
+            self._packet_put(('classic_ws_probe',str(exc)[:150]))
+        except Exception:
+            self._packet_put(('classic_ws_probe',
+                              'Classic WebSocket: unexpected probe failure'))
 
     def _tcp_log_event(self, ident, message):
         """Safe diagnostic log: never pass secrets, cookies or raw packets."""
@@ -6398,6 +6433,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='classic_ws_probe':
+                self._classic_probe_running=False
+                self.tcp_status_var.set(item[1])
+                self._tcp_log_event('classic',item[1])
+                continue
             if item[0] in ('tcp_state','tcp_connected','tcp_failed','tcp_packet'):
                 event,ident,generation=item[:3]
                 if generation!=self._tcp_generation.get(ident,0):
