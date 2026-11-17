@@ -814,62 +814,116 @@ def account_login_diagnostic(websocket_url):
         return 'unknown'
 
 
-# Detect input automation failures without exporting any field value, its
-# length, the user's email, or the password. The website receives the ordinary
-# saved login via its visible form; only a boolean readiness result is returned.
+# The activeElement changes when Habbo's reactive login component
+# rerenders. Find the actual login inputs by their form instead of assuming
+# the keyboard focus remained where CDP clicked. Never return field contents.
+# The only string substitutions are fixed, whitelist-controlled actions.
 HABBO_LOGIN_INPUT_READY_JS=r'''(() => {
   if (location.protocol!=='https:' ||
       !/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'unverified-page'};
-  const active=document.activeElement;
-  if (!active || active.tagName?.toLowerCase()!=='input')
-    return {kind:'not-focused'};
-  const type=(active.type||'').toLowerCase();
-  if (!['password','email','text'].includes(type))
-    return {kind:'not-focused'};
-  return {kind:active.value && active.value.length>0?'populated':'empty',
-          field:type==='password'?'password':'email'};
+  const field=FIELD_PLACEHOLDER, action=ACTION_PLACEHOLDER;
+  const visible=el=>{
+    if (!el || el.disabled) return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' &&
+      s.visibility!=='hidden' && r.left<innerWidth && r.top<innerHeight &&
+      r.right>0 && r.bottom>0;
+  };
+  const password=Array.from(document.querySelectorAll(
+      'input[type=password]')).find(visible);
+  if (!password) return {kind:'no-form'};
+  const form=password.closest('form');
+  const root=form || password.closest(
+      '[role=dialog],dialog,[class*=modal]') || document;
+  const candidates=Array.from(root.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).filter(visible);
+  const email=candidates.find(el=>el.type==='email') ||
+      candidates.find(el=>/username/i.test(el.autocomplete||'') ||
+        /e-?mail/i.test((el.placeholder||'')+' '+
+          (el.getAttribute('aria-label')||''))) ||
+      (form ? candidates.find(el=>el.type==='text') : null);
+  const input=field==='password'?password:email;
+  if (!input) return {kind:'no-form'};
+  if (action==='focus') {
+    input.focus({preventScroll:true});
+    return {kind:document.activeElement===input?'focused':'not-focused'};
+  }
+  return {kind:input.value && input.value.length>0?'populated':'empty',
+          field:field};
 })()'''
 
 
-def account_login_input_confirmed(websocket_url,field):
-    """Confirm a visible Habbo input received text, without returning text."""
+def account_login_field_action(websocket_url,field,action):
+    """Check/focus a selected form field, never returning user-entered text."""
+    if field not in ('email','password') or action not in ('check','focus'):
+        return 'invalid'
+    expression=(HABBO_LOGIN_INPUT_READY_JS
+                .replace('FIELD_PLACEHOLDER',json.dumps(field))
+                .replace('ACTION_PLACEHOLDER',json.dumps(action)))
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
-        'expression':HABBO_LOGIN_INPUT_READY_JS,'returnByValue':True})
+        'expression':expression,'returnByValue':True})
     if result.get('exceptionDetails'):
-        return False
+        return 'unknown'
     value=result.get('result',{}).get('value',{})
-    return (isinstance(value,dict) and value.get('kind')=='populated'
-            and value.get('field')==field)
+    if not isinstance(value,dict):
+        return 'unknown'
+    kind=value.get('kind')
+    allowed=('populated','empty','focused','not-focused',
+             'no-form','unverified-page')
+    if kind not in allowed:
+        return 'unknown'
+    if action=='check' and kind in ('populated','empty'):
+        return kind if value.get('field')==field else 'unknown'
+    if action=='focus' and kind in ('focused','not-focused'):
+        return kind
+    return kind if kind in ('no-form','unverified-page') else 'unknown'
+
+
+def account_login_input_confirmed(websocket_url,field):
+    """Confirm the exact form input contains text; no values are exported."""
+    return account_login_field_action(websocket_url,field,'check')=='populated'
 
 
 def account_submit_saved_login(websocket_url,email,password):
-    """Type into the official Habbo login, never into unrelated websites."""
-    inspection=account_cdp_call(websocket_url,'Runtime.evaluate',{
-        'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
-    fields=inspection.get('result',{}).get('value',{})
-    if fields.get('kind')!='form':
-        return False
+    """Enter a saved login on official Habbo and verify before submission."""
+    def fields_now():
+        result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
+        return result.get('result',{}).get('value',{})
+
     for field,value in (('email',email),('password',password)):
-        # The original code assumed Chrome's Input.insertText succeeded.
-        # A click may fail to focus the target in headless mode, leaving the
-        # login form untouched while incorrectly reporting success.
+        fields=fields_now()
+        if fields.get('kind')!='form':
+            return False
         for attempt in range(2):
-            account_click_play_button(websocket_url,fields[field])
+            if attempt==0:
+                account_click_play_button(websocket_url,fields[field])
+            else:
+                # A React rerender or headless coordinate mismatch can
+                # invalidate the prior click; focus the actual selected
+                # Habbo form input. This does not write credentials via JS.
+                if account_login_field_action(
+                        websocket_url,field,'focus')!='focused':
+                    return False
             account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
                 'type':'keyDown','key':'a','code':'KeyA',
                 'windowsVirtualKeyCode':65,'modifiers':2})
             account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
                 'type':'keyUp','key':'a','code':'KeyA',
                 'windowsVirtualKeyCode':65,'modifiers':2})
-            # Sent only over isolated loopback CDP. Never return/log values.
+            # Only local CDP types the saved value. JS never receives it.
             account_cdp_call(websocket_url,'Input.insertText',{'text':value})
             time.sleep(0.15)
             if account_login_input_confirmed(websocket_url,field):
                 break
         else:
-            # Do not press submit unless BOTH fields were populated.
             return False
+    # The form can move or enable its submit button after input changes.
+    fields=fields_now()
+    if fields.get('kind')!='form':
+        return False
     time.sleep(0.2)
     account_click_play_button(websocket_url,fields['submit'])
     return True
