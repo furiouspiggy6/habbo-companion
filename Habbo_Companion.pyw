@@ -1132,9 +1132,9 @@ def account_login_safe_browser_error(text):
     """Categorise untrusted console/exception text without quoting secrets."""
     if not isinstance(text,str):
         return 'unknown error'
-    if re.search(r'content.security.policy|\\bcsp\\b',text,re.I):
+    if re.search(r'content.security.policy|\bcsp\b',text,re.I):
         return 'Content Security Policy blocked a resource'
-    if re.search(r'cross.origin|\\bcors\\b',text,re.I):
+    if re.search(r'cross.origin|\bcors\b',text,re.I):
         return 'CORS restriction'
     if re.search(r'failed to fetch|fetch failed',text,re.I):
         return 'Failed to fetch'
