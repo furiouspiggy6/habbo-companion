@@ -1302,6 +1302,10 @@ class AccountLoginNetworkProbe:
                 ' network failure(s).')
         if self.http_status is not None:
             result+=' Last observed HTTP '+str(self.http_status)+'.'
+        if self.error_code:
+            result+=' Server error code: '+self.error_code+'.'
+        if self.error_message:
+            result+=' Server message: '+self.error_message+'.'
         if not self.seen:
             result+=' No endpoint was independently identified as authentication.'
         if self.javascript_exceptions:
