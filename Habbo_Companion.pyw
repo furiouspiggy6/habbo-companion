@@ -3104,8 +3104,25 @@ class ChatOverlayApp:
             elif ticket is None:
                 self._packet_put(('tcp_state',ident,generation,
                                   'Requesting SSO from official Habbo.com HTTPS'))
-                raw=fetch_habbo_sso_ticket(*cookies)
-                ticket=account_parse_official_ticket_response(raw)
+                try:
+                    raw=fetch_habbo_sso_ticket(*cookies)
+                    ticket=account_parse_official_ticket_response(raw)
+                except HabboTcpError as exc:
+                    # Only automatically renew an explicitly expired website
+                    # session. Never loop retries, guess credentials or
+                    # suppress CAPTCHA/MFA failures.
+                    if ('Habbo rejected the website session' not in str(exc)
+                        or any(account_browser_debug_port(ident)==
+                               account_browser_debug_port(other['id'])
+                               for other in self._account_profiles
+                               if other['id']!=ident)):
+                        raise
+                    self._packet_put(('tcp_state',ident,generation,
+                                      'Stored Habbo session expired; '
+                                      'refreshing from this account browser'))
+                    ticket=account_import_session_automatically(
+                        account,lambda message:self._packet_put(
+                            ('tcp_state',ident,generation,message)))
             # The .username suffix in a Habbo launch link is display
             # metadata, not part of the game-server SSO credential.
             # Bobba Launcher and our Direct Classic mode both pass only
