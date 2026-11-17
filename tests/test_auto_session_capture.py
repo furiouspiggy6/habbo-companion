@@ -279,6 +279,69 @@ class AutomaticLoginAndImport(TestCase):
                 43111,check_visible_login=False),('session','token'))
 
 
+    def test_stale_login_page_can_still_validate_official_sso(self):
+        """Only a genuinely valid official SSO may override stale website UI."""
+        events=[]
+        checks={'n':0}
+        error_type=type('HabboDenied',(Exception,),{})
+        def verify(sid,token):
+            checks['n']+=1
+            if checks['n']==1:
+                raise error_type('invalid old session')
+            return 'fresh-ticket'
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('me@example.com','secret'),
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_attempt_auto_play=lambda port,report,credentials,login_only:(
+                report('Habbo still shows the login form') or 'login'),
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                ('new-session','new-token'),
+            fetch_habbo_sso_ticket=verify,
+            account_parse_official_ticket_response=lambda raw:'validated-'+raw,
+            account_session_cookie_write=lambda ident,sid,tok:
+                events.append(('saved',ident)),
+            HabboTcpError=error_type,
+        )
+        log=[]
+        result=ns['account_import_session_automatically'](
+            account(),log.append)
+        self.assertEqual(result,'validated-fresh-ticket')
+        self.assertEqual(checks['n'],2)
+        self.assertEqual(events,[('saved',account()['id'])])
+        self.assertTrue(any('valid despite' in message for message in log))
+        self.assertNotIn('secret',' '.join(log))
+        self.assertNotIn('new-token',' '.join(log))
+
+    def test_stale_login_page_never_saves_rejected_session(self):
+        error_type=type('HabboDenied',(Exception,),{})
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('me@example.com','secret'),
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_attempt_auto_play=lambda *a,**k:'login',
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                ('invalid-session','invalid-token'),
+            fetch_habbo_sso_ticket=lambda sid,tok:(
+                (_ for _ in ()).throw(error_type('rejected'))),
+            account_parse_official_ticket_response=lambda raw:
+                self.fail('rejected ticket must not parse'),
+            account_session_cookie_write=lambda *args:
+                self.fail('must not save unverified cookies'),
+            HabboTcpError=error_type,
+        )
+        log=[]
+        with self.assertRaisesRegex(ValueError,'Website login form remains visible'):
+            ns['account_import_session_automatically'](account(),log.append)
+        self.assertTrue(any('checking the official' in message for message in log))
+
+
 class AppIntegration(TestCase):
     def test_direct_tcp_buttons_workers_and_no_secret_logging(self):
         self.assertIn('Auto-import session and connect (selected account)',TEXT)
