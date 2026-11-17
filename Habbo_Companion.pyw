@@ -37,6 +37,7 @@ import math
 import base64
 import socket
 import socketserver
+import ipaddress
 import struct
 import importlib.util
 from datetime import datetime
@@ -55,10 +56,29 @@ def validate_local_habbo_frame(frame):
     return text_length==declared-4
 
 
-def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
-    """Fuzz an ephemeral 127.0.0.1 mock. Never connect to G-Earth or Habbo."""
+def validate_owned_lab_ip(value):
+    """Select an IPv4 address assigned to this PC, not a remote fuzz target.
+
+    The eventual socket bind checks local ownership. SSO credentials are never
+    sent to this address. Hostnames, public IPs, wildcard binds and IPv6 are
+    deliberately excluded from this small, isolated test harness.
+    """
+    try:
+        address=ipaddress.IPv4Address(str(value).strip())
+    except (ipaddress.AddressValueError, ValueError, TypeError):
+        raise ValueError('Enter a numerical IPv4 address assigned to this PC.')
+    if (not (address.is_loopback or address.is_private)
+        or address.is_unspecified or address.is_multicast
+        or address.is_link_local or address.is_reserved):
+        raise ValueError('Only a local loopback or private IPv4 address is accepted.')
+    return str(address)
+
+
+def run_local_boofuzz(seed_id=896, cases=60, output_dir=None, bind_ip='127.0.0.1'):
+    """Fuzz a mock bound to this PC. Never contact remote hosts or Habbo."""
     from boofuzz import (Session,Target,TCPSocketConnection,s_initialize,s_size,
                          s_block_start,s_block_end,s_word,s_string,s_get)
+    bind_ip=validate_owned_lab_ip(bind_ip)
     if not isinstance(seed_id,int) or not 0<=seed_id<=65535:
         raise ValueError('Invalid numeric message ID')
     if not isinstance(cases,int) or not 1<=cases<=100:
@@ -68,6 +88,10 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
 
     class LocalHandler(socketserver.BaseRequestHandler):
         def handle(self):
+            # Binding to a LAN interface must not expose the test parser to
+            # other machines. Only connections sourced by this PC are served.
+            if self.client_address[0] not in ('127.0.0.1',bind_ip):
+                return
             self.request.settimeout(0.25)
             frame=b''
             try:
@@ -91,8 +115,12 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
         allow_reuse_address=True
         daemon_threads=True
 
-    # A random port is assigned by the OS. No configuration accepts remote hosts.
-    server=LoopbackServer(('127.0.0.1',0),LocalHandler)
+    # A bind succeeds only for an IP actually assigned to this machine.
+    # No remote host or arbitrary destination is ever accepted as target.
+    try:
+        server=LoopbackServer((bind_ip,0),LocalHandler)
+    except OSError as exc:
+        raise ValueError('The selected IP is not assigned to your PC or is unavailable.') from exc
     thread=threading.Thread(target=server.serve_forever,daemon=True)
     thread.start()
     output_dir=Path(output_dir) if output_dir else APP_DIR/'fuzz_lab'
@@ -109,7 +137,7 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
                 s_block_end()
             s_block_end()
         session=Session(
-            target=Target(connection=TCPSocketConnection('127.0.0.1',
+            target=Target(connection=TCPSocketConnection(bind_ip,
                              server.server_address[1],recv_timeout=0.5)),
             index_end=cases, sleep_time=0.01, receive_data_after_each_request=True,
             web_address='127.0.0.1',web_port=0,keep_web_open=False,
@@ -117,7 +145,7 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
         session.connect(s_get('synthetic_habbo_frame'))
         session.fuzz()
         return dict(stats,seed_id=seed_id,case_limit=cases,
-                    scope='localhost synthetic mock only',boofuzz_db=str(db))
+                    scope='this-PC synthetic mock only',bind_ip=bind_ip,boofuzz_db=str(db))
     finally:
         server.shutdown()
         server.server_close()
@@ -4655,6 +4683,7 @@ class ChatOverlayApp:
         self.fuzz_seen=0
         self.fuzz_running=False
         self.fuzz_last_result=None
+        self.fuzz_target_ip_var=tk.StringVar(value='127.0.0.1')
         self.fuzz_live_var=tk.StringVar(value='Passive reader OFF. Connect G-Earth first.')
         self.fuzz_lab_var=tk.StringVar(value='Local boofuzz lab idle; never sends to Habbo.')
         self._packet_auto_retry_after=0.0
@@ -7042,9 +7071,16 @@ class ChatOverlayApp:
                  bg=p['background'],fg=p['text']).pack(anchor='w')
         tk.Label(holder,text='Uses the most frequently observed outgoing message ID '
                  'as a numeric seed for a synthetic frame. The generated payloads go ONLY '
-                 'to an ephemeral mock server bound to 127.0.0.1. This cannot diagnose '
-                 'a flaw in Habbo production.',
+                 'to a temporary mock server on this PC, never to Habbo or '
+                 'an external host. This cannot diagnose Habbo production.',
                  wraplength=650,justify='left',bg=p['background'],fg=p['muted']).pack(anchor='w',pady=(5,10))
+        target=ttk.Frame(holder,style='Panel.TFrame')
+        target.pack(fill='x',pady=(0,8))
+        ttk.Label(target,text='Your PC test IP',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(target,textvariable=self.fuzz_target_ip_var,width=19).pack(
+            side='left',padx=(9,10))
+        tk.Label(target,text='127.0.0.1 or a private IP assigned to this computer',
+                 bg=p['background'],fg=p['muted'],font=('Segoe UI',9)).pack(side='left')
         ttk.Label(holder,textvariable=self.fuzz_lab_var,style='Panel.TLabel',
                   wraplength=650).pack(anchor='w',pady=(0,8))
         bar=ttk.Frame(holder,style='Panel.TFrame');bar.pack(fill='x')
@@ -7052,8 +7088,10 @@ class ChatOverlayApp:
                    command=self._fuzz_start_lab).pack(side='left',padx=(0,8))
         ttk.Button(bar,text='Analyse results with local Ollama',
                    command=self._fuzz_analyse_ollama).pack(side='left')
-        tk.Label(holder,text='Optional dependency: install boofuzz into the Python '
-                 'environment running Companion. All test connections are hardcoded to loopback.',
+        tk.Label(holder,text='Actual Habbo SSO and encrypted AIR sessions stay in '
+                 'Direct TCP and connect to the official Habbo endpoint only. This '
+                 'custom IP belongs solely to the synthetic local test server. '
+                 'Install boofuzz in the Python running Companion.',
                  wraplength=650,justify='left',bg=p['background'],fg=p['faint']).pack(anchor='w',pady=(16,0))
 
     def _fuzz_toggle_reader(self):
@@ -7091,14 +7129,19 @@ class ChatOverlayApp:
         if self.fuzz_running:
             self.fuzz_lab_var.set('Local boofuzz session already running.')
             return
+        try:
+            bind_ip=validate_owned_lab_ip(self.fuzz_target_ip_var.get())
+        except ValueError as exc:
+            self.fuzz_lab_var.set(str(exc))
+            return
         outgoing=[(v['count'],mid) for (direction,mid),v in self.fuzz_counts.items()
                   if direction=='Outgoing']
         seed=max(outgoing)[1] if outgoing else 896
         self.fuzz_running=True
-        self.fuzz_lab_var.set(f'Running up to 60 synthetic cases on localhost (seed ID {seed})...')
+        self.fuzz_lab_var.set(f'Running up to 60 synthetic cases on your PC at {bind_ip} (seed ID {seed})...')
         def work():
             try:
-                result=run_local_boofuzz(seed_id=seed,cases=60)
+                result=run_local_boofuzz(seed_id=seed,cases=60,bind_ip=bind_ip)
                 self._packet_put(('fuzz_result',result))
             except ModuleNotFoundError:
                 self._packet_put(('fuzz_error',
