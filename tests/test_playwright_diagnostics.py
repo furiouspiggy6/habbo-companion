@@ -47,8 +47,15 @@ def make_monitor():
 
 
 def request(url,method='POST',kind='xhr',failure=None):
-    return SimpleNamespace(url=url,method=method,resource_type=kind,
-                           failure=failure)
+    # Playwright Request objects are identity-hashable; SimpleNamespace isn't.
+    class FakeRequest:
+        pass
+    obj=FakeRequest()
+    obj.url=url
+    obj.method=method
+    obj.resource_type=kind
+    obj.failure=failure
+    return obj
 
 
 def respond(events,req,status=200,body='{}',content_type='application/json'):
