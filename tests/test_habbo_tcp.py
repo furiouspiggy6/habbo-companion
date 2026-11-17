@@ -10,18 +10,19 @@ import habbo_tcp as tcp
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_community_air_handshake_header_registry(self):
-        # Community AIR mapping is a hypothesis to test against the live
-        # 2026 service, NOT proof of protocol compatibility.
+    def test_november_2026_air_header_registry(self):
+        # IDs from the Nov 2026 WIN63 revision of Volt-Renderer, not an
+        # independently validated capture of official Habbo.com production.
         self.assertEqual(tcp.TCP_OUT, {
-            "hello":4000, "init_dh":1445, "finish_dh":3393, "version":1422,
-            "unique":760, "sso":3674, "info":3745,
-            "pong":2418, "latency":1255,
+            "hello":4000, "init_dh":384, "finish_dh":2389, "version":631,
+            "unique":37, "sso":2684, "info":2519,
+            "pong":923, "latency":2391,
         })
         self.assertEqual(tcp.TCP_IN, {
-            "init_dh":503, "finish_dh":3722, "auth_ok":115,
-            "ping":2829, "disconnect":4000,
+            "init_dh":1823, "finish_dh":3796, "auth_ok":599,
+            "ping":2935, "disconnect":4000,
         })
+        self.assertEqual(tcp.TCP_PLATFORM_ID, "FLASH31")
         self.assertEqual(tcp.TCP_FALLBACK_RELEASE,
                          "WIN63-202611041140-327405090")
         self.assertEqual(tcp.TCP_CLIENT_DATA,
@@ -296,6 +297,33 @@ class AuthenticationDiagnosticsTests(unittest.TestCase):
         session.close()
 
 
+class KnownKeepaliveTests(unittest.TestCase):
+    def test_2935_ping_before_diffie_replies_with_923(self):
+        packets = (tcp._frame(2935)
+                   + tcp._frame(tcp.TCP_IN["init_dh"], b"dh-key-data"))
+        fake = FakeGameSocket(packets)
+        updates = []
+        session = tcp.HabboTcpSession("abcdef123456", status=updates.append)
+        session.sock = fake
+        self.assertEqual(session._await_packet(tcp.TCP_IN["init_dh"], limit=1),
+                         b"dh-key-data")
+        self.assertEqual(len(fake.outgoing), 1)
+        self.assertEqual(fake.outgoing[0], tcp._frame(923))
+        self.assertIn("Server keepalive packet 2935", updates[0])
+        self.assertFalse(session.authenticated)
+        session.close()
+
+    def test_nonempty_keepalive_fails_closed_without_sending(self):
+        fake = FakeGameSocket(tcp._frame(2935, b"unexpected"))
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = fake
+        with self.assertRaisesRegex(tcp.HabboTcpError, "nonempty keepalive"):
+            session._await_packet(tcp.TCP_IN["init_dh"], limit=1)
+        self.assertEqual(fake.outgoing, [])
+        self.assertFalse(session.authenticated)
+        session.close()
+
+
 class TimeoutByteDiagnosticsTests(unittest.TestCase):
     def test_no_server_bytes_is_explicit(self):
         fake = FakeGameSocket(b"")
@@ -355,8 +383,17 @@ class SessionIntegrationTests(unittest.TestCase):
                           tcp.TCP_OUT["finish_dh"], tcp.TCP_OUT["version"],
                           tcp.TCP_OUT["unique"], tcp.TCP_OUT["sso"]])
         self.assertEqual(sent_ids[6], tcp.TCP_OUT["info"])
+        self.assertIn(b"FLASH31", fake.outgoing[0])
         self.assertIn(tcp.profile_fingerprint("012345abcdef").encode("ascii"),
                       fake.outgoing[4])
+        fields = fake.outgoing[4][6:]
+        machine_id, offset = tcp._decode_string(fields)
+        fingerprint, offset = tcp._decode_string(fields, offset)
+        flash_version, offset = tcp._decode_string(fields, offset)
+        self.assertEqual(machine_id, tcp.profile_fingerprint("012345abcdef"))
+        self.assertEqual(fingerprint, "")
+        self.assertEqual(flash_version, "WIN/51,1,1,5")
+        self.assertEqual(offset, len(fields))
         self.assertNotIn(b"0123456789abcdef.V4",
                          b"".join(fake.outgoing[:2]))
 

@@ -35,15 +35,19 @@ TCP_RSA_N = int(
 )
 TCP_RSA_E = 65537
 
-# The previous 2016 PRODUCTION mapping is from a private retro emulator,
-# not from Habbo.com 2026. It caused a silent 15-second timeout on 2026-11-17.
-# This newer community AIR client mapping (devlyresh/Habbo-Bot) previously
-# reached an explicit server disconnect. It is NOT verified on Habbo.com 2026;
-# do not cycle headers, guess packet IDs, or automatically retry SSO tickets.
-TCP_OUT = dict(hello=4000, init_dh=1445, finish_dh=3393, version=1422,
-               unique=760, sso=3674, info=3745, pong=2418, latency=1255)
-TCP_IN = dict(init_dh=503, finish_dh=3722, auth_ok=115,
-              ping=2829, disconnect=4000)
+# Evidence: plus-emulator/Volt-Renderer, November 4 2026 WIN63 protocol
+# (IncomingHeader.ts and OutgoingHeader.ts). The exact build sent packet
+# 2935 with zero payload in the user's real Habbo.com test: this registry
+# calls it CLIENT_PING and maps CLIENT_PONG to 923.
+# A community emulator mapping is not definitive proof of official
+# server compatibility; do not silently cycle mappings or auto-retry.
+TCP_OUT = dict(hello=4000, init_dh=384, finish_dh=2389, version=631,
+               unique=37, sso=2684, info=2519, pong=923, latency=2391)
+TCP_IN = dict(init_dh=1823, finish_dh=3796, auth_ok=599,
+              ping=2935, disconnect=4000)
+# The latest publicly inspected official AIR ClientHello (Oct 15, 2026)
+# declares FLASH31. The Nov 4 official AIR value remains to be confirmed.
+TCP_PLATFORM_ID = "FLASH31"
 _TICKET = re.compile(r"^[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?$", re.I)
 _RELEASE = re.compile(r"\bWIN63-[0-9]{12}-[0-9]{5,}\b")
 
@@ -446,6 +450,11 @@ class HabboTcpSession:
             if packet_id == wanted:
                 return payload
             if packet_id == TCP_IN["ping"]:
+                if payload:
+                    raise HabboTcpError(
+                        "Unexpected nonempty keepalive packet during " + stage)
+                self.on_status(
+                    "Server keepalive packet 2935 received; replied with Pong 923")
                 self._send(TCP_OUT["pong"])
                 continue
             if packet_id == TCP_IN["disconnect"]:
@@ -492,9 +501,9 @@ class HabboTcpSession:
             self.sock.settimeout(timeout)
             self.on_status(
                 "TCP connected (AIR " + release
-                + "; community packet mapping, not live-verified); "
+                + "; November 2026 header mapping, not live-verified); "
                 + "awaiting first DH response")
-            self._send(TCP_OUT["hello"], _string(release) + _string("FLASH25")
+            self._send(TCP_OUT["hello"], _string(release) + _string(TCP_PLATFORM_ID)
                        + struct.pack(">ii", 6, 4), plaintext=True)
             self._send(TCP_OUT["init_dh"], plaintext=True)
             init = self._await_packet(TCP_IN["init_dh"], 15)
@@ -523,7 +532,11 @@ class HabboTcpSession:
             self._send(TCP_OUT["version"],
                        struct.pack(">i", 401) + _string("app:/") + _string(TCP_CLIENT_DATA))
             fingerprint = profile_fingerprint(self.account_id)
-            self._send(TCP_OUT["unique"], _string(fingerprint) + _string("WIN/51,1,1,5"))
+            # October 2026 official AIR client sends machine ID, fingerprint
+            # and Flash version as THREE string fields (not the two
+            # strings used by older standalone bots).
+            self._send(TCP_OUT["unique"], _string(fingerprint)
+                       + _string("") + _string("WIN/51,1,1,5"))
             elapsed = int((time.monotonic() - started) * 1000)
             self._send(TCP_OUT["sso"], _string(ticket) + struct.pack(">i", min(elapsed, 2147483647)))
             self._await_packet(TCP_IN["auth_ok"], 18)
