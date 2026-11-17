@@ -460,7 +460,7 @@ def account_habbo_page(debug_port):
     if not candidates:
         return None
     priorities={'launch':6,'play':5,'play-now':5,'download':4,
-                'signed_in':3,'login':2,'waiting':1,'not_habbo':0}
+                'signed_in':3,'login':2,'open-login':2,'waiting':1,'not_habbo':0}
     best=None
     best_rank=-1
     last_error=''
@@ -674,6 +674,19 @@ HABBO_AUTO_PLAY_JS=r'''(() => {
   });
   if (signedMenu) return {kind:'signed_in',page:location.pathname,
                           evidence:'profile-menu'};
+  // A signed-out landing page can hide its password form behind Log in.
+  // Only identify the visible button here; Python sends a trusted click.
+  const signIn=controls.find(el=> {
+    if (!visible(el)) return false;
+    const text=label(el);
+    return text.length<=24 && /^(?:log\s*in|login|sign\s*in)$/i.test(text);
+  });
+  if (signIn) {
+    const rect=signIn.getBoundingClientRect();
+    return {kind:'open-login',label:'Log in',
+            x:rect.left+rect.width/2,y:rect.top+rect.height/2,
+            page:location.pathname};
+  }
   return {kind:'waiting',page:location.pathname,
           reason:'no-visible-play-or-profile-menu'};
 })()'''
@@ -760,6 +773,8 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     identical=0
     login_submitted=False
     login_waits=0
+    login_prompt_clicks=0
+    unrecognised_pages=0
     last_issue='No Habbo website tab detected in this browser profile.'
     control_failures=0
     missing_pages=0
@@ -799,7 +814,23 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
             time.sleep(0.6);continue
         control_failures=0
         kind=step.get('kind')
+        if kind!='not_habbo':
+            unrecognised_pages=0
         last_issue='Visible Play button and signed-in profile menu not detected.'
+        if kind=='open-login':
+            if not credentials:
+                report('Sign in once manually or save email/password in the '
+                       'Accounts tab for automatic sign-in.')
+                return 'login'
+            login_prompt_clicks+=1
+            if login_prompt_clicks>2:
+                report('The Habbo sign-in form did not open in the background '
+                       'browser. Use Accounts > Open account login once.')
+                return 'waiting'
+            account_click_play_button(page['webSocketDebuggerUrl'],step)
+            report('Opening the official Habbo sign-in form for this account.')
+            time.sleep(1.1)
+            continue
         if kind=='login':
             if not credentials:
                 report('Sign in once manually or save email/password in the '
@@ -833,7 +864,16 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
             time.sleep(0.6)
             continue
         if kind=='not_habbo':
-            last_issue='Browser tab is not on the official HTTPS Habbo website.'
+            # Page targets can change origin during navigation even if the
+            # DevTools target list still carries the old Habbo URL. Allow
+            # short transitions to settle, but NEVER enter credentials.
+            unrecognised_pages+=1
+            last_issue='Browser page left the verified Habbo HTTPS origin.'
+            if unrecognised_pages<5:
+                time.sleep(0.7)
+                continue
+            report(last_issue+' Password entry was stopped for safety. '
+                   'Use Accounts > Open account login to finish sign-in.')
             return 'unknown'
         if kind=='launch':
             account_click_play_button(page['webSocketDebuggerUrl'],step)
@@ -1126,9 +1166,14 @@ def account_import_session_automatically(account,report):
                 'Use Accounts > Open account login once to sign in, or '
                 'Accounts > Save login securely for automatic sign-in.')
         outcomes=[]
+        def login_status(message):
+            # Status messages contain no cookies, email addresses or passwords.
+            # Previous versions silently swallowed the actual login diagnosis.
+            safe=str(message)[:160]
+            outcomes.append(safe)
+            report(safe)
         login_result=account_attempt_auto_play(
-            port,lambda message:outcomes.append(str(message)[:160]),
-            credentials=credentials,login_only=True)
+            port,login_status,credentials=credentials,login_only=True)
         if login_result!='signed_in':
             reasons={
                 'login':'Website login form remains visible. Check the saved '
@@ -1141,7 +1186,8 @@ def account_import_session_automatically(account,report):
                                'account browser profile.',
                 'control_error':'Local browser control was unavailable.',
                 'inspect_error':'Browser page inspection failed.',
-                'unknown':'Official Habbo page not recognised.',
+                'unknown':'Habbo browser left the verified Habbo HTTPS page. '
+                          'Use Accounts > Open account login to finish sign-in.',
             }
             raise ValueError(reasons.get(
                 login_result,
