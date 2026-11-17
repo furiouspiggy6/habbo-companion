@@ -1,3 +1,49 @@
+HABBO COMPANION v1.1.64 — PLAYWRIGHT BROWSER CONTROLLER
+=====================================================
+
+Habbo's login and Play/Launch website controls are now operated through
+Playwright, not the previous hand-built CDP DOM/coordinate click system.
+Playwright attaches to the account's existing private Brave/Chrome/Edge
+browser profile through its LOCAL 127.0.0.1 debugging port. Separate accounts
+still have separate profiles. Login credentials remain in the Windows
+Credential Manager vault, not in the browser arguments or logs.
+
+AUTOMATIC FIRST-RUN SETUP
+=========================
+The app automatically installs the pinned Python Playwright package into
+this Windows user's LOCALAPPDATA/HabboCompanion/managed-playwright folder
+when browser automation first needs it. The official PyPI package is a
+substantial download (~43 MB for 64-bit Windows), so internet access and a
+working pip module for the Python launching Companion are required on
+first use. Companion does not separately download Playwright's browser
+binaries: it attaches to the already installed Brave, Chrome or Edge.
+The updater ZIP stays compatible with existing Companion installations.
+If automatic setup fails, the app reports it and does not silently return
+to coordinate automation or submit saved credentials.
+
+LOGIN BEHAVIOUR
+===============
+- Playwright locators find the visible login form, fill the email/password
+  fields, and auto-wait for a stable, enabled, unobstructed LET'S GO! button.
+- Playwright clicks the real page control; it never uses force=True or
+  bypasses website challenges, CAPTCHA or multi-factor verification.
+- Website Play/Launch navigation also uses Playwright locators.
+- Browser requests and server responses are logged with redacted paths and
+  HTTP statuses; errors are classified without exposing credentials, raw
+  page errors, cookies or SSO tickets.
+- Successful sign-in is still VERIFIED using the existing official Habbo
+  website cookies and HTTPS SSO ticket before Direct TCP authentication.
+- A site verification prompt or unsupported login provider may still need
+  manual completion in Accounts > Open account login.
+- Playwright's CDP attachment has compatibility limits with some Chromium
+  builds. If a connected browser refuses the session, the app reports the
+  error rather than silently guessing or replaying game packets.
+- Installed Playwright and its dependencies are third-party code maintained
+  by Microsoft; the rest of Companion remains local.
+
+This release has offline unit tests. Live Windows Habbo sign-in and
+multi-account launch must still be verified on your own system.
+
 HABBO COMPANION v1.1.42 — LOCAL SESSION TICKET FETCH
 ===================================================
 
