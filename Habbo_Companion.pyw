@@ -1036,6 +1036,7 @@ class AccountLoginNetworkProbe:
         self.error_candidates=[]
         self.report=None
         self.lines_printed=0
+        self.important_lines=0
 
     def __enter__(self):
         url=urllib.parse.urlsplit(self.url)
@@ -1127,11 +1128,17 @@ class AccountLoginNetworkProbe:
             return message
         raise TimeoutError('Too many browser protocol events.')
 
-    def _emit(self,line):
-        # All call sites below construct bounded, no-secret strings.
-        if self.lines_printed>=16:
-            return
-        self.lines_printed+=1
+    def _emit(self,line,important=False):
+        # Reserve room for HTTP errors even if background XHR traffic is noisy.
+        # All callers construct redacted, bounded, no-secret strings.
+        if important:
+            if self.important_lines>=8:
+                return
+            self.important_lines+=1
+        else:
+            if self.lines_printed>=12:
+                return
+            self.lines_printed+=1
         if self.report is not None:
             self.report(line)
 
@@ -1196,7 +1203,8 @@ class AccountLoginNetworkProbe:
                 self.http_status=int(code)
                 self.responses+=1
                 self._emit('SERVER <- HTTP '+str(int(code))+
-                           ' ('+rec['site']+', '+rec['resource']+').')
+                           ' ('+rec['site']+', '+rec['resource']+').',
+                           important=int(code)>=400)
             mime=response.get('mimeType')
             rec['mime']=mime.lower() if isinstance(mime,str) else ''
             self.mime=rec['mime']
@@ -1213,7 +1221,8 @@ class AccountLoginNetworkProbe:
             rec['failed']=kind
             self.failed=kind
             self.failure_count+=1
-            self._emit('NETWORK <- '+kind+' ('+rec['site']+').')
+            self._emit('NETWORK <- '+kind+' ('+rec['site']+').',
+                       important=True)
         elif name=='Network.loadingFinished' and ident in self.requests:
             rec=self.requests[ident]
             if (rec['status'] is not None and rec['status']>=400 and
@@ -1225,14 +1234,16 @@ class AccountLoginNetworkProbe:
             self.javascript_exceptions+=1
             if self.javascript_exceptions<=2:
                 self._emit('BROWSER <- JavaScript exception detected '
-                           '(details withheld; no server response implied).')
+                           '(details withheld; no server response implied).',
+                           important=True)
         elif name=='Log.entryAdded':
             entry=data.get('entry') or {}
             if entry.get('level')=='error':
                 self.javascript_exceptions+=1
                 if self.javascript_exceptions<=2:
                     self._emit('BROWSER <- Page console error '
-                               '(details withheld for account safety).')
+                               '(details withheld for account safety).',
+                               important=True)
 
     def _command(self,method,params=None,timeout=3):
         self.sequence+=1
@@ -1279,10 +1290,11 @@ class AccountLoginNetworkProbe:
                 message=account_login_safe_server_message(body)
                 if code:
                     self.error_code=code
-                    self._emit('SERVER <- Error code: '+code+'.')
+                    self._emit('SERVER <- Error code: '+code+'.',important=True)
                 if message:
                     self.error_message=message
-                    self._emit('SERVER <- Error message: '+message+'.')
+                    self._emit('SERVER <- Error message: '+message+'.',
+                               important=True)
                 if code or message:
                     break
             except (OSError,ValueError,RuntimeError,TimeoutError,
