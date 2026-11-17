@@ -17,7 +17,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import uuid
 
 TCP_HOST = "game-us.habbo.com"
 TCP_PORT = 30000
@@ -199,6 +198,17 @@ class _ArcFour:
         return bytes(result)
 
 
+def profile_fingerprint(account_id):
+    """Stable, independently scoped AIR-compatible identifier for one profile.
+
+    This is a non-secret device label, not a login credential. Do not use a
+    password, session cookie or SSO ticket as its input.
+    """
+    if not isinstance(account_id, str) or not re.fullmatch("[0-9a-f]{12}", account_id):
+        raise ValueError("Invalid account profile")
+    return "~" + hashlib.md5(("HabboCompanion:profile:" + account_id).encode("ascii")).hexdigest()
+
+
 class HabboTcpSession:
     """A per-profile game socket, with independently maintained cipher state."""
     def __init__(self, account_id, status=None, packet=None):
@@ -328,7 +338,7 @@ class HabboTcpSession:
             self.on_status("Encrypted handshake complete; authenticating SSO")
             self._send(TCP_OUT["version"],
                        struct.pack(">i", 401) + _string("app:/") + _string(TCP_CLIENT_DATA))
-            fingerprint = "~" + hashlib.md5(str(uuid.uuid4()).encode()).hexdigest()
+            fingerprint = profile_fingerprint(self.account_id)
             self._send(TCP_OUT["unique"], _string(fingerprint) + _string("WIN/51,1,1,5"))
             elapsed = int((time.monotonic() - started) * 1000)
             self._send(TCP_OUT["sso"], _string(ticket) + struct.pack(">i", min(elapsed, 2147483647)))
