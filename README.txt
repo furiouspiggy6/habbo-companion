@@ -601,3 +601,28 @@ Warning: This mapping is sourced from a third-party renderer and the
 November official AIR platform marker is not yet verified. Passing tests
 does NOT guarantee successful Habbo.com login. Test Account 1 only;
 share the redacted log, not cookies or SSO tickets.
+
+
+Version 1.1.51 — Automatically import Habbo session cookies
+-----------------------------------------------------------
+Direct TCP now has "Auto-import session and connect (selected account)"
+and "Auto-import and connect all" actions.
+
+Instead of finding session.id and browser_token in Brave DevTools,
+Companion reuses the appropriate account's own saved browser profile or
+starts it headlessly. If the user saved login credentials in Accounts,
+Companion attempts the ordinary Habbo website login automatically,
+reads ONLY the two official Habbo.com cookies via local browser
+automation, verifies them against Habbo.com's official ticket endpoint,
+and stores them in per-account Windows Credential Manager. It then
+starts normal direct AIR TCP login. An expired saved session (401/403)
+gets a single automatic renewal attempt.
+
+No cookies, passwords, SSO tickets or other site data go into app
+settings, account labels, command lines, logs or GitHub. All browser
+profiles and session storage are isolated by account. Headless helper
+browsers started by Companion are closed after import.
+
+One-time setup: Accounts -> Save login securely for each profile. When
+Habbo requires CAPTCHA, MFA or verification, use Accounts -> Open
+account login and complete it normally. No login/security bypass.
