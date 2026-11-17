@@ -4768,12 +4768,19 @@ class ChatOverlayApp:
             pass
         style.configure('Panel.TFrame',background=p['background'])
         style.configure('Card.TFrame',background=p['surface'])
+        style.configure('TLabel',background=p['background'],
+                        foreground=p['text'],font=('Segoe UI',10))
         style.configure('Panel.TLabel',background=p['background'],
                         foreground=p['text'],font=('Segoe UI',10))
         style.configure('Card.TLabel',background=p['surface'],
                         foreground=p['text'],font=('Segoe UI',10))
         style.configure('Muted.TLabel',background=p['background'],
                         foreground=p['muted'],font=('Segoe UI',9))
+        style.configure('TCheckbutton',background=p['background'],
+                        foreground=p['text'],font=('Segoe UI',10),padding=5)
+        style.map('TCheckbutton',
+                  background=[('active',p['background'])],
+                  foreground=[('disabled',p['faint'])])
         style.configure('Panel.TCheckbutton',background=p['background'],
                         foreground=p['text'],font=('Segoe UI',10),padding=5)
         style.map('Panel.TCheckbutton',
@@ -4810,6 +4817,10 @@ class ChatOverlayApp:
                         background=p['raised'],padding=5)
         style.configure('TScale',background=p['background'],
                         troughcolor=p['raised'])
+        style.configure('TLabelframe',background=p['background'],
+                        bordercolor=p['border'])
+        style.configure('TLabelframe.Label',background=p['background'],
+                        foreground=p['text'])
         style.configure('Treeview',background=p['surface'],
                         fieldbackground=p['surface'],foreground=p['text'],
                         rowheight=34,borderwidth=0,relief='flat',
@@ -5179,10 +5190,10 @@ class ChatOverlayApp:
         tk.Label(f,text='DIRECT HABBO TCP (EXPERIMENTAL)',
                  font=('Segoe UI Semibold',17),bg=COMPANION_UI['background'],
                  fg=COMPANION_UI['text']).pack(anchor='w',pady=(0,8))
-        tk.Label(f,text='Uses a real connection to game-us.habbo.com:30000. '
-                 'No Brave, Habbo.exe, launcher or G-Earth is started. '
-                 'A valid official SSO ticket is still required; server login '
-                 'is confirmed only after the Habbo AuthenticationOK packet.',
+        tk.Label(f,text='Connect directly to the official game server without '
+                 'launching Habbo.exe or G-Earth. Auto-import may briefly open '
+                 'your private Brave profile in the background to request an '
+                 'SSO ticket. Authentication is confirmed by Habbo, not the website.',
                  bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',
                  wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
         self.tcp_table=ttk.Treeview(
@@ -5197,11 +5208,10 @@ class ChatOverlayApp:
                   style='Panel.TLabel').pack(anchor='w')
         ttk.Entry(f,textvariable=self.tcp_ticket_var,show='*').pack(
             fill='x',pady=(3,7))
-        tk.Label(f,text='Automatic option: use the saved login for this account '
-                 'to import session.id and browser_token into Windows Credential '
-                 'Manager without opening Developer Tools. The existing '
-                 'isolated browser is reused, or a temporary headless one is '
-                 'opened. Habbo CAPTCHA/MFA may require a manual login once.',
+        tk.Label(f,text='Recommended: Auto-import a new ticket from the existing '
+                 'signed-in browser profile. Legacy session cookies are optional; '
+                 'an isolated headless browser can be started if needed. '
+                 'Habbo CAPTCHA or email verification remains manual.',
                  bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',
                  wraplength=615).pack(anchor='w',pady=(1,7))
         for name,var in (('session.id',self.tcp_session_id_var),
@@ -5219,6 +5229,7 @@ class ChatOverlayApp:
         ttk.Button(row,text='Forget saved session',
                    command=self._tcp_forget_session).pack(side='left')
         ttk.Button(f,text='Auto-import session and connect (selected account)',
+                    style='Primary.TButton',
                    command=self._tcp_auto_import_selected).pack(
                    anchor='w',pady=(1,7))
         ttk.Checkbutton(
@@ -6637,7 +6648,8 @@ class ChatOverlayApp:
         ttk.Entry(f,textvariable=self.update_manifest_var,width=65).pack(fill='x',pady=(4,6))
         bar=ttk.Frame(f,style='Panel.TFrame');bar.pack(fill='x',pady=(0,14))
         ttk.Button(bar,text='Save source',command=self._save_update_source).pack(side='left',padx=(0,7))
-        ttk.Button(bar,text='Check online',command=self._check_online_update).pack(side='left')
+        ttk.Button(bar,text='Check online',style='Primary.TButton',
+                   command=self._check_online_update).pack(side='left')
         ttk.Label(f,text='Online updates are inactive until you enter a trusted HTTPS release-manifest URL. Updates are never installed silently.',
                   style='Panel.TLabel',wraplength=510).pack(anchor='w',pady=(0,14))
         ttk.Label(f,textvariable=self.update_status,style='Panel.TLabel',wraplength=510).pack(anchor='w',fill='x',pady=(0,10))
@@ -6816,16 +6828,17 @@ class ChatOverlayApp:
         tk.Label(holder,text='Use Companion for everything. The working G-Earth engine starts normally '
                  'then hides after its backend is ready. Its original window is troubleshooting only.',
                  fg=COMPANION_UI['muted'],bg=COMPANION_UI['background'],wraplength=630,justify='left').pack(anchor='w',pady=(0,9))
-        tk.Label(holder,textvariable=self.engine_status_var,bg=COMPANION_UI['background'],fg='#76caab',
+        tk.Label(holder,textvariable=self.engine_status_var,bg=COMPANION_UI['background'],fg=COMPANION_UI['success'],
                  font=('Segoe UI Semibold',10),wraplength=630,justify='left').pack(anchor='w',pady=(0,9))
         main=ttk.Frame(holder,style='Panel.TFrame')
         main.pack(fill='x',pady=(0,9))
-        ttk.Button(main,text='Start engine',command=self._connect_habbo_air).pack(side='left',padx=(0,7))
+        ttk.Button(main,text='Start engine',style='Primary.TButton',
+                   command=self._connect_habbo_air).pack(side='left',padx=(0,7))
         ttk.Button(main,text='Launch Habbo',command=self._launch_habbo_with_gearth).pack(side='left',padx=(0,7))
         ttk.Button(main,text='Connect packet tools (manual)',command=self._connect_gearth).pack(side='left')
         tk.Label(holder,text='Packet tools attach automatically when safe. Coffee Pass Loop can '
                  'also connect directly; this manual button is only for troubleshooting.',
-                 fg='#93a7bc',bg=COMPANION_UI['background'],font=('Segoe UI',9),
+                 fg=COMPANION_UI['muted'],bg=COMPANION_UI['background'],font=('Segoe UI',9),
                  wraplength=625,justify='left').pack(anchor='w',pady=(0,8))
         small=ttk.Frame(holder,style='Panel.TFrame')
         small.pack(fill='x',pady=(0,8))
@@ -6898,7 +6911,7 @@ class ChatOverlayApp:
         self.packet_tree.pack(side='left',fill='both',expand=True)
         self.packet_tree.bind('<<TreeviewSelect>>',self._select_packet)
         ttk.Label(holder,text='Selected packet',style='Panel.TLabel').pack(anchor='w',pady=(7,2))
-        self.packet_details=tk.Text(holder,height=6,wrap='word',bg='#0a1120',fg='#deedff',
+        self.packet_details=tk.Text(holder,height=6,wrap='word',bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],
                                     relief='flat',font=('Consolas',9),insertbackground='white')
         self.packet_details.pack(fill='x')
         actions=ttk.Frame(holder,style='Panel.TFrame');actions.pack(fill='x',pady=(8,0))
@@ -6950,7 +6963,7 @@ class ChatOverlayApp:
         ttk.Label(two,text='Packet text contains',style='Panel.TLabel').pack(side='left')
         ttk.Entry(two,textvariable=self.rule_contains_var).pack(side='left',fill='x',expand=True,padx=(8,0))
         ttk.Label(form,text='Replacement G-Earth expression (only for Replace):',style='Panel.TLabel').pack(anchor='w')
-        self.replace_expression=tk.Text(form,height=3,wrap='word',font=('Consolas',9),bg='#0a1120',fg='#dceeff',insertbackground='white')
+        self.replace_expression=tk.Text(form,height=3,wrap='word',font=('Consolas',9),bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],insertbackground='white')
         self.replace_expression.pack(fill='x',pady=(3,5))
         buttons=ttk.Frame(form,style='Panel.TFrame');buttons.pack(fill='x',pady=(0,6))
         ttk.Button(buttons,text='Add rule',command=self._add_manipulation_rule).pack(side='left',padx=(0,5))
@@ -6963,7 +6976,7 @@ class ChatOverlayApp:
         ttk.Label(send_row,text='Direction',style='Panel.TLabel').pack(side='left')
         ttk.Combobox(send_row,textvariable=self.inject_direction_var,values=('Outgoing','Incoming'),state='readonly',width=11).pack(side='left',padx=(6,12))
         ttk.Button(send_row,text='Load selected viewer packet',command=self._load_packet_for_sending).pack(side='left')
-        self.inject_expression=tk.Text(holder,height=3,wrap='word',font=('Consolas',9),bg='#0a1120',fg='#dceeff',insertbackground='white')
+        self.inject_expression=tk.Text(holder,height=3,wrap='word',font=('Consolas',9),bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],insertbackground='white')
         self.inject_expression.pack(fill='x',pady=(3,6))
         ttk.Button(holder,text='Send packet once',command=self._send_manual_packet).pack(anchor='w')
         repeat_row=ttk.Frame(holder,style='Panel.TFrame')
@@ -9780,7 +9793,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         if self.scroll_offset:
             cv.create_rectangle(x,22,x+min(maxw,420),49,fill='#23354c',outline='#405e7b')
             cv.create_text(x+10,35,text=f'OLDER CHAT  ·  {self.scroll_offset} newer message(s) below  ·  ↓ scroll for live',
-                           anchor='w',font=('Segoe UI',9,'bold'),fill='#e1f0ff')
+                           anchor='w',font=('Segoe UI',9,'bold'),fill=COMPANION_UI['text'])
 
     def _hotkeys(self):
         if os.name!='nt':return
