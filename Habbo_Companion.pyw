@@ -1122,30 +1122,38 @@ def account_capture_habbo_session_cookies(debug_port,check_visible_login=True):
         if state not in ('play','play-now','launch','signed_in','download'):
             raise ValueError('This Habbo browser profile is not signed in.')
     else:
-        # Do not depend on DOM inspection to recover an existing valid
-        # cookie. Restrict the target to the official www.habbo.com origin.
+        # A logged-in Habbo browser can be at habbo.com *or* www.habbo.com.
+        # Earlier versions rejected the bare-domain page, so cookie-first
+        # import failed even after a legitimate website sign-in.
         page=None
         for candidate in account_browser_pages(debug_port):
             try:
                 url=urllib.parse.urlsplit(candidate['url'])
+                approved=(url.scheme=='https' and
+                          url.hostname in ('habbo.com','www.habbo.com') and
+                          url.port in (None,443))
             except (ValueError,KeyError,TypeError):
-                continue
-            if (url.scheme=='https' and url.hostname=='www.habbo.com'
-                    and url.port in (None,443)):
+                approved=False
+            if approved:
                 page=candidate
                 break
         if page is None:
             raise ValueError('No official Habbo tab in this isolated browser.')
+    target=urllib.parse.urlsplit(page['url'])
+    if (target.scheme!='https' or
+        target.hostname not in ('habbo.com','www.habbo.com') or
+        target.port not in (None,443)):
+        raise ValueError('The selected tab is not a verified official Habbo origin.')
     ws=page['webSocketDebuggerUrl']
     parsed=urllib.parse.urlsplit(ws)
     if (parsed.scheme!='ws' or parsed.hostname!='127.0.0.1'
         or parsed.port!=int(debug_port)
         or not parsed.path.startswith('/devtools/page/')):
         raise ValueError('Account browser is not on its isolated local control port.')
-    # Network.getCookies returns HttpOnly entries and scopes the request to
-    # the URL below. Never evaluate website JavaScript to read them.
+    # Scope HttpOnly cookie extraction to the exact verified official origin
+    # of the account's browser tab. No unrelated websites or other profiles.
     result=account_cdp_call(ws,'Network.getCookies',{
-        'urls':['https://www.habbo.com/']
+        'urls':['https://'+target.hostname+'/']
     })
     cookies=result.get('cookies')
     if not isinstance(cookies,list) or len(cookies)>250:
