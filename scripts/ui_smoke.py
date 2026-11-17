@@ -9,6 +9,7 @@ import sys
 import tkinter as tk
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
