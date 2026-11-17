@@ -1,5 +1,26 @@
 # Habbo Companion
 
+## v1.1.70 — Select the IP on your own PC for the local protocol test
+
+Protocol Lab now has a **Your PC test IP** field. Use `127.0.0.1` or a
+private IPv4 address actually assigned to your Windows computer (for example,
+your machine's `192.168.x.x` LAN address). The mock server binds **to that
+same IP on this computer**, on a random port, and boofuzz talks only to that
+mock server. Public IPs, DNS names, wildcard binds, and other machines are
+not accepted. There is **no remote target** setting.
+
+**Official Habbo SSO is different.** The existing Direct TCP page can use a
+ticket from your normal signed-in account and attempt the official encrypted
+game handshake, but it stays pinned to Habbo's official endpoint.
+The official SSO ticket is **not** sent to the test IP. A random IP cannot
+authenticate your Habbo identity or produce a valid Habbo AIR encrypted
+handshake without running a compatible authorised game server.
+
+For a local-IP fuzz test, install `boofuzz==0.4.2` in Companion's Python,
+open Protocol Lab, enter your PC's address, and run the mock-server cases.
+Local results do not establish vulnerabilities in Habbo's real servers.
+
+
 ## Protocol Lab — passive G-Earth reader + local boofuzz (v1.1.69)
 
 Open **Protocol Lab** in the Companion sidebar. Start the usual G-Earth engine and
