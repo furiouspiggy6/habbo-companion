@@ -1,5 +1,41 @@
 # Habbo Companion
 
+## v1.1.71 — Fuzz a test server on another machine (authenticated)
+
+**Protocol Lab → Remote test machine** now accepts the IPv4 address and port of
+another computer or VM that you control, including a public IP. The other
+machine must run the included [lab_remote_server.py](lab_remote_server.py)
+helper and you must know its independently generated lab key.
+Companion authenticates **each** TCP connection with a fresh HMAC challenge
+*before* it sends any synthetic test packet. An unrecognised remote service
+never receives a fuzz payload. It is not an unrestricted network fuzzer.
+
+On the **test server machine**, download `lab_remote_server.py` from this
+repository, install Python 3, and in PowerShell run:
+
+```powershell
+$env:HABBO_LAB_KEY = (python -c "import secrets; print(secrets.token_hex(24))")
+$env:HABBO_LAB_KEY  # Copy this lab-only key privately to the Companion PC
+python lab_remote_server.py --listen 0.0.0.0 --port 39099
+```
+
+Using `0.0.0.0` deliberately exposes the authenticated test helper on all
+network interfaces of that test machine; prefer a specific address and restrict
+access to your Companion PC in its firewall. The key is not a Habbo credential.
+
+On the **Companion PC**, open Protocol Lab, enter the remote machine's numeric
+IPv4 address, TCP port (`39099` here), and the same lab-only key. Click
+**Run 20 remote lab fuzz cases**. boofuzz writes its test database under
+`%APPDATA%\HabboViewChat\fuzz_lab`. Click **Analyse results with local
+Ollama** for an optional explanation.
+
+The remote helper uses a deliberately small synthetic packet grammar.
+These tests cannot find vulnerabilities in the live Habbo service. Real
+Habbo SSO tickets, browser cookies and encrypted Direct TCP connections
+remain pinned to official endpoints and are **never forwarded to the
+remote lab**. If the helper or key is unavailable, fuzzing refuses to start.
+
+
 ## v1.1.70 — Select the IP on your own PC for the local protocol test
 
 Protocol Lab now has a **Your PC test IP** field. Use `127.0.0.1` or a
