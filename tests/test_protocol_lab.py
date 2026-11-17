@@ -1,6 +1,7 @@
 """Offline tests for passive G-Earth metadata + loopback-only boofuzz lab."""
 import ast
 import importlib.util
+import ipaddress
 import socketserver
 import tempfile
 import threading
@@ -46,20 +47,36 @@ class ProtocolLabTests(unittest.TestCase):
         self.assertFalse(self.validator(b'\\x00'))
         self.assertFalse(self.validator(b''))
 
-    def test_runtime_hardcodes_loopback(self):
+    def test_runtime_accepts_only_an_address_owned_by_this_pc(self):
         fuzzer=next(node for node in TREE.body if isinstance(node,ast.FunctionDef)
                     and node.name=='run_local_boofuzz')
         calls=[node for node in ast.walk(fuzzer) if isinstance(node,ast.Call)]
         tcp_calls=[node for node in calls
                    if isinstance(node.func,ast.Name) and node.func.id=='TCPSocketConnection']
         self.assertEqual(len(tcp_calls),1)
-        self.assertIsInstance(tcp_calls[0].args[0],ast.Constant)
-        self.assertEqual(tcp_calls[0].args[0].value,'127.0.0.1')
+        self.assertIsInstance(tcp_calls[0].args[0],ast.Name)
+        self.assertEqual(tcp_calls[0].args[0].id,'bind_ip')
         binds=[node for node in calls
                if isinstance(node.func,ast.Name) and node.func.id=='LoopbackServer']
         self.assertEqual(len(binds),1)
         self.assertIsInstance(binds[0].args[0],ast.Tuple)
-        self.assertEqual(binds[0].args[0].elts[0].value,'127.0.0.1')
+        self.assertEqual(binds[0].args[0].elts[0].id,'bind_ip')
+        self.assertIn('validate_owned_lab_ip',ast.unparse(fuzzer))
+
+    def test_rejects_external_and_unassigned_targets(self):
+        func=next(node for node in TREE.body if isinstance(node,ast.FunctionDef)
+                  and node.name=='validate_owned_lab_ip')
+        namespace={'ipaddress':ipaddress}
+        exec(compile(ast.Module(body=[func],type_ignores=[]),
+                     str(SOURCE),'exec'),namespace)
+        validate=namespace['validate_owned_lab_ip']
+        self.assertEqual(validate('127.0.0.1'),'127.0.0.1')
+        self.assertEqual(validate('192.168.0.171'),'192.168.0.171')
+        for target in ('8.8.8.8','15.197.150.146','0.0.0.0','224.0.0.1',
+                       'example.com','fe80::1','169.254.1.1'):
+            with self.subTest(target=target):
+                with self.assertRaises(ValueError):
+                    validate(target)
 
     def test_existing_gearth_hook_remains_passive_for_lab(self):
         cls=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
@@ -74,17 +91,18 @@ class ProtocolLabTests(unittest.TestCase):
 
     @unittest.skipUnless(importlib.util.find_spec('boofuzz') is not None,
                          'boofuzz optional dependency not installed')
-    def test_local_boofuzz_executes_only_against_loopback(self):
+    def test_local_boofuzz_executes_only_against_pc_mock(self):
         nodes=[node for node in TREE.body if isinstance(node,ast.FunctionDef)
-               and node.name in ('validate_local_habbo_frame','run_local_boofuzz')]
+               and node.name in ('validate_local_habbo_frame','validate_owned_lab_ip','run_local_boofuzz')]
         namespace={'Path':Path,'threading':threading,'socketserver':socketserver,
-                   'datetime':datetime}
+                   'datetime':datetime,'ipaddress':ipaddress}
         exec(compile(ast.Module(body=nodes,type_ignores=[]),
                      str(SOURCE),'exec'),namespace)
         with tempfile.TemporaryDirectory() as temp:
             result=namespace['run_local_boofuzz'](seed_id=896,cases=3,output_dir=temp)
         self.assertGreater(result['requests'],0)
-        self.assertEqual(result['scope'],'localhost synthetic mock only')
+        self.assertEqual(result['scope'],'this-PC synthetic mock only')
+        self.assertEqual(result['bind_ip'],'127.0.0.1')
         self.assertEqual(result['requests'],result['accepted']+result['rejected'])
 
 if __name__=='__main__':
