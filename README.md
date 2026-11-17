@@ -12,18 +12,18 @@ Export the aggregated, redacted metadata as JSON when useful.
 For automated tests, install the optional dependency into **the same Python
 interpreter running Companion**:
 
-\`\`\`powershell
+```powershell
 python -m pip install boofuzz==0.4.2
-\`\`\`
+```
 
 Click **Run 60 local boofuzz cases** to create a temporary synthetic TCP server
-bound to \`127.0.0.1\` on a random port. boofuzz mutates a synthetic
+bound to `127.0.0.1` on a random port. boofuzz mutates a synthetic
 4-byte frame length / 2-byte message ID / 2-byte text length format. The numeric
 seed can come from passively observed outgoing packet IDs, but **no captured
 payload is ever replayed or forwarded to the fuzzer**. The boofuzz database
-is saved under \`%APPDATA%\\HabboViewChat\\fuzz_lab\`. Click **Analyse results
+is saved under `%APPDATA%\HabboViewChat\fuzz_lab`. Click **Analyse results
 with local Ollama** to send only aggregate *mock-server* results to
-\`http://127.0.0.1:11434\`, using \`qwen2.5-coder:7b\`.
+`http://127.0.0.1:11434`, using `qwen2.5-coder:7b`.
 
 **Safety boundary:** This mode has no setting for a remote test target. It does
 not send malformed packets to G-Earth or Habbo and cannot establish a finding
@@ -65,7 +65,7 @@ the legacy AIR RSA/Diffie-Hellman handshake and tracks distinct account sockets,
 reporting **authenticated** only upon the actual server AuthenticationOK packet.
 
 **Login requirement:** Habbo still requires a valid SSO ticket. You can either
-paste a ticket or provide authenticated \`session.id\` and \`browser_token\`
+paste a ticket or provide authenticated `session.id` and `browser_token`
 values from **your own** Habbo.com session. To avoid opening a browser at each
 launch, you may choose to save these session cookies in Windows Credential
 Manager under the selected account profile. Companion requests fresh tickets
@@ -178,7 +178,7 @@ and packet ID / handshake stage log, not any credentials.
 
 ## v1.1.48 — Public-config redirect and handshake byte diagnostics
 
-Two live tests with the \`2016 PRODUCTION\`/Habbo-Sky message registry
+Two live tests with the `2016 PRODUCTION`/Habbo-Sky message registry
 timed out without a recognised first Diffie-Hellman response. The
 Habbo-Sky registry comes from a **2016 retro emulator**, not a current
 Habbo.com 2026 client. It must not be represented as authoritative for
@@ -187,18 +187,18 @@ the live hotel.
 This release restores the newer **community AIR mapping** from
 devlyresh/Habbo-Bot (which previously produced a server disconnect packet
 instead of a silent timeout) while retaining the publicly reported
-\`WIN63-202611041140-327405090\` compatibility build. This is a **single
+`WIN63-202611041140-327405090` compatibility build. This is a **single
 hypothesis for live testing**, not verified current packet IDs. No automatic
 cycling, repeat retries or protocol probing is implemented.
 
 The public Habbo game-data endpoint
-\`https://www.habbo.com/gamedata/external_variables\`
+`https://www.habbo.com/gamedata/external_variables`
 now follows only an official same-origin SHA-1-style content-hash redirect.
 Previously it rejected all redirects. Its response can exceed 64KiB;
 the new bounded 512KiB limit allows fetching the full document.
 The SSO-ticket HTTP endpoint **continues to reject all redirects**.
 The public variables may contain Flash asset versions but do not reliably
-state the active AIR \`WIN63\` version, so a successful data fetch must not
+state the active AIR `WIN63` version, so a successful data fetch must not
 be labelled a verified game version.
 
 For a first-handshake timeout, the log now distinguishes
@@ -218,11 +218,11 @@ process is launched by Direct TCP.
 ## v1.1.49 — Habbo Classic WSS connectivity probe (no account required)
 
 After v1.1.48 produced **zero game-server bytes** during the raw
-\`game-us.habbo.com:30000\` AIR handshake, inspection of September 2026
+`game-us.habbo.com:30000` AIR handshake, inspection of September 2026
 Habbo Classic client source found a **different transport**:
-\`wss://game-us.habbo.com:30001/websocket\`, with required
-\`Sec-WebSocket-Protocol: habbo-classic\`. Its packaged release manifest
-identifies \`FLASH29\`. Sources:
+`wss://game-us.habbo.com:30001/websocket`, with required
+`Sec-WebSocket-Protocol: habbo-classic`. Its packaged release manifest
+identifies `FLASH29`. Sources:
 - [Habbo Classic Hotels.json](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/02_app_estratto/Hotels.json)
 - [WebSocket transport implementation](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/05_sorgenti_per_classe/_unmatched/UnkEventDispatcherWrapperSubclass_28a7b5.js)
 - [AIR versus Classic comparison](https://github.com/SimoLeoLife/habbo-decompiled/blob/main/habbo-classic-win/CHANGES_AIR15_CLASSIC.md)
@@ -231,7 +231,7 @@ The **Direct TCP** tab now includes **Test Classic WSS connection (no
 login)**. The probe uses only the standard Python library, establishes
 certificate-verified TLS, sends a single WebSocket HTTP Upgrade request
 to that fixed Habbo.com hostname, validates the HTTP 101 response,
-\`Sec-WebSocket-Accept\` and negotiated \`habbo-classic\` subprotocol,
+`Sec-WebSocket-Accept` and negotiated `habbo-classic` subprotocol,
 then sends a correctly masked WebSocket close and disconnects.
 
 **No cookies, SSO tickets, saved accounts, game packets or passwords are
@@ -242,7 +242,7 @@ The raw AIR TCP mode remains unchanged, and its authentication remains
 unverified.
 
 **A successful WSS upgrade proves endpoint and protocol reachability
-only**. It does NOT prove game login, correct \`FLASH29\` packet IDs,
+only**. It does NOT prove game login, correct `FLASH29` packet IDs,
 cryptographic negotiation, room state, or multi-account support. These
 would require separately implementing and testing the modern Classic
 binary protocol before offering a full headless login. No private
@@ -257,7 +257,7 @@ SSO ticket, connected to the official AIR TCP endpoint and received a
 waiting for the initial Diffie-Hellman reply.
 
 A repository using the **same November 4, 2026 WIN63 build identifier**
-labels incoming \`2935\` as **CLIENT_PING** and outgoing \`923\` as
+labels incoming `2935` as **CLIENT_PING** and outgoing `923` as
 **CLIENT_PONG**:
 - [November 2026 incoming header registry](https://github.com/plus-emulator/Volt-Renderer/blob/main/packages/communication/src/messages/incoming/IncomingHeader.ts)
 - [November 2026 outgoing header registry](https://github.com/plus-emulator/Volt-Renderer/blob/main/packages/communication/src/messages/outgoing/OutgoingHeader.ts)
@@ -270,8 +270,8 @@ this same November 2026 mapping rather than mixing older version mappings.
 These numeric mappings were **independently implemented**, not copied
 source code.
 
-The previously hardcoded \`FLASH25\` platform label (observed in a 2025 AIR
-client) has been replaced with \`FLASH31\`, the platform label seen in the
+The previously hardcoded `FLASH25` platform label (observed in a 2025 AIR
+client) has been replaced with `FLASH31`, the platform label seen in the
 latest publicly inspected official AIR October 2026 client source:
 [Oct 15 ClientHello](https://github.com/habbonoob/Client/blob/main/packages/client-WIN63-202610151745-318700621/src/com/sulake/habbo/communication/messages/outgoing/handshake/ClientHelloMessageComposer.ts).
 The exact platform label for the November 4 official AIR build has **not**
@@ -291,21 +291,21 @@ subsequent log will show whether the DH handshake progresses.
 ## v1.1.51 — Automatic session import for Direct TCP
 
 Direct TCP can now collect the exact two Habbo.com website cookies
-(\`session.id\` and \`browser_token\`) **without asking the user to find or
+(`session.id` and `browser_token`) **without asking the user to find or
 paste them in browser Developer Tools**.
 
 With **Auto-import session and connect (selected account)** or
 **Auto-import and connect all**, Companion:
 1. Uses this account's own isolated Brave/Chrome/Edge browser profile.
    An already-running profile is reused. Otherwise it opens a temporary
-   \`--headless=new\` browser from that account's private profile folder,
+   `--headless=new` browser from that account's private profile folder,
    with a loopback-only Chrome DevTools debugging port.
 2. Reuses the logged-in website session or attempts a *single* ordinary
    official-site sign-in using credentials previously saved in the
    **Accounts → Save login securely** Windows vault feature.
 3. Confirms the website shows authenticated controls, then calls
-   Chrome DevTools \`Network.getCookies\` scoped **only** to
-   \`https://www.habbo.com/\`. It extracts only the exact named,
+   Chrome DevTools `Network.getCookies` scoped **only** to
+   `https://www.habbo.com/`. It extracts only the exact named,
    HTTPS-secure Habbo cookies, ignoring other sites' entries.
 4. Validates both tokens through Habbo.com's official HTTPS SSO endpoint.
    Only a valid ticket causes them to be saved in the account-specific
@@ -341,7 +341,7 @@ capture still needs testing on Windows with Habbo.com.
 
 Live v1.1.51 logs confirmed one direct TCP account was authenticated and
 receiving regular keepalive/game packets for minutes, while a second account
-(\`5991c2\` prefix in the user's local log) created an isolated background
+(`5991c2` prefix in the user's local log) created an isolated background
 browser and **immediately** failed the website-sign-in check. It did
 not reach direct TCP at all.
 
@@ -351,9 +351,9 @@ incorrectly appear unsigned-in. The revised flow:
 
 1. Start or reuse only this profile's isolated browser on its existing
    loopback-only DevTools port.
-2. Read only \`session.id\` and \`browser_token\` from an HTTPS
-   \`www.habbo.com\` page in that isolated profile via
-   \`Network.getCookies\`. A matching website UI is no longer required
+2. Read only `session.id` and `browser_token` from an HTTPS
+   `www.habbo.com` page in that isolated profile via
+   `Network.getCookies`. A matching website UI is no longer required
    **for this recovery step**.
 3. Immediately verify the cookies with a fresh ticket from the official
    Habbo.com HTTPS SSO API. Only valid first-party cookies are written
