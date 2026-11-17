@@ -819,7 +819,7 @@ def account_login_diagnostic(websocket_url):
 # saved login via its visible form; only a boolean readiness result is returned.
 HABBO_LOGIN_INPUT_READY_JS=r'''(() => {
   if (location.protocol!=='https:' ||
-      !/(^|\\.)habbo\\.com$/i.test(location.hostname))
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
     return {kind:'unverified-page'};
   const active=document.activeElement;
   if (!active || active.tagName?.toLowerCase()!=='input')
