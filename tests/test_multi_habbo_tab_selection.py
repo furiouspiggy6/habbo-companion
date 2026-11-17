@@ -101,7 +101,10 @@ class MultiHabboTabTests(unittest.TestCase):
     def test_no_credential_or_cookie_dump_added_to_diagnostics(self):
         self.assertNotIn('document.cookie',CODE)
         self.assertNotIn('Network.getAllCookies',CODE)
-        self.assertNotIn('Network.getCookies',CODE)
+        # Explicit, account-scoped import now needs the cookie API, but only
+        # for the official Habbo HTTPS origin, never a full-browser dump.
+        self.assertIn("'Network.getCookies'",CODE)
+        self.assertIn("'urls':['https://www.habbo.com/']",CODE)
         self.assertIn("'inspect_error':'Browser inspection failed'",CODE)
 
 

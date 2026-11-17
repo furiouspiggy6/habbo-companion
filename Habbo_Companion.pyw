@@ -977,6 +977,142 @@ def account_fetch_ticket_from_signed_in_profile(debug_port):
     return account_parse_official_ticket_response(obj.get('value'))
 
 
+def account_capture_habbo_session_cookies(debug_port):
+    """Read only the two requested cookies from an authenticated account tab.
+
+    Uses Chromium's supported DevTools cookie API (including HttpOnly cookies)
+    on the existing isolated Companion browser profile. Never reads other
+    browser profiles or dumps the full cookie jar to logs, disk or UI.
+    """
+    page=account_habbo_page(debug_port)
+    if page is None or page.get('_inspect_error'):
+        raise ValueError('Companion account browser is not available or inspectable.')
+    state=page.get('_preflight_step',{}).get('kind')
+    if state not in ('play','play-now','launch','signed_in','download'):
+        raise ValueError('This Habbo browser profile is not signed in.')
+    ws=page['webSocketDebuggerUrl']
+    parsed=urllib.parse.urlsplit(ws)
+    if (parsed.scheme!='ws' or parsed.hostname!='127.0.0.1'
+        or parsed.port!=int(debug_port)
+        or not parsed.path.startswith('/devtools/page/')):
+        raise ValueError('Account browser is not on its isolated local control port.')
+    # Network.getCookies returns HttpOnly entries and scopes the request to
+    # the URL below. Never evaluate website JavaScript to read them.
+    result=account_cdp_call(ws,'Network.getCookies',{
+        'urls':['https://www.habbo.com/']
+    })
+    cookies=result.get('cookies')
+    if not isinstance(cookies,list) or len(cookies)>250:
+        raise ValueError('Habbo cookie response is unavailable or invalid.')
+    found={}
+    for cookie in cookies:
+        if not isinstance(cookie,dict):
+            continue
+        name=cookie.get('name')
+        if name not in ('session.id','browser_token'):
+            continue
+        domain=cookie.get('domain')
+        if not isinstance(domain,str) or domain.lower() not in (
+                'www.habbo.com','habbo.com','.habbo.com'):
+            continue
+        if cookie.get('secure') is not True:
+            continue
+        val=cookie.get('value')
+        if (not isinstance(val,str) or not 1<=len(val)<=900
+            or any(ord(ch)<33 or ord(ch)>126 or ch in ';,\r\n'
+                   for ch in val)):
+            raise ValueError('One of the required Habbo cookies is invalid.')
+        if name in found and found[name]!=val:
+            raise ValueError('Ambiguous duplicate Habbo session cookie.')
+        found[name]=val
+    if len(found)!=2:
+        raise ValueError('Habbo session.id/browser_token not found in this '
+                         'signed-in account browser.')
+    return found['session.id'],found['browser_token']
+
+
+def account_import_session_automatically(account,report):
+    """On demand: headless isolated browser login -> two cookies -> fresh SSO.
+
+    Uses an existing local account browser if one is running. Otherwise,
+    starts this account's private Chromium profile in HEADLESS mode and
+    attempts the existing saved-login flow once. Website MFA/CAPTCHA are
+    never bypassed. The official ticket is validated before cookies are
+    persisted in the per-account Windows Credential Manager vault.
+    """
+    ident=account['id']
+    _account_credential_target(ident)
+    port=account_browser_debug_port(ident)
+    browser=account_login_browser()
+    if browser is None:
+        raise ValueError('Brave, Chrome or Edge is required to renew a website session.')
+    # Never attach the wrong account: dedicated browser profile & CDP port.
+    folder=APP_DIR/'account_browser_profiles'/ident
+    browser_url=validate_habbo_login_url(account['url'])
+    try:
+        credentials=account_saved_login_read(ident)
+    except (OSError,ValueError):
+        raise ValueError('Could not read the saved login for this account.') from None
+    spawned=None
+    try:
+        try:
+            account_browser_pages(port)
+            report('Reusing the existing isolated account browser session.')
+        except (OSError,ValueError,TimeoutError,UnicodeError,
+                urllib.error.URLError):
+            folder.mkdir(parents=True,exist_ok=True)
+            command=account_browser_command(browser,folder,browser_url,port)
+            # Chromium can use its regular persistent profile while headless.
+            # A first-time captcha or 2FA needs the Accounts login window.
+            command.insert(-1,'--headless=new')
+            command.insert(-1,'--window-size=1280,900')
+            report('Opening this account in a private background browser.')
+            spawned=subprocess.Popen(
+                command,cwd=str(browser.parent),
+                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            for _ in range(24):
+                time.sleep(0.4)
+                try:
+                    account_browser_pages(port)
+                    break
+                except (OSError,ValueError,TimeoutError,UnicodeError,
+                        urllib.error.URLError):
+                    continue
+            else:
+                raise ValueError(
+                    'Background browser control unavailable. Open account '
+                    'login from Accounts to renew this profile.')
+        report('Checking the saved Habbo website sign-in.')
+        login_result=account_attempt_auto_play(
+            port,lambda _message:None,credentials=credentials,login_only=True)
+        if login_result!='signed_in':
+            raise ValueError(
+                'Habbo website sign-in needs attention. Save the login under '
+                'Accounts, or use Open account login for CAPTCHA/2FA once.')
+        report('Habbo signed in; importing session cookies without Developer Tools.')
+        cookies=account_capture_habbo_session_cookies(port)
+        # Verify the cookies by obtaining a real one-time ticket before saving.
+        raw_ticket=fetch_habbo_sso_ticket(*cookies)
+        ticket=account_parse_official_ticket_response(raw_ticket)
+        account_session_cookie_write(ident,*cookies)
+        report('Official session validated and saved in Windows vault.')
+        return ticket
+    finally:
+        # Only close a browser process created by this invocation. Never
+        # close a user-opened browser or another account's browser.
+        if spawned is not None:
+            try:
+                page=account_habbo_page(port)
+                if page:
+                    account_cdp_call(page['webSocketDebuggerUrl'],
+                                     'Browser.close',timeout=2)
+            except (OSError,ValueError,TimeoutError,RuntimeError):
+                try:
+                    spawned.terminate()
+                except OSError:
+                    pass
+
+
 def account_is_native_habbo_window(title):
     """Strict native AIR title filter; excludes Habbo webpages and Launcher."""
     return bool(re.match(r'^HabboAir(?:Plus)?(?:\b|[\s\[\-])',
@@ -2703,9 +2839,11 @@ class ChatOverlayApp:
                   style='Panel.TLabel').pack(anchor='w')
         ttk.Entry(f,textvariable=self.tcp_ticket_var,show='*').pack(
             fill='x',pady=(3,7))
-        tk.Label(f,text='Alternatively, provide existing Habbo.com session '
-                 'cookies once. They can be stored in Windows Credential '
-                 'Manager and used for later SSO requests until they expire.',
+        tk.Label(f,text='Automatic option: use the saved login for this account '
+                 'to import session.id and browser_token into Windows Credential '
+                 'Manager without opening Developer Tools. The existing '
+                 'isolated browser is reused, or a temporary headless one is '
+                 'opened. Habbo CAPTCHA/MFA may require a manual login once.',
                  bg='#121a28',fg='#9db7cb',justify='left',
                  wraplength=615).pack(anchor='w',pady=(1,7))
         for name,var in (('session.id',self.tcp_session_id_var),
@@ -2722,6 +2860,9 @@ class ChatOverlayApp:
                    command=self._tcp_save_session).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Forget saved session',
                    command=self._tcp_forget_session).pack(side='left')
+        ttk.Button(f,text='Auto-import session and connect (selected account)',
+                   command=self._tcp_auto_import_selected).pack(
+                   anchor='w',pady=(1,7))
         ttk.Checkbutton(
             f,
             text='Automatically connect saved TCP accounts when Companion opens',
@@ -2740,6 +2881,8 @@ class ChatOverlayApp:
         row.pack(fill='x',pady=(0,9))
         ttk.Button(row,text='Disconnect all',
                    command=self._tcp_disconnect_all).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Auto-import and connect all',
+                   command=self._tcp_auto_import_all).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Refresh account list',
                    command=self._tcp_render).pack(side='left')
         tk.Label(
@@ -2761,10 +2904,12 @@ class ChatOverlayApp:
                              bg='#0b1422',fg='#a9c9db',
                              relief='flat',font=('Consolas',9))
         self.tcp_log.pack(fill='x',pady=(2,7))
-        tk.Label(f,text='Website authentication still requires a valid '
-                 'Habbo.com session. Saved login passwords alone cannot create '
-                 'one here. Sessions expire, and Habbo may change packet IDs '
-                 'or reject unofficial clients; no anti-bot bypass is provided.',
+        tk.Label(f,text='Automatic session import uses your own separate '
+                 'Habbo account browser and any login already saved in the '
+                 'Accounts tab. It never reads your regular Brave profile. '
+                 'Cookies stay in Windows Credential Manager, not settings '
+                 'or logs. CAPTCHA/2FA and expired or incorrect passwords '
+                 'still require the normal official sign-in process.',
                  bg='#121a28',fg='#8ea9c1',justify='left',
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
@@ -2875,7 +3020,20 @@ class ChatOverlayApp:
         # prompt for credentials, or launch a game executable.
         self._tcp_connect_all()
 
-    def _tcp_connect_one(self, account, use_form=False):
+    def _tcp_auto_import_selected(self):
+        account=self._tcp_selected()
+        if account is not None:
+            self._tcp_connect_one(account,auto_capture=True)
+            self._tcp_render()
+
+    def _tcp_auto_import_all(self):
+        for account in self._account_profiles:
+            self._tcp_connect_one(account,auto_capture=True)
+        self._tcp_render()
+        self.tcp_status_var.set('Requested account-specific automatic session '
+                                'imports; each uses its own isolated profile.')
+
+    def _tcp_connect_one(self, account, use_form=False, auto_capture=False):
         ident=account['id']
         if ident in self._tcp_inflight:
             return
@@ -2902,34 +3060,69 @@ class ChatOverlayApp:
                 cookies=(a,b)
             self.tcp_session_id_var.set('')
             self.tcp_browser_token_var.set('')
-        if ticket is None:
+        if not auto_capture and ticket is None:
             ticket=self._direct_ticket_queue.pop(ident,None)
-        if ticket is None and cookies is None:
+        if not auto_capture and ticket is None and cookies is None:
             try:
                 cookies=account_session_cookie_read(ident)
             except (OSError,ValueError):
                 self._tcp_states[ident]='Could not read saved Windows session'
                 return
-        if ticket is None and cookies is None:
-            self._tcp_states[ident]='No SSO ticket or saved website session'
+        if ticket is None and cookies is None and not auto_capture:
+            if use_form:
+                # An explicit Connect selected click may acquire a missing
+                # session using this account's saved browser login.
+                auto_capture=True
+            else:
+                self._tcp_states[ident]='No saved session; click Auto-import'
+                return
+        if auto_capture and any(
+            account_browser_debug_port(ident)==account_browser_debug_port(other['id'])
+            for other in self._account_profiles if other['id']!=ident):
+            self._tcp_states[ident]='Browser port conflict between accounts'
             return
         generation=self._tcp_generation.get(ident,0)+1
         self._tcp_generation[ident]=generation
         self._tcp_inflight.add(ident)
-        self._tcp_states[ident]='Starting direct TCP'
+        self._tcp_states[ident]=(
+            'Automatically importing website session' if auto_capture
+            else 'Starting direct TCP')
         threading.Thread(
             target=self._tcp_connect_worker,
-            args=(ident,account['label'],ticket,cookies,generation),
+            args=(dict(account),ticket,cookies,generation,auto_capture),
             daemon=True,name='companion-live-tcp-'+ident).start()
 
-    def _tcp_connect_worker(self,ident,label,ticket,cookies,generation):
+    def _tcp_connect_worker(self,account,ticket,cookies,generation,
+                            auto_capture=False):
+        ident=account['id']
         session=None
         try:
-            if ticket is None:
+            if auto_capture and ticket is None:
+                ticket=account_import_session_automatically(
+                    account,lambda message:self._packet_put(
+                        ('tcp_state',ident,generation,message)))
+            elif ticket is None:
                 self._packet_put(('tcp_state',ident,generation,
                                   'Requesting SSO from official Habbo.com HTTPS'))
-                raw=fetch_habbo_sso_ticket(*cookies)
-                ticket=account_parse_official_ticket_response(raw)
+                try:
+                    raw=fetch_habbo_sso_ticket(*cookies)
+                    ticket=account_parse_official_ticket_response(raw)
+                except HabboTcpError as exc:
+                    # Only automatically renew an explicitly expired website
+                    # session. Never loop retries, guess credentials or
+                    # suppress CAPTCHA/MFA failures.
+                    if ('Habbo rejected the website session' not in str(exc)
+                        or any(account_browser_debug_port(ident)==
+                               account_browser_debug_port(other['id'])
+                               for other in self._account_profiles
+                               if other['id']!=ident)):
+                        raise
+                    self._packet_put(('tcp_state',ident,generation,
+                                      'Stored Habbo session expired; '
+                                      'refreshing from this account browser'))
+                    ticket=account_import_session_automatically(
+                        account,lambda message:self._packet_put(
+                            ('tcp_state',ident,generation,message)))
             # The .username suffix in a Habbo launch link is display
             # metadata, not part of the game-server SSO credential.
             # Bobba Launcher and our Direct Classic mode both pass only
