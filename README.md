@@ -143,3 +143,42 @@ have changed its protocol since. The app does not brute-force headers,
 replay rejected tickets, bypass official login or use third-party servers.
 If the connection still fails, report only the redacted Direct TCP status
 and packet ID / handshake stage log, not any credentials.
+
+
+## v1.1.48 — Public-config redirect and handshake byte diagnostics
+
+Two live tests with the \`2016 PRODUCTION\`/Habbo-Sky message registry
+timed out without a recognised first Diffie-Hellman response. The
+Habbo-Sky registry comes from a **2016 retro emulator**, not a current
+Habbo.com 2026 client. It must not be represented as authoritative for
+the live hotel.
+
+This release restores the newer **community AIR mapping** from
+devlyresh/Habbo-Bot (which previously produced a server disconnect packet
+instead of a silent timeout) while retaining the publicly reported
+\`WIN63-202611041140-327405090\` compatibility build. This is a **single
+hypothesis for live testing**, not verified current packet IDs. No automatic
+cycling, repeat retries or protocol probing is implemented.
+
+The public Habbo game-data endpoint
+\`https://www.habbo.com/gamedata/external_variables\`
+now follows only an official same-origin SHA-1-style content-hash redirect.
+Previously it rejected all redirects. Its response can exceed 64KiB;
+the new bounded 512KiB limit allows fetching the full document.
+The SSO-ticket HTTP endpoint **continues to reject all redirects**.
+The public variables may contain Flash asset versions but do not reliably
+state the active AIR \`WIN63\` version, so a successful data fetch must not
+be labelled a verified game version.
+
+For a first-handshake timeout, the log now distinguishes
+**zero socket bytes received**, **partial frame header/body**, and
+**unexpected packet IDs** without logging payload bytes or credentials.
+This helps distinguish a completely unresponsive game service from a
+packet-format mismatch. Offline tests cover these cases.
+
+**Still experimental:** TCP connection and a genuine SSO ticket do
+not prove the game handshake, authentication or room interaction. A single
+real test on a user's machine is required. If the server still rejects
+the client, stop retrying and compare its protocol with an authorised
+capture from the genuine current AIR client. No Brave/Habbo.exe/G-Earth
+process is launched by Direct TCP.
