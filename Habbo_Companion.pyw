@@ -1630,6 +1630,26 @@ def account_submit_with_network_diagnostics(websocket_url,report):
         return account_focus_and_submit_login(websocket_url,ready)
 
 
+def account_login_input_event_counts(websocket_url):
+    """Return bounded browser input-event counters, never input contents."""
+    try:
+        result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_INPUT_EVENTS_RESULT_JS,
+            'returnByValue':True},timeout=2)
+        val=result.get('result',{}).get('value',{})
+        if not isinstance(val,dict) or val.get('kind')!='counts':
+            return None
+        out={}
+        for key in ('email','password','emailTrusted','passwordTrusted'):
+            n=val.get(key)
+            if type(n) is not int or not 0<=n<=10:
+                return None
+            out[key]=n
+        return out
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        return None
+
+
 def account_submit_saved_login(websocket_url,email,password,report=None):
     """Enter a saved login on official Habbo and verify before submission."""
     def fields_now():
@@ -1637,6 +1657,15 @@ def account_submit_saved_login(websocket_url,email,password,report=None):
             'expression':HABBO_LOGIN_FIELDS_JS,'returnByValue':True})
         return result.get('result',{}).get('value',{})
 
+    # Observe the browser's input events before entering credentials.
+    # Failure to instrument does not block legitimate website login.
+    if report is not None:
+        try:
+            account_cdp_call(websocket_url,'Runtime.evaluate',{
+                'expression':HABBO_LOGIN_INPUT_EVENTS_JS,
+                'returnByValue':True},timeout=2)
+        except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+            report('FORM <- Browser input event tracing unavailable.')
     for field,value in (('email',email),('password',password)):
         fields=fields_now()
         if fields.get('kind')!='form':
@@ -1664,6 +1693,15 @@ def account_submit_saved_login(websocket_url,email,password,report=None):
                 break
         else:
             return False
+    if report is not None:
+        counts=account_login_input_event_counts(websocket_url)
+        if counts is None:
+            report('FORM <- Browser input event counts unavailable.')
+        else:
+            report('FORM <- Email input events '+str(counts['email'])+
+                   ' (trusted '+str(counts['emailTrusted'])+
+                   '); password input events '+str(counts['password'])+
+                   ' (trusted '+str(counts['passwordTrusted'])+').')
     # The form can move or enable its submit button after input changes.
     fields=fields_now()
     if fields.get('kind')!='form':
