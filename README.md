@@ -304,3 +304,46 @@ actual game-server AuthenticationOK packet.
 The new session-import flow is validated with offline CDP, profile
 isolation, headless-launch, and vault-write tests. Live new-login
 capture still needs testing on Windows with Habbo.com.
+
+
+## v1.1.52 — Fix automatic second-account session import
+
+Live v1.1.51 logs confirmed one direct TCP account was authenticated and
+receiving regular keepalive/game packets for minutes, while a second account
+(\`5991c2\` prefix in the user's local log) created an isolated background
+browser and **immediately** failed the website-sign-in check. It did
+not reach direct TCP at all.
+
+The old auto-import checked for a visible Habbo Play/avatar menu *before*
+trying existing session cookies, so an unrecognised site layout could
+incorrectly appear unsigned-in. The revised flow:
+
+1. Start or reuse only this profile's isolated browser on its existing
+   loopback-only DevTools port.
+2. Read only \`session.id\` and \`browser_token\` from an HTTPS
+   \`www.habbo.com\` page in that isolated profile via
+   \`Network.getCookies\`. A matching website UI is no longer required
+   **for this recovery step**.
+3. Immediately verify the cookies with a fresh ticket from the official
+   Habbo.com HTTPS SSO API. Only valid first-party cookies are written
+   to the per-profile Windows Credential Manager vault; no unverified
+   cookie is stored or passed to direct TCP.
+4. If the cookies do not produce an official ticket, attempt a normal
+   website sign-in using that account's previously saved credentials.
+   If none are saved, report a clear message directing the user to
+   **Accounts → Open account login** (one-time manual sign-in) or
+   **Accounts → Save login securely**. If login controls are unrecognised,
+   a CAPTCHA or MFA is required, or the isolated profile fails to open,
+   show a distinct actionable error rather than one generic message.
+5. Only after successful SSO issuance does Companion start that account's
+   normal direct AIR TCP connection. Existing authenticated sockets are
+   not modified.
+
+The feature does **not** read the main unrestricted Brave/Chrome profile,
+extract cookies from unrelated websites, bypass website CAPTCHA/MFA,
+automatically retry failed sign-ins indefinitely, or log session
+cookies/passwords/tickets. Automated tests cover cookie-first recovery
+from an unrecognised signed-in page, saved-login fallback, vault-write
+ordering, missing saved credentials, and cross-profile isolation.
+
+**Live Windows validation of the new account recovery branch is pending.**
