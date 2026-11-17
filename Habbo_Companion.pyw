@@ -2861,6 +2861,50 @@ def account_capture_habbo_session_cookies(debug_port,check_visible_login=True):
     return found['session.id'],found['browser_token']
 
 
+
+def account_wait_for_background_session(debug_port,report,max_checks=24):
+    """Wait for a cold-start isolated browser to restore Habbo website state.
+
+    A responsive CDP port is NOT evidence the site has finished navigating.
+    Poll only the official Habbo page's safe UI state, across all Habbo tabs;
+    do not click, enter credentials, request repeated tickets or bypass
+    verification. A session ticket is still required after the UI is ready.
+    """
+    if type(max_checks) is not int or not 1<=max_checks<=30:
+        raise ValueError('Invalid browser readiness check count.')
+    signed_in={'play','play-now','launch','signed_in','download'}
+    last='loading'
+    for check in range(max_checks):
+        if check:
+            time.sleep(0.6)
+        try:
+            page=account_habbo_page(debug_port)
+        except (OSError,ValueError,RuntimeError,TimeoutError,socket.timeout,
+                urllib.error.URLError):
+            last='control_unavailable'
+            continue
+        if not page or page.get('_inspect_error'):
+            last='loading'
+            continue
+        state=(page.get('_preflight_step') or {}).get('kind')
+        if state in signed_in:
+            report('BROWSER <- Background Habbo profile restored signed-in '
+                   'PLAY/account UI; checking official SSO next.')
+            return True
+        if state in ('login','open-login'):
+            last='login'
+        else:
+            last='loading'
+    if last=='login':
+        report('BROWSER <- Background profile shows a login form after '
+               'readiness checks; saved login or manual verification may '
+               'be required.')
+    else:
+        report('BROWSER <- Background profile did not confirm signed-in '
+               'PLAY/account UI during readiness checks; checking official '
+               'session evidence without assuming a login failure.')
+    return False
+
 def account_import_session_automatically(account,report):
     """On demand: headless isolated browser login -> two cookies -> fresh SSO.
 
@@ -2912,6 +2956,10 @@ def account_import_session_automatically(account,report):
                 raise ValueError(
                     'Background browser control unavailable. Open account '
                     'login from Accounts to renew this profile.')
+            report('BROWSER <- Local browser control is ready; waiting for '
+                   'the saved Habbo profile to finish loading before login '
+                   'or ticket requests.')
+            account_wait_for_background_session(port,report)
         def verified_ticket_from_browser():
             # Preserve the legacy cookie-pair path for older authenticated
             # profiles, but modern site sessions may omit these cookie names.
