@@ -28,6 +28,11 @@ def execute(**values):
         'APP_DIR':Path('/not-used'),
         'socket':socket,
         'HabboTcpError':type('HabboTcpError',(Exception,),{}),
+        # Old tests exercise the legacy cookie path in isolation. By default
+        # the new official browser-ticket method is unavailable; individual
+        # browser fallback tests supply their own fake implementation.
+        'account_fetch_ticket_from_signed_in_profile':lambda port:(
+            _ for _ in ()).throw(ValueError('mock browser ticket unavailable')),
     }
     space.update(values)
     exec(CODE,space)
@@ -418,6 +423,96 @@ class AutomaticLoginAndImport(TestCase):
         self.assertTrue(any('checking the official' in message for message in log))
         self.assertTrue(any('HTTP 403' in message for message in log))
         self.assertNotIn('invalid-token',' '.join(log))
+
+
+
+    def test_signed_in_browser_without_legacy_cookies_can_issue_ticket(self):
+        """A real first-party browser ticket may work without old cookie names."""
+        events=[]
+        ticket=SimpleNamespace(secret='browser-issued-opaque.V4')
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:None,
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                (_ for _ in ()).throw(ValueError('no legacy cookie pair')),
+            account_fetch_ticket_from_signed_in_profile=lambda port:(
+                events.append(('official_browser_ticket',port)) or ticket),
+            account_attempt_auto_play=lambda *args,**kwargs:self.fail(
+                'Verified session must not resubmit credentials'),
+            account_session_cookie_write=lambda *args:self.fail(
+                'Do not persist nonexistent cookie pair'),
+        )
+        logs=[]
+        result=ns['account_import_session_automatically'](account(),logs.append)
+        self.assertIs(result,ticket)
+        self.assertEqual(events,[('official_browser_ticket',43111)])
+        self.assertTrue(any('no legacy cookie pair required' in line
+                            for line in logs))
+        self.assertFalse(any('opaque.V4' in line for line in logs))
+
+    def test_browser_ticket_fallback_after_playwright_confirms_play_ui(self):
+        """Recheck after a successful interactive login, not only before it."""
+        counts={'browser_ticket':0,'login':0}
+        ticket=SimpleNamespace(secret='genuine.V4')
+        def get_ticket(port):
+            counts['browser_ticket']+=1
+            if counts['browser_ticket']==1:
+                raise ValueError('Browser not yet signed in')
+            return ticket
+        def login(port,report,credentials,login_only):
+            counts['login']+=1
+            return 'signed_in'
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('saved@example.com','secret'),
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                (_ for _ in ()).throw(ValueError('no legacy cookies')),
+            account_fetch_ticket_from_signed_in_profile=get_ticket,
+            account_attempt_auto_play=login,
+            account_session_cookie_write=lambda *args:self.fail(
+                'Never save cookies absent from browser'),
+        )
+        logs=[]
+        self.assertIs(
+            ns['account_import_session_automatically'](account(),logs.append),
+            ticket)
+        self.assertEqual(counts,{'browser_ticket':2,'login':1})
+        self.assertTrue(any('persistent account profile retained' in line
+                            for line in logs))
+        self.assertNotIn('secret',' '.join(logs))
+
+    def test_browser_ticket_error_does_not_count_as_game_authentication(self):
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('saved@example.com','secret'),
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                (_ for _ in ()).throw(ValueError('cookie pair absent')),
+            account_fetch_ticket_from_signed_in_profile=lambda port:(
+                _ for _ in ()).throw(ValueError(
+                    'Habbo rejected the existing session (HTTP 403).')),
+            account_attempt_auto_play=lambda *args,**kwargs:'signed_in',
+            account_session_cookie_write=lambda *args:self.fail(
+                'Do not store unvalidated sessions'),
+        )
+        logs=[]
+        with self.assertRaisesRegex(ValueError,
+                'Website sign-in appeared successful, but Habbo did not validate'):
+            ns['account_import_session_automatically'](account(),logs.append)
+        self.assertTrue(any('browser ticket endpoint returned HTTP 403' in x
+                            for x in logs))
+        self.assertNotIn('cookie pair absent',' '.join(logs))
 
 
 class AppIntegration(TestCase):

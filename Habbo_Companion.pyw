@@ -2913,13 +2913,73 @@ def account_import_session_automatically(account,report):
                     'Background browser control unavailable. Open account '
                     'login from Accounts to renew this profile.')
         def verified_ticket_from_browser():
-            # The website may have a valid session even when its rendered
-            # Play/profile menu is not recognisable. A genuine SSO ticket from
-            # the official HTTPS endpoint is stronger evidence than the DOM.
-            cookies=account_capture_habbo_session_cookies(
-                port,check_visible_login=False)
-            raw=fetch_habbo_sso_ticket(*cookies)
-            return account_parse_official_ticket_response(raw),cookies
+            # Preserve the legacy cookie-pair path for older authenticated
+            # profiles, but modern site sessions may omit these cookie names.
+            # The first-party browser route is already implemented by
+            # "Fetch from signed-in local session". It uses only the isolated
+            # Habbo tab and requests a real ticket from the official site.
+            try:
+                cookies=account_capture_habbo_session_cookies(
+                    port,check_visible_login=False)
+            except (OSError,ValueError,RuntimeError,TimeoutError,
+                    socket.timeout):
+                report('SESSION <- Legacy cookie pair unavailable; checking '
+                       'the signed-in Habbo browser ticket endpoint.')
+            else:
+                try:
+                    raw=fetch_habbo_sso_ticket(*cookies)
+                    ticket=account_parse_official_ticket_response(raw)
+                except (OSError,ValueError,RuntimeError,HabboTcpError,
+                        TimeoutError,socket.timeout) as exc:
+                    if isinstance(exc,HabboTcpError):
+                        reason=str(exc)
+                        if 'HTTP 401' in reason:
+                            category='legacy-cookie SSO returned HTTP 401'
+                        elif 'HTTP 403' in reason:
+                            category='legacy-cookie SSO returned HTTP 403'
+                        elif 'HTTP 429' in reason:
+                            category='legacy-cookie SSO returned HTTP 429'
+                        else:
+                            category='legacy-cookie SSO did not issue a ticket'
+                    else:
+                        category='legacy-cookie ticket verification failed'
+                    report('SESSION <- '+category+'; trying the authenticated '
+                           'browser session directly.')
+                else:
+                    report('SESSION <- Official SSO ticket obtained using the '
+                           'verified legacy cookie pair.')
+                    return ticket,cookies
+            try:
+                ticket=account_fetch_ticket_from_signed_in_profile(port)
+            except (OSError,ValueError,RuntimeError,TimeoutError,
+                    socket.timeout) as exc:
+                # No raw exception details: only known, bounded categories
+                # from our own first-party ticket-request implementation.
+                message=str(exc)
+                if 'HTTP 401' in message:
+                    category='official browser ticket endpoint returned HTTP 401'
+                elif 'HTTP 403' in message:
+                    category='official browser ticket endpoint returned HTTP 403'
+                elif 'HTTP 429' in message:
+                    category='official browser ticket endpoint returned HTTP 429'
+                elif 'no recognised ticket field' in message:
+                    category='official browser response contained no recognised ticket field'
+                elif 'ticket format' in message:
+                    category='official browser returned an unrecognised ticket format'
+                elif 'not verified as signed in' in message:
+                    category='selected Habbo tab was not confirmed signed in'
+                elif 'No official Habbo tab' in message:
+                    category='no official Habbo browser tab was found'
+                elif 'request was blocked or unavailable' in message:
+                    category='official browser ticket request was blocked or unavailable'
+                else:
+                    category='official browser ticket request could not be verified'
+                report('SESSION <- '+category+'.')
+                raise ValueError('The signed-in Habbo browser did not issue a '
+                                 'usable official game ticket.') from None
+            report('SESSION <- Official game ticket obtained from the '
+                   'signed-in Habbo browser; no legacy cookie pair required.')
+            return ticket,None
 
         def report_session_verification_failure(error):
             # Never print an exception verbatim: browser/session exceptions
@@ -2951,8 +3011,12 @@ def account_import_session_automatically(account,report):
                 socket.timeout,TimeoutError):
             report('No usable existing session; checking saved website login.')
         else:
-            account_session_cookie_write(ident,*cookies)
-            report('Existing Habbo session verified and saved to Windows vault.')
+            if cookies is not None:
+                account_session_cookie_write(ident,*cookies)
+                report('Existing Habbo session verified and saved to Windows vault.')
+            else:
+                report('Existing signed-in browser session issued a game '
+                       'ticket; trusted browser profile remains on disk.')
             return ticket
 
         if credentials is None:
@@ -2984,9 +3048,13 @@ def account_import_session_automatically(account,report):
                     socket.timeout,TimeoutError) as exc:
                 report_session_verification_failure(exc)
             else:
-                account_session_cookie_write(ident,*cookies)
-                report('Official Habbo HTTPS session is valid despite the '
-                       'unrecognised page; saved to Windows vault.')
+                if cookies is not None:
+                    account_session_cookie_write(ident,*cookies)
+                    report('Official Habbo HTTPS session is valid despite the '
+                           'unrecognised page; saved to Windows vault.')
+                else:
+                    report('Official browser session issued a game ticket '
+                           'despite the unrecognised page; profile preserved.')
                 return ticket
             reasons={
                 'login':'Website login form remains visible; '
@@ -3015,8 +3083,12 @@ def account_import_session_automatically(account,report):
             report_session_verification_failure(exc)
             raise ValueError('Website sign-in appeared successful, but Habbo '
                              'did not validate the session for Direct TCP.') from None
-        account_session_cookie_write(ident,*cookies)
-        report('Official Habbo session validated and saved in Windows vault.')
+        if cookies is not None:
+            account_session_cookie_write(ident,*cookies)
+            report('Official Habbo session validated and saved in Windows vault.')
+        else:
+            report('Official Habbo browser session issued a game ticket; '
+                   'persistent account profile retained for next connection.')
         return ticket
     finally:
         # Only close a browser process created by this invocation. Never

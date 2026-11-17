@@ -1,3 +1,27 @@
+HABBO COMPANION v1.1.66 — BROWSER SESSION TO DIRECT TCP TICKET
+================================================================
+
+The official Habbo website can show a signed-in PLAY page without providing
+the old session.id + browser_token cookie names required by Companion's
+legacy Direct TCP importer. A valid signed-in browser session is not the same
+as a completed game-server login.
+
+Auto-import session and connect now:
+- Tries the previous, strictly validated legacy cookie-pair route first.
+- If that route is unavailable/rejected, asks the signed-in account browser
+  directly for a ticket using the existing "Fetch from signed-in local session"
+  first-party HTTPS method, scoped to that isolated account profile.
+- Does NOT require legacy cookies when the official browser endpoint returns
+  a correctly parsed game ticket. The browser profile stays persistent for
+  subsequent attempts; the app does not save non-existent cookie values.
+- Logs which ticket route was attempted and safe HTTP 401/403/429 or
+  unsupported-response categories, never SSO tickets or browser secrets.
+- Still waits for actual game-server authentication to confirm the connection.
+  It never bypasses CAPTCHA, email verification, or a site's session expiry.
+
+This route is verified with synthetic/offline unit tests. Its success against
+the current live Habbo.com session and game server must be verified separately.
+
 HABBO COMPANION v1.1.65 — DETAILED LOGIN SERVER DIAGNOSTICS
 ===========================================================
 
