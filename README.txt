@@ -570,3 +570,18 @@ Version 1.1.48 — More precise initial TCP handshake diagnosis
 - Handshake timeout reports how many socket bytes arrived (counts only,
   no packet payloads or secrets).
 This is not a confirmed live login fix. Do not retry repeatedly if rejected.
+
+
+Version 1.1.49 — Read-only Habbo Classic WebSocket diagnostic
+--------------------------------------------------------------
+The newer Habbo Classic desktop client (September 2026) uses
+wss://game-us.habbo.com:30001/websocket and the "habbo-classic" WebSocket
+subprotocol rather than the legacy AIR TCP endpoint.
+
+Use Direct TCP > Test Classic WSS connection (no login).
+It tests secure TLS/WebSocket upgrade only, then closes normally.
+It NEVER fetches or sends SSO, cookies, account identifiers, game
+packets, passwords or local game credentials. No Brave or Habbo launcher.
+This is NOT a Classic login or multi-account connection feature.
+A successful 101 upgrade proves reachability only. Existing AIR TCP
+mode is unchanged and still experimental.
