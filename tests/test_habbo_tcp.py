@@ -308,6 +308,9 @@ class TimeoutByteDiagnosticsTests(unittest.TestCase):
 
     def test_partial_frame_reports_received_byte_count_only(self):
         class PartialSocket(FragmentedSocket):
+            def settimeout(self,value):
+                self.timeout = value
+
             def recv(self,length):
                 if not self.events:
                     raise socket.timeout()
