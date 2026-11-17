@@ -1054,6 +1054,89 @@ def account_login_safe_server_message(body):
                     return msg.strip()
     return None
 
+
+# URLs, query parameters, source text, JS exception bodies and arbitrary
+# path segments may contain secrets. Only pass this bounded data to logs.
+HABBO_SAFE_URL_PARTS=frozenset({
+    'api','auth','authentication','authorize','login','logout','signin',
+    'sign-in','session','sso','client','clientnative','url','account',
+    'accounts','user','users','profile','home','public','native','status',
+    'email','verify','verification','config','settings','feature','flags',
+    'ping','token','ticket','security','challenge','captcha','loginpage',
+    'login-form','external','v1','v2','v3','v4','v5','web','hotel',
+    'system','info','identity','connect','oauth','authorize','callback',
+    'validate','availability','graphql','action','credentials'
+})
+
+
+def account_login_safe_endpoint_path(url):
+    """Reveal only recognised public route words, never opaque URL parts."""
+    if not isinstance(url,str):
+        return '/[hidden]'
+    try:
+        path=urllib.parse.urlsplit(url).path
+    except (ValueError,TypeError):
+        return '/[hidden]'
+    parts=[p for p in path.split('/') if p]
+    if not parts:
+        return '/'
+    result=[]
+    for part in parts[:6]:
+        if re.fullmatch(r'[A-Za-z][A-Za-z0-9-]{0,23}',part) and (
+                part.lower() in HABBO_SAFE_URL_PARTS):
+            result.append(part.lower())
+        else:
+            result.append('[hidden]')
+    if len(parts)>6:
+        result.append('[more]')
+    return '/'+'/'.join(result)
+
+
+def account_login_safe_browser_error(text):
+    """Categorise untrusted console/exception text without quoting secrets."""
+    if not isinstance(text,str):
+        return 'unknown error'
+    if re.search(r'content.security.policy|\\bcsp\\b',text,re.I):
+        return 'Content Security Policy blocked a resource'
+    if re.search(r'cross.origin|\\bcors\\b',text,re.I):
+        return 'CORS restriction'
+    if re.search(r'failed to fetch|fetch failed',text,re.I):
+        return 'Failed to fetch'
+    if re.search(r'failed to load resource',text,re.I):
+        code=re.search(r'\b(?:HTTP\s*)?(4\d\d|5\d\d)\b',text,re.I)
+        if code:
+            return 'Resource load HTTP '+code.group(1)
+        return 'Resource failed to load'
+    if re.search(r'net::ERR_[A-Z_]{3,50}',text):
+        return re.search(r'net::ERR_[A-Z_]{3,50}',text).group(0)
+    for error in ('TypeError','ReferenceError','SyntaxError','RangeError',
+                  'NetworkError','SecurityError','NotAllowedError',
+                  'AbortError','URIError','ChunkLoadError','EvalError'):
+        if re.search(r'\b'+error+r'\b',text):
+            return error
+    if re.search(r'uncaught.*promise|unhandled.*rejection',text,re.I):
+        return 'Uncaught promise rejection'
+    return 'unclassified error'
+
+
+def account_login_safe_error_location(url,line):
+    """Allow only a broad source origin class and non-secret line number."""
+    if not isinstance(url,str):
+        return ''
+    try:
+        parts=urllib.parse.urlsplit(url)
+        host=(parts.hostname or '').lower()
+        if parts.scheme!='https':
+            return ''
+        source=('Habbo script' if host=='habbo.com' or
+                host.endswith('.habbo.com') else 'external script')
+    except (TypeError,ValueError):
+        return ''
+    if type(line) is int and 0<=line<=100000:
+        return ' ('+source+', line '+str(line)+')'
+    return ' ('+source+')'
+
+
 class AccountLoginNetworkProbe:
     """Short-lived, account-specific page traffic monitor.
 
