@@ -292,6 +292,49 @@ class AutomaticLoginAndImport(TestCase):
         self.assertEqual(calls['n'],2)
         self.assertEqual(events,['login','ticket','vault'])
 
+    def test_first_login_to_apex_site_imports_cookies_without_manual_entry(self):
+        """Email/password sign-in automatically yields SSO from official cookies."""
+        page=signed_in_page()
+        page['url']='https://habbo.com/'
+        events=[]
+        calls={'n':0}
+        def network(ws,method,params):
+            self.assertEqual(method,'Network.getCookies')
+            self.assertEqual(params,{'urls':['https://habbo.com/']})
+            calls['n']+=1
+            if calls['n']==1:
+                return {'cookies':[]}
+            return {'cookies':[
+                {'name':'session.id','domain':'habbo.com',
+                 'secure':True,'value':'new-session'},
+                {'name':'browser_token','domain':'.habbo.com',
+                 'secure':True,'value':'new-token'}
+            ]}
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('saved@example.com','secret'),
+            account_browser_pages=lambda port:[page],
+            account_cdp_call=network,
+            account_attempt_auto_play=lambda *a,**kw:(
+                events.append('website-login') or 'signed_in'),
+            fetch_habbo_sso_ticket=lambda sid,token:(
+                events.append('official-SSO') or 'ticket-from-Habbo'),
+            account_parse_official_ticket_response=lambda raw:raw,
+            account_session_cookie_write=lambda *args:events.append('vault'),
+        )
+        logs=[]
+        result=ns['account_import_session_automatically'](
+            account(),logs.append)
+        self.assertEqual(result,'ticket-from-Habbo')
+        self.assertEqual(calls['n'],2)
+        self.assertEqual(events,['website-login','official-SSO','vault'])
+        self.assertTrue(any('validated' in line for line in logs))
+        self.assertNotIn('new-token',' '.join(logs))
+        self.assertNotIn('secret',' '.join(logs))
+
     def test_valid_cookies_from_unrecognised_page_can_still_be_read(self):
         page=signed_in_page()
         page['_preflight_step']={'kind':'waiting'}
