@@ -218,7 +218,10 @@ class HabboTcpSession:
     def _recv(self, amount):
         result = bytearray()
         while len(result) < amount:
-            block = self.sock.recv(amount - len(result))
+            sock = self.sock
+            if sock is None:
+                raise HabboTcpError("Game socket is disconnected")
+            block = sock.recv(amount - len(result))
             if not block:
                 raise HabboTcpError("Game socket closed by server")
             result.extend(block)
@@ -239,9 +242,12 @@ class HabboTcpSession:
     def _send(self, packet_id, body=b"", plaintext=False):
         data = _frame(packet_id, body)
         with self.lock:
+            sock = self.sock
+            if sock is None:
+                raise HabboTcpError("Game socket is disconnected")
             if self.tx and not plaintext:
                 data = self.tx.apply(data)
-            self.sock.sendall(data)
+            sock.sendall(data)
 
     def _await_packet(self, wanted, limit=15):
         deadline = time.monotonic() + limit
@@ -343,7 +349,8 @@ class HabboTcpSession:
     def close(self):
         self.stop.set()
         self.authenticated = False
-        sock, self.sock = self.sock, None
+        with self.lock:
+            sock, self.sock = self.sock, None
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
