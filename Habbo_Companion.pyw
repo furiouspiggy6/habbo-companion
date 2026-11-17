@@ -886,7 +886,328 @@ def account_login_input_confirmed(websocket_url,field):
     return account_login_field_action(websocket_url,field,'check')=='populated'
 
 
-def account_submit_saved_login(websocket_url,email,password):
+
+# The login form itself is selected by DOM, not its screen coordinates. Focus
+# the actual submit element, then use a browser key event. This operates only
+# on the verified official Habbo HTTPS origin and never exposes field values.
+HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const visible=el=>{
+    if (!el || el.disabled || el.getAttribute('aria-disabled')==='true')
+      return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' &&
+      s.visibility!=='hidden';
+  };
+  const password=Array.from(document.querySelectorAll(
+      'input[type=password]')).find(visible);
+  if (!password) return {kind:'no-form'};
+  const form=password.closest('form');
+  const root=form || password.closest(
+      '[role=dialog],dialog,[class*=modal]') || document;
+  const controls=Array.from(root.querySelectorAll(
+      'button,input[type=submit],[role=button]')).filter(visible);
+  const text=el=>(el.innerText || el.value ||
+      el.getAttribute('aria-label') || '').trim();
+  const submit=controls.find(el=>/^(let'?s go!?|sign in|log in|login|continue)$/i
+      .test(text(el))) || controls.find(el=>el.type==='submit');
+  if (!submit) return {kind:'no-submit'};
+  submit.focus({preventScroll:true});
+  return {kind:document.activeElement===submit?'focused':'not-focused'};
+})()'''
+
+
+def account_login_auth_request(url,method):
+    """Recognise first-party authentication requests; never return their URL."""
+    if method not in ('POST','PUT','PATCH'):
+        return False
+    try:
+        parts=urllib.parse.urlsplit(url)
+        host=(parts.hostname or '').lower()
+    except (TypeError,ValueError):
+        return False
+    return (parts.scheme=='https' and
+            (host=='habbo.com' or host.endswith('.habbo.com')) and
+            bool(re.search(r'auth|log[ -]?in|signin|sign-in|session|sso',
+                           parts.path,re.I)))
+
+
+def account_login_safe_error_code(body):
+    """Only symbolic error identifiers. Never return message/body/user details."""
+    if not isinstance(body,str) or len(body)>8192:
+        return None
+    try:
+        payload=json.loads(body)
+    except (TypeError,ValueError):
+        return None
+    if not isinstance(payload,dict):
+        return None
+    candidates=[payload]
+    error=payload.get('error')
+    if isinstance(error,dict):
+        candidates.append(error)
+    for item in candidates:
+        for key in ('errorCode','error_code','code'):
+            value=item.get(key)
+            if (isinstance(value,str) and
+                re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{1,48}',value) and
+                not re.fullmatch(r'[A-Za-z0-9]{32,}',value) and
+                not value.lower().startswith(('eyj','bearer','hhus'))):
+                return value
+    return None
+
+
+class AccountLoginNetworkProbe:
+    """One short-lived local DevTools event stream; never persists raw events.
+
+    Network.requestWillBeSent may contain private headers and bodies. Inspect
+    only request method, verified hostname and endpoint path in memory. Never
+    print requests, URLs, headers, response bodies, or cookies to the UI.
+    """
+    def __init__(self,websocket_url):
+        self.url=websocket_url
+        self.sock=None
+        self.buffer=bytearray()
+        self.sequence=0
+        self.auth_ids=set()
+        self.seen=False
+        self.http_status=None
+        self.failed=None
+        self.mime=''
+        self.finished_id=None
+        self.error_code=None
+        self.javascript_exceptions=0
+
+    def __enter__(self):
+        url=urllib.parse.urlsplit(self.url)
+        if (url.scheme!='ws' or url.hostname!='127.0.0.1' or
+            not url.port or not url.path.startswith('/devtools/page/')):
+            raise ValueError('Only isolated local account browser monitoring is allowed.')
+        self.sock=socket.create_connection(('127.0.0.1',url.port),timeout=3)
+        try:
+            self.sock.settimeout(3)
+            key=base64.b64encode(os.urandom(16)).decode('ascii')
+            expected=base64.b64encode(hashlib.sha1(
+                (key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+                 ).encode('ascii')).digest()).decode('ascii')
+            req=(f'GET {url.path} HTTP/1.1\r\n'
+                 f'Host: 127.0.0.1:{url.port}\r\n'
+                 'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+                 f'Sec-WebSocket-Key: {key}\r\n'
+                 'Sec-WebSocket-Version: 13\r\n\r\n')
+            self.sock.sendall(req.encode('ascii'))
+            while b'\r\n\r\n' not in self.buffer and len(self.buffer)<8192:
+                data=self.sock.recv(4096)
+                if not data:
+                    raise OSError('Local browser network observer closed.')
+                self.buffer.extend(data)
+            header,sep,rest=bytes(self.buffer).partition(b'\r\n\r\n')
+            if (not sep or not header.startswith(b'HTTP/1.1 101 ') or
+                ('sec-websocket-accept: '+expected).encode('ascii').lower()
+                 not in header.lower()):
+                raise OSError('Local browser network observer refused connection.')
+            self.buffer=bytearray(rest)
+            return self
+        except Exception:
+            self.sock.close()
+            self.sock=None
+            raise
+
+    def __exit__(self,kind,error,trace):
+        if self.sock is not None:
+            self.sock.close()
+            self.sock=None
+
+    def _send(self,payload,opcode=1):
+        data=(json.dumps(payload,separators=(',',':')).encode('utf-8')
+              if opcode==1 else payload)
+        n=len(data)
+        prefix=(bytes([0x80|opcode,0x80|n]) if n<126 else
+                bytes([0x80|opcode,0x80|126])+struct.pack('!H',n)
+                if n<=65535 else
+                bytes([0x80|opcode,0x80|127])+struct.pack('!Q',n))
+        mask=os.urandom(4)
+        self.sock.sendall(prefix+mask+
+                          bytes(byte^mask[i%4] for i,byte in enumerate(data)))
+
+    def _take(self,n):
+        while len(self.buffer)<n:
+            chunk=self.sock.recv(4096)
+            if not chunk:
+                raise OSError('Local browser network observer disconnected.')
+            self.buffer.extend(chunk)
+        part=bytes(self.buffer[:n])
+        del self.buffer[:n]
+        return part
+
+    def _next(self,timeout):
+        self.sock.settimeout(max(0.05,timeout))
+        for _ in range(200):
+            b0,b1=self._take(2)
+            size=b1&127
+            if size==126:
+                size=struct.unpack('!H',self._take(2))[0]
+            elif size==127:
+                size=struct.unpack('!Q',self._take(8))[0]
+            if size>2_000_000:
+                raise ValueError('Oversized browser event.')
+            mask=self._take(4) if b1&128 else None
+            data=self._take(size)
+            if mask:
+                data=bytes(byte^mask[i%4] for i,byte in enumerate(data))
+            op=b0&15
+            if op==9:
+                self._send(data,10)
+                continue
+            if op==8:
+                raise OSError('Browser page closed during login.')
+            if op!=1:
+                continue
+            message=json.loads(data.decode('utf-8'))
+            self._event(message)
+            return message
+        raise TimeoutError('Too many browser protocol events.')
+
+    def _event(self,msg):
+        name=msg.get('method')
+        data=msg.get('params') or {}
+        ident=data.get('requestId')
+        if name=='Network.requestWillBeSent':
+            req=data.get('request') or {}
+            if (len(self.auth_ids)<20 and account_login_auth_request(
+                    req.get('url'),req.get('method'))):
+                self.auth_ids.add(ident)
+                self.seen=True
+        elif name=='Network.responseReceived' and ident in self.auth_ids:
+            response=data.get('response') or {}
+            code=response.get('status')
+            if isinstance(code,(int,float)) and 100<=code<=599:
+                self.http_status=int(code)
+            self.mime=str(response.get('mimeType','')).lower()
+        elif name=='Network.loadingFailed' and ident in self.auth_ids:
+            blocked=data.get('blockedReason')
+            error=data.get('errorText')
+            if isinstance(blocked,str) and re.fullmatch(r'[A-Za-z_-]{2,32}',blocked):
+                self.failed='blocked-'+blocked
+            elif isinstance(error,str) and re.fullmatch(r'net::ERR_[A-Z_]{2,50}',error):
+                self.failed=error
+            else:
+                self.failed='network-error'
+        elif name=='Network.loadingFinished' and ident in self.auth_ids:
+            if self.http_status is not None and self.http_status>=400:
+                self.finished_id=ident
+        elif name=='Runtime.exceptionThrown':
+            self.javascript_exceptions+=1
+
+    def _command(self,method,params=None,timeout=3):
+        self.sequence+=1
+        command_id=self.sequence
+        self._send({'id':command_id,'method':method,'params':params or {}})
+        deadline=time.monotonic()+timeout
+        while time.monotonic()<deadline:
+            message=self._next(deadline-time.monotonic())
+            if message.get('id')!=command_id:
+                continue
+            if 'error' in message:
+                raise RuntimeError('Browser event observer command failed.')
+            return message.get('result',{})
+        raise TimeoutError('Browser did not confirm network observer command.')
+
+    def enable(self):
+        self._command('Network.enable',{'maxTotalBufferSize':1048576})
+        self._command('Runtime.enable',{})
+
+    def observe(self,seconds=5.0):
+        deadline=time.monotonic()+seconds
+        while time.monotonic()<deadline:
+            try:
+                self._next(min(0.6,deadline-time.monotonic()))
+            except socket.timeout:
+                continue
+            except (OSError,ValueError,TimeoutError):
+                break
+            if self.seen and self.finished_id is not None:
+                break
+        # Failure responses may have a safe symbolic error code. Never read
+        # successful response bodies (which can contain auth tokens).
+        if (self.finished_id and self.http_status is not None and
+            self.http_status>=400 and 'json' in self.mime):
+            try:
+                result=self._command('Network.getResponseBody',
+                                     {'requestId':self.finished_id},timeout=2)
+                body=result.get('body')
+                if result.get('base64Encoded') and isinstance(body,str):
+                    body=base64.b64decode(body,validate=True).decode('utf-8')
+                self.error_code=account_login_safe_error_code(body)
+            except (OSError,ValueError,RuntimeError,TimeoutError,
+                    UnicodeError,TypeError):
+                pass
+
+    def summary(self):
+        if not self.seen:
+            return ('Login diagnostic: no matching first-party authentication '
+                    'POST was observed; the form may not have submitted, or '
+                    'the site may use another endpoint.')
+        if self.failed:
+            return 'Login diagnostic: authentication request failed ('+self.failed+').'
+        if self.http_status is not None:
+            status='Login diagnostic: Habbo authentication HTTP '+str(self.http_status)
+            if self.error_code:
+                status+='; server error code '+self.error_code
+            return status+' (not proof of a signed-in session).'
+        return ('Login diagnostic: Habbo authentication request started, '
+                'but no HTTP response was observed.')
+
+
+def account_focus_and_submit_login(websocket_url):
+    """Use the actual login button + keyboard Enter, never a coordinate click."""
+    result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_LOGIN_SUBMIT_FOCUS_JS,'returnByValue':True})
+    value=result.get('result',{}).get('value',{})
+    if not isinstance(value,dict) or value.get('kind')!='focused':
+        return False
+    for event in ('keyDown','keyUp'):
+        try:
+            account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+                'type':event,'key':'Enter','code':'Enter',
+                'windowsVirtualKeyCode':13,'nativeVirtualKeyCode':13})
+        except (OSError,ValueError,RuntimeError,TimeoutError):
+            if event=='keyDown':
+                raise
+            # Navigation immediately after keyDown may close the page socket.
+            break
+    return True
+
+
+def account_submit_with_network_diagnostics(websocket_url,report):
+    """Arm passive first-party network monitoring before one DOM submission."""
+    started=False
+    try:
+        with AccountLoginNetworkProbe(websocket_url) as probe:
+            probe.enable()
+            started=True
+            submitted=account_focus_and_submit_login(websocket_url)
+            if not submitted:
+                report('Habbo LETS GO submit element was not focusable; '
+                       'no login request was initiated.')
+                return False
+            probe.observe()
+            report(probe.summary())
+            return True
+    except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
+        if started:
+            # Never retry a click whose result may already have reached Habbo.
+            report('Login network observer was interrupted; '
+                   'the submission outcome is unverified.')
+            return True
+        report('Login network diagnostics unavailable in this browser; '
+               'trying normal DOM submit without traffic inspection.')
+        return account_focus_and_submit_login(websocket_url)
+
+
+def account_submit_saved_login(websocket_url,email,password,report=None):
     """Enter a saved login on official Habbo and verify before submission."""
     def fields_now():
         result=account_cdp_call(websocket_url,'Runtime.evaluate',{
@@ -925,8 +1246,8 @@ def account_submit_saved_login(websocket_url,email,password):
     if fields.get('kind')!='form':
         return False
     time.sleep(0.2)
-    account_click_play_button(websocket_url,fields['submit'])
-    return True
+    return account_submit_with_network_diagnostics(
+        websocket_url,report or (lambda message:None))
 
 
 def account_attempt_auto_play(debug_port,report,credentials=None,login_only=False):
@@ -1027,10 +1348,11 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                 time.sleep(1.2)
                 continue
             if not account_submit_saved_login(
-                    page['webSocketDebuggerUrl'],credentials[0],credentials[1]):
-                report('Saved login could not be confirmed in the Habbo email/password '
-                       'inputs. No login submission was sent; check the form or '
-                       'use Accounts > Open account login.')
+                    page['webSocketDebuggerUrl'],credentials[0],credentials[1],
+                    report=report):
+                report('Saved login could not be submitted to the verified Habbo '
+                       'form. Check the preceding login diagnostic; no session '
+                       'or browser token was saved.')
                 return 'login'
             login_submitted=True
             report('Submitted saved login for this account. '

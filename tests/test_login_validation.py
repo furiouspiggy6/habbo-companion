@@ -142,6 +142,14 @@ class SafeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(run_js(js,{'passwordValue':'secret'}),
                          {'kind':'populated','field':'password'})
 
+    def test_element_based_login_submit_uses_official_form_and_no_coordinates(self):
+        js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
+        self.assertEqual(run_js(js,{})['kind'],'focused')
+        self.assertEqual(run_js(js,{'hostname':'habbo.com.fake.example'}),
+                         {'kind':'unverified-page'})
+        self.assertNotIn('getBoundingClientRect().left+',js)
+        self.assertNotIn('document.cookie',js)
+
     def test_diagnostic_adapter_whitelists_returned_codes(self):
         node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
                   and n.name=='account_login_diagnostic')
