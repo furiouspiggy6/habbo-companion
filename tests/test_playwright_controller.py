@@ -129,7 +129,7 @@ class PlaywrightRoutingTests(unittest.TestCase):
                          ['email','password'])
         self.assertEqual([step[1] for step in calls if step[0]=='click'],
                          ['submit'])
-        self.assertIn('Playwright clicked', ' '.join(messages))
+        self.assertIn('Login button clicked', ' '.join(messages))
         self.assertNotIn('PRIVATE_PASSWORD',' '.join(messages))
         self.assertNotIn('user@example.com',' '.join(messages))
 
