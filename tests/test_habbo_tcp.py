@@ -96,6 +96,87 @@ class FakeGameSocket:
         self.closed = True
 
 
+class FragmentedSocket:
+    """Socket-shaped fake with deliberate fragmented reads and timeouts."""
+    def __init__(self, events):
+        self.events = list(events)
+        self.closed = False
+
+    def recv(self, length):
+        if not self.events:
+            raise AssertionError("Unexpected extra read")
+        value = self.events.pop(0)
+        if isinstance(value, BaseException):
+            raise value
+        chunk = value[:length]
+        if len(value) > length:
+            self.events.insert(0, value[length:])
+        return chunk
+
+    def shutdown(self, direction):
+        self.closed = True
+
+    def close(self):
+        self.closed = True
+
+
+class FrameReassemblyTests(unittest.TestCase):
+    def test_fragmented_plaintext_header_and_body_with_timeouts(self):
+        frame = tcp._frame(1593, b"the-payload")
+        sock = FragmentedSocket([
+            frame[:2], socket.timeout(), frame[2:4],
+            frame[4:7], socket.timeout(), frame[7:],
+        ])
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = sock
+        with self.assertRaises(socket.timeout):
+            session._read()
+        self.assertEqual(session._recv_pending, frame[:2])
+        self.assertIsNone(session._frame_size)
+        with self.assertRaises(socket.timeout):
+            session._read()
+        self.assertEqual(session._frame_size, len(frame) - 4)
+        self.assertEqual(session._recv_pending, frame[4:7])
+        self.assertEqual(session._read(), (1593, b"the-payload"))
+        self.assertIsNone(session._frame_size)
+        self.assertFalse(session._recv_pending)
+        session.close()
+
+    def test_encrypted_frame_keystream_not_consumed_twice_on_retry(self):
+        key = b"secret-session-key"
+        first = tcp._frame(1234, b"one")
+        second = tcp._frame(4321, b"two")
+        # The inbound cipher is a stream: continuous stream across packets.
+        encrypted = tcp._ArcFour(key, inbound=True).apply(first + second)
+        sock = FragmentedSocket([
+            encrypted[:1], socket.timeout(), encrypted[1:4],
+            encrypted[4:6], socket.timeout(), encrypted[6:len(first)],
+            encrypted[len(first):len(first)+4], encrypted[len(first)+4:],
+        ])
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = sock
+        session.rx = tcp._ArcFour(key, inbound=True)
+        with self.assertRaises(socket.timeout):
+            session._read()
+        with self.assertRaises(socket.timeout):
+            session._read()
+        self.assertEqual(session._read(), (1234, b"one"))
+        self.assertEqual(session._read(), (4321, b"two"))
+        session.close()
+
+    def test_oversized_frame_fails_and_disconnect_clears_pending(self):
+        too_big = struct.pack(">I", tcp.TCP_MAX_FRAME + 1)
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = FragmentedSocket([too_big])
+        with self.assertRaisesRegex(tcp.HabboTcpError, "frame length"):
+            session._read()
+        session._recv_pending.extend(b"secret")
+        session._frame_size = 12
+        session.close()
+        self.assertEqual(session._recv_pending, bytearray())
+        self.assertIsNone(session._frame_size)
+
+
 class IdentityStream:
     def __init__(self, key, inbound=False):
         self.inbound = inbound
