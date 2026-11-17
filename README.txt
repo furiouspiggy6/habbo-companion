@@ -585,3 +585,19 @@ packets, passwords or local game credentials. No Brave or Habbo launcher.
 This is NOT a Classic login or multi-account connection feature.
 A successful 101 upgrade proves reachability only. Existing AIR TCP
 mode is unchanged and still experimental.
+
+
+Version 1.1.50 — Respond to 2935 server keepalive in AIR TCP
+-------------------------------------------------------------
+Observed official Habbo TCP packet: six bytes, header 2935, no payload.
+A November 4 2026 third-party AIR header registry associates 2935 with
+CLIENT_PING and 923 with CLIENT_PONG. Companion now replies with a single
+empty Pong and logs that event during handshake. It also aligns its
+handshake-related numeric IDs to the same revision, updates obsolete
+FLASH25 to October 2026 AIR's FLASH31, and uses the three-field AIR
+machine ID format. No extra cookies or game launcher required for testing.
+
+Warning: This mapping is sourced from a third-party renderer and the
+November official AIR platform marker is not yet verified. Passing tests
+does NOT guarantee successful Habbo.com login. Test Account 1 only;
+share the redacted log, not cookies or SSO tickets.
