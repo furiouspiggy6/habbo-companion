@@ -307,9 +307,12 @@ class TimeoutByteDiagnosticsTests(unittest.TestCase):
         session.close()
 
     def test_partial_frame_reports_received_byte_count_only(self):
-        fake = FragmentedSocket([
-            b"\x00\x00", socket.timeout(), socket.timeout(),
-        ])
+        class PartialSocket(FragmentedSocket):
+            def recv(self,length):
+                if not self.events:
+                    raise socket.timeout()
+                return super().recv(length)
+        fake = PartialSocket([b"\x00\x00", socket.timeout()])
         session = tcp.HabboTcpSession("abcdef123456")
         session.sock = fake
         with self.assertRaises(tcp.HabboTcpError) as caught:
