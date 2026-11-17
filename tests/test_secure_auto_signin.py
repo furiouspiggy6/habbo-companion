@@ -68,6 +68,8 @@ class AutoSigninTests(unittest.TestCase):
                 expression=params['expression']
                 if 'const field=' in expression:
                     field='password' if 'const field="password"' in expression else 'email'
+                    if 'action="focus"' in expression:
+                        return {'result':{'value':{'kind':'focused'}}}
                     return {'result':{'value':{'kind':'populated','field':field}}}
                 return {'result':{'value':{
                     'kind':'form','email':{'x':10,'y':30},
@@ -85,7 +87,7 @@ class AutoSigninTests(unittest.TestCase):
             'super-secret-password'))
         values=[entry[2]['text'] for entry in sent if entry[1]=='Input.insertText']
         self.assertEqual(values,['email@example.com','super-secret-password'])
-        self.assertEqual(clicks,[{'x':10,'y':30},{'x':20,'y':40}])
+        self.assertEqual(clicks,[])
         self.assertEqual(diagnostics,['DOM submit'])
         self.assertEqual(sent[0][1],'Runtime.evaluate')
         self.assertNotIn('super-secret-password',sent[0][2]['expression'])
@@ -113,9 +115,9 @@ class AutoSigninTests(unittest.TestCase):
         self.assertFalse(a['account_submit_saved_login'](
             'ws://127.0.0.1:44321/devtools/page/abc',
             'user@example.com','not-a-real-password'))
-        self.assertEqual(inserted,['user@example.com'])
+        self.assertEqual(inserted,[])
         self.assertNotIn({'x':10,'y':90},clicks)
-        self.assertEqual(len(clicks),1)
+        self.assertEqual(len(clicks),0)
 
     def test_input_ready_status_returns_only_boolean(self):
         a=scope()
