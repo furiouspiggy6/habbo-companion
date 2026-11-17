@@ -1,3 +1,31 @@
+HABBO COMPANION v1.1.67 — COLD START BACKGROUND SESSION READINESS
+=================================================================
+
+The Direct TCP auto importer previously launched the private Brave/Chromium
+profile in headless mode, then immediately inspected it after the local
+debugging port opened. Browser startup is faster than Habbo's page load and
+trusted-session restoration; a not-yet-ready page was mistaken for a failed
+login, even though a later retry with an already-open browser succeeded.
+
+When Auto-import session and connect starts a fresh browser process:
+- Continue using the same isolated, persistent per-account browser profile.
+- Allow Habbo to finish loading/restoring its signed-in session, checking
+  all official Habbo tabs for PLAY/account UI during bounded readiness polling.
+- Do not submit saved credentials or request repeated SSO tickets during
+  this readiness phase; only observe the page.
+- Once ready, request a new official ticket through the existing verified
+  cookie-pair or authenticated-browser route; the game server must still
+  confirm authentication.
+- If readiness never completes, report whether a login form was seen and
+  continue to the existing one-shot login/manual verification fallback.
+- Close only an ephemeral headless browser spawned by this import, without
+  deleting its profile or clearing cookies.
+
+This improves cold-start timing, but cannot force Habbo to preserve an expired
+session or suppress legitimate email/CAPTCHA verification. Live reliability
+on a fresh restart has not yet been confirmed; automated tests are offline
+and synthetic Windows-browser checks.
+
 HABBO COMPANION v1.1.66 — BROWSER SESSION TO DIRECT TCP TICKET
 ================================================================
 
