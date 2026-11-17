@@ -726,11 +726,20 @@ HABBO_LOGIN_FIELDS_JS=r'''(() => {
   };
   const password=Array.from(document.querySelectorAll(
       'input[type=password]')).find(visible);
-  const email=Array.from(document.querySelectorAll(
-      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
-  )).find(visible);
   const form=password && password.closest('form');
-  const buttons=Array.from((form || document).querySelectorAll(
+  // Avoid filling an unrelated header search box when the login contains a
+  // plain text email field. Prefer controls inside the password's own form.
+  const root=form || (password && password.closest(
+      '[role=dialog],dialog,[class*=modal]')) || document;
+  const candidates=Array.from(root.querySelectorAll(
+      'input[type=email],input[autocomplete=username],input[placeholder*=email i],input[type=text]'
+  )).filter(visible);
+  const email=candidates.find(el=>el.type==='email') ||
+      candidates.find(el=>/username/i.test(el.autocomplete||'') ||
+        /e-?mail/i.test((el.placeholder||'')+' '+
+          (el.getAttribute('aria-label')||''))) ||
+      (form ? candidates.find(el=>el.type==='text') : null);
+  const buttons=Array.from(root.querySelectorAll(
       'button,input[type=submit],[role=button]')).filter(visible);
   const submit=buttons.find(el =>
       /^(let'?s go!?|sign in|log in|login|continue)$/i.test(
@@ -744,6 +753,60 @@ HABBO_LOGIN_FIELDS_JS=r'''(() => {
   return {kind:'form',email:point(email),password:point(password),
           submit:point(submit)};
 })()'''
+
+
+HABBO_LOGIN_DIAGNOSTIC_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const visible=el=>{
+    if (!el) return false;
+    const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>0 && r.height>0 && s.display!=='none' &&
+           s.visibility!=='hidden';
+  };
+  // Inspect only login/challenge UI; return a category, never text or secrets.
+  const otp=Array.from(document.querySelectorAll(
+    'input[autocomplete=one-time-code],input[name*=otp i],input[name*=verification i]'
+  )).some(visible);
+  if (otp) return {kind:'verification'};
+  const captcha=document.querySelector(
+    'iframe[src*=recaptcha],iframe[src*=hcaptcha],.g-recaptcha,'+
+    '.h-captcha,.cf-turnstile,[data-sitekey],input[name*=captcha i]');
+  if (captcha) return {kind:'captcha'};
+  const notices=Array.from(document.querySelectorAll(
+    '[role=alert],[aria-live=assertive],[class*=error],' +
+    '[class*=Error],[class*=alert],[class*=Alert]')).filter(visible);
+  const hint=notices.slice(0,24).map(el=>
+      (el.innerText||el.textContent||'').trim().slice(0,200))
+      .filter(x=>x.length>2 && x.length<200).join(' ');
+  if (/too many|try again later|rate.limit|temporarily blocked/i.test(hint))
+    return {kind:'rate-limit'};
+  if (/captcha|verify you are human|security check/i.test(hint))
+    return {kind:'captcha'};
+  if (/verification|verify your|one.time|two.factor|authenticator|security code/i.test(hint))
+    return {kind:'verification'};
+  if (/incorrect|invalid|wrong (?:email|password|login)|authentication failed/i.test(hint))
+    return {kind:'invalid-credentials'};
+  return {kind:'still-on-form'};
+})()'''
+
+
+def account_login_diagnostic(websocket_url):
+    """Return a narrow safe failure category; no password or page text."""
+    try:
+        response=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_DIAGNOSTIC_JS,
+            'returnByValue':True},timeout=4)
+        if response.get('exceptionDetails'):
+            return 'unknown'
+        value=response.get('result',{}).get('value',{})
+        kind=value.get('kind') if isinstance(value,dict) else None
+        allowed=('unverified-page','verification','captcha','rate-limit',
+                 'invalid-credentials','still-on-form')
+        return kind if kind in allowed else 'unknown'
+    except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
+        return 'unknown'
 
 
 def account_submit_saved_login(websocket_url,email,password):
@@ -838,9 +901,27 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                 return 'login'
             if login_submitted:
                 login_waits+=1
-                if login_waits>=4:
-                    report('Habbo still shows the login form. Check your '
-                           'password, CAPTCHA or verification manually.')
+                if login_waits>=8:
+                    issue=account_login_diagnostic(
+                        page['webSocketDebuggerUrl'])
+                    details={
+                        'invalid-credentials':'Habbo displayed a login error. '
+                            'Check Account 2 saved email and password in Accounts.',
+                        'verification':'Habbo appears to require a verification '
+                            'code. Use Accounts > Open account login.',
+                        'captcha':'Habbo appears to require a human verification '
+                            'step. Use Accounts > Open account login.',
+                        'rate-limit':'Habbo appears to be limiting login attempts. '
+                            'Avoid repeated automatic retries and try later.',
+                        'unverified-page':'Browser navigated away from the '
+                            'verified Habbo HTTPS page; no retry attempted.',
+                        'still-on-form':'Habbo still shows the login form, but '
+                            'no recognised error or challenge was detected. '
+                            'Use Accounts > Open account login to check it.',
+                        'unknown':'Could not inspect the Habbo login response. '
+                            'Use Accounts > Open account login to check it.'
+                    }
+                    report(details[issue])
                     return 'login'
                 time.sleep(1.2)
                 continue
