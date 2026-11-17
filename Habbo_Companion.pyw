@@ -2883,7 +2883,13 @@ class ChatOverlayApp:
                                   'Requesting SSO from official Habbo.com HTTPS'))
                 raw=fetch_habbo_sso_ticket(*cookies)
                 ticket=account_parse_official_ticket_response(raw)
-            actual=ticket.secret + ('.'+ticket.username if ticket.username else '')
+            # The .username suffix in a Habbo launch link is display
+            # metadata, not part of the game-server SSO credential.
+            # Bobba Launcher and our Direct Classic mode both pass only
+            # <opaque>.V4 to the AIR authentication handler.
+            actual=ticket.secret
+            self._packet_put(('tcp_state',ident,generation,
+                              'Official SSO ticket parsed; starting game connection'))
             session=HabboTcpSession(
                 ident,
                 status=lambda msg:self._packet_put(
