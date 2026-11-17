@@ -2839,9 +2839,11 @@ class ChatOverlayApp:
                   style='Panel.TLabel').pack(anchor='w')
         ttk.Entry(f,textvariable=self.tcp_ticket_var,show='*').pack(
             fill='x',pady=(3,7))
-        tk.Label(f,text='Alternatively, provide existing Habbo.com session '
-                 'cookies once. They can be stored in Windows Credential '
-                 'Manager and used for later SSO requests until they expire.',
+        tk.Label(f,text='Automatic option: use the saved login for this account '
+                 'to import session.id and browser_token into Windows Credential '
+                 'Manager without opening Developer Tools. The existing '
+                 'isolated browser is reused, or a temporary headless one is '
+                 'opened. Habbo CAPTCHA/MFA may require a manual login once.',
                  bg='#121a28',fg='#9db7cb',justify='left',
                  wraplength=615).pack(anchor='w',pady=(1,7))
         for name,var in (('session.id',self.tcp_session_id_var),
@@ -2858,6 +2860,9 @@ class ChatOverlayApp:
                    command=self._tcp_save_session).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Forget saved session',
                    command=self._tcp_forget_session).pack(side='left')
+        ttk.Button(f,text='Auto-import session and connect (selected account)',
+                   command=self._tcp_auto_import_selected).pack(
+                   anchor='w',pady=(1,7))
         ttk.Checkbutton(
             f,
             text='Automatically connect saved TCP accounts when Companion opens',
@@ -2876,6 +2881,8 @@ class ChatOverlayApp:
         row.pack(fill='x',pady=(0,9))
         ttk.Button(row,text='Disconnect all',
                    command=self._tcp_disconnect_all).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Auto-import and connect all',
+                   command=self._tcp_auto_import_all).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Refresh account list',
                    command=self._tcp_render).pack(side='left')
         tk.Label(
@@ -2897,10 +2904,12 @@ class ChatOverlayApp:
                              bg='#0b1422',fg='#a9c9db',
                              relief='flat',font=('Consolas',9))
         self.tcp_log.pack(fill='x',pady=(2,7))
-        tk.Label(f,text='Website authentication still requires a valid '
-                 'Habbo.com session. Saved login passwords alone cannot create '
-                 'one here. Sessions expire, and Habbo may change packet IDs '
-                 'or reject unofficial clients; no anti-bot bypass is provided.',
+        tk.Label(f,text='Automatic session import uses your own separate '
+                 'Habbo account browser and any login already saved in the '
+                 'Accounts tab. It never reads your regular Brave profile. '
+                 'Cookies stay in Windows Credential Manager, not settings '
+                 'or logs. CAPTCHA/2FA and expired or incorrect passwords '
+                 'still require the normal official sign-in process.',
                  bg='#121a28',fg='#8ea9c1',justify='left',
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
@@ -3011,7 +3020,20 @@ class ChatOverlayApp:
         # prompt for credentials, or launch a game executable.
         self._tcp_connect_all()
 
-    def _tcp_connect_one(self, account, use_form=False):
+    def _tcp_auto_import_selected(self):
+        account=self._tcp_selected()
+        if account is not None:
+            self._tcp_connect_one(account,auto_capture=True)
+            self._tcp_render()
+
+    def _tcp_auto_import_all(self):
+        for account in self._account_profiles:
+            self._tcp_connect_one(account,auto_capture=True)
+        self._tcp_render()
+        self.tcp_status_var.set('Requested account-specific automatic session '
+                                'imports; each uses its own isolated profile.')
+
+    def _tcp_connect_one(self, account, use_form=False, auto_capture=False):
         ident=account['id']
         if ident in self._tcp_inflight:
             return
@@ -3038,30 +3060,48 @@ class ChatOverlayApp:
                 cookies=(a,b)
             self.tcp_session_id_var.set('')
             self.tcp_browser_token_var.set('')
-        if ticket is None:
+        if not auto_capture and ticket is None:
             ticket=self._direct_ticket_queue.pop(ident,None)
-        if ticket is None and cookies is None:
+        if not auto_capture and ticket is None and cookies is None:
             try:
                 cookies=account_session_cookie_read(ident)
             except (OSError,ValueError):
                 self._tcp_states[ident]='Could not read saved Windows session'
                 return
-        if ticket is None and cookies is None:
-            self._tcp_states[ident]='No SSO ticket or saved website session'
+        if ticket is None and cookies is None and not auto_capture:
+            if use_form:
+                # An explicit Connect selected click may acquire a missing
+                # session using this account's saved browser login.
+                auto_capture=True
+            else:
+                self._tcp_states[ident]='No saved session; click Auto-import'
+                return
+        if auto_capture and any(
+            account_browser_debug_port(ident)==account_browser_debug_port(other['id'])
+            for other in self._account_profiles if other['id']!=ident):
+            self._tcp_states[ident]='Browser port conflict between accounts'
             return
         generation=self._tcp_generation.get(ident,0)+1
         self._tcp_generation[ident]=generation
         self._tcp_inflight.add(ident)
-        self._tcp_states[ident]='Starting direct TCP'
+        self._tcp_states[ident]=(
+            'Automatically importing website session' if auto_capture
+            else 'Starting direct TCP')
         threading.Thread(
             target=self._tcp_connect_worker,
-            args=(ident,account['label'],ticket,cookies,generation),
+            args=(dict(account),ticket,cookies,generation,auto_capture),
             daemon=True,name='companion-live-tcp-'+ident).start()
 
-    def _tcp_connect_worker(self,ident,label,ticket,cookies,generation):
+    def _tcp_connect_worker(self,account,ticket,cookies,generation,
+                            auto_capture=False):
+        ident=account['id']
         session=None
         try:
-            if ticket is None:
+            if auto_capture and ticket is None:
+                ticket=account_import_session_automatically(
+                    account,lambda message:self._packet_put(
+                        ('tcp_state',ident,generation,message)))
+            elif ticket is None:
                 self._packet_put(('tcp_state',ident,generation,
                                   'Requesting SSO from official Habbo.com HTTPS'))
                 raw=fetch_habbo_sso_ticket(*cookies)
