@@ -1256,6 +1256,24 @@ def account_import_session_automatically(account,report):
         login_result=account_attempt_auto_play(
             port,login_status,credentials=credentials,login_only=True)
         if login_result!='signed_in':
+            # The real Habbo login uses LET'S GO! followed by a PLAY home
+            # screen. An unchanged login DOM is not proof authentication
+            # failed (a stale tab or slow SPA update can obscure success).
+            # Confirm strictly with the first-party cookie pair + official
+            # HTTPS SSO request before giving up. This never reads or uses
+            # the separate 'Launch and log in' code shown in the PLAY modal.
+            report('Login page did not confirm sign-in; checking the official '
+                   'Habbo HTTPS session before failing.')
+            try:
+                ticket,cookies=verified_ticket_from_browser()
+            except (OSError,ValueError,RuntimeError,HabboTcpError,
+                    socket.timeout,TimeoutError):
+                pass
+            else:
+                account_session_cookie_write(ident,*cookies)
+                report('Official Habbo HTTPS session is valid despite the '
+                       'unrecognised page; saved to Windows vault.')
+                return ticket
             reasons={
                 'login':'Website login form remains visible. Check the saved '
                         'password or complete CAPTCHA/2FA using Accounts > '
