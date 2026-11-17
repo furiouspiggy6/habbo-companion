@@ -2048,7 +2048,7 @@ def account_playwright_is_official(url):
 def account_playwright_visible(locator):
     """Playwright locator query, not a page coordinate or JS hit-test."""
     try:
-        return locator.count()>0 and locator.first.is_visible()
+        return locator.filter(visible=True).count()>0
     except (OSError,RuntimeError):
         return False
 
@@ -2064,17 +2064,17 @@ def account_playwright_control(page,kind):
     pattern=re.compile(patterns[kind],re.I)
     # Prefer semantic buttons and links before custom-styled text controls.
     for role in ('button','link'):
-        target=page.get_by_role(role,name=pattern)
+        target=page.get_by_role(role,name=pattern).filter(visible=True)
         if account_playwright_visible(target):
             return target.first
     target=page.locator('button,a,[role="button"],input[type="submit"]').filter(
-        has_text=pattern)
+        has_text=pattern,visible=True)
     if account_playwright_visible(target):
         return target.first
     # Some Habbo PLAY buttons render as styled spans. Playwright still
     # dispatches trusted click input to the text/containing control.
     if kind in ('play','launch'):
-        target=page.get_by_text(pattern,exact=True)
+        target=page.get_by_text(pattern,exact=True).filter(visible=True)
         if account_playwright_visible(target):
             return target.first
     return None
@@ -2129,7 +2129,7 @@ def account_playwright_login_form(page):
     )
     email=None
     for selector in choices:
-        loc=root.locator(selector)
+        loc=root.locator(selector).filter(visible=True)
         if account_playwright_visible(loc):
             email=loc.first
             break
@@ -2139,7 +2139,8 @@ def account_playwright_login_form(page):
     if button is None:
         # HTML submit input's accessible name may not match; still restrict
         # the fallback to the visible form containing the password.
-        loc=root.locator('button[type="submit"],input[type="submit"]')
+        loc=root.locator(
+            'button[type="submit"],input[type="submit"]').filter(visible=True)
         if account_playwright_visible(loc):
             button=loc.first
     return (email,password,button) if button is not None else None
