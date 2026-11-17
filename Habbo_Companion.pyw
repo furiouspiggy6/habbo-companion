@@ -2743,7 +2743,7 @@ class ChatOverlayApp:
         tk.Label(f,textvariable=self.tcp_status_var,bg='#121a28',
                  fg='#73c5ab',justify='left',wraplength=615).pack(
                  anchor='w',fill='x',pady=(0,9))
-        ttk.Label(f,text='Recent incoming packet IDs (payloads and secrets hidden)',
+        ttk.Label(f,text='TCP connection steps and incoming packet IDs (secrets hidden)',
                   style='Panel.TLabel').pack(anchor='w')
         self.tcp_log=tk.Text(f,height=5,state='disabled',
                              bg='#0b1422',fg='#a9c9db',
@@ -2756,6 +2756,18 @@ class ChatOverlayApp:
                  bg='#121a28',fg='#8ea9c1',justify='left',
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
+
+    def _tcp_log_event(self, ident, message):
+        """Safe diagnostic log: never pass secrets, cookies or raw packets."""
+        if not self.tcp_log.winfo_exists():
+            return
+        self.tcp_log.configure(state='normal')
+        self.tcp_log.insert('end',
+            time.strftime('%H:%M:%S')+' ['+ident[:6]+'] '+message+'\n')
+        if int(self.tcp_log.index('end-1c').split('.')[0])>90:
+            self.tcp_log.delete('1.0','30.0')
+        self.tcp_log.see('end')
+        self.tcp_log.configure(state='disabled')
 
     def _tcp_selected(self):
         selected=self.tcp_table.selection()
@@ -6394,6 +6406,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if event=='tcp_state':
                     self._tcp_states[ident]=item[3]
                     self.tcp_status_var.set(item[3])
+                    self._tcp_log_event(ident,item[3])
                     self._tcp_render()
                 elif event=='tcp_connected':
                     self._tcp_sessions[ident]=item[3]
@@ -6406,21 +6419,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self._tcp_states[ident]='Authentication succeeded, '
                         self._tcp_states[ident]+='but the game socket closed.'
                         self.tcp_status_var.set(self._tcp_states[ident])
+                    self._tcp_log_event(ident,self._tcp_states[ident])
                     self._tcp_render()
                 elif event=='tcp_failed':
                     self._tcp_inflight.discard(ident)
                     self._tcp_states[ident]='Connection failed: '+item[3]
                     self.tcp_status_var.set(self._tcp_states[ident])
+                    self._tcp_log_event(ident,self._tcp_states[ident])
                     self._tcp_render()
                 elif event=='tcp_packet':
-                    if self.tcp_log.winfo_exists():
-                        self.tcp_log.configure(state='normal')
-                        self.tcp_log.insert('end',
-                            f'{ident}: packet {item[3]} ({item[4]} bytes)\n')
-                        if int(self.tcp_log.index('end-1c').split('.')[0])>90:
-                            self.tcp_log.delete('1.0','30.0')
-                        self.tcp_log.see('end')
-                        self.tcp_log.configure(state='disabled')
+                    self._tcp_log_event(ident,
+                        f'Incoming packet ID {item[3]} ({item[4]} bytes)')
                 continue
             if item[0]=='direct_ticket_fetched':
                 self._direct_ticket_fetch_running=False
