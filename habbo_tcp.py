@@ -35,7 +35,7 @@ TCP_OUT = dict(hello=4000, init_dh=1445, finish_dh=3393, version=1422,
                unique=760, sso=3674, info=3745, pong=2418, latency=1255)
 TCP_IN = dict(init_dh=503, finish_dh=3722, auth_ok=115,
               ping=2829, disconnect=4000, banned=1510)
-_TICKET = re.compile(r"^[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?(?:\.[A-Za-z0-9_.:\-]{1,40})?$", re.I)
+_TICKET = re.compile(r"^[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?$", re.I)
 _RELEASE = re.compile(r"\bWIN63-[0-9]{12}-[0-9]{5,}\b")
 
 
@@ -275,7 +275,13 @@ class HabboTcpSession:
             sock.sendall(data)
 
     def _await_packet(self, wanted, limit=15):
+        stage = {
+            TCP_IN["init_dh"]: "initial Diffie-Hellman handshake",
+            TCP_IN["finish_dh"]: "Diffie-Hellman key confirmation",
+            TCP_IN["auth_ok"]: "SSO authentication",
+        }.get(wanted, "game-server response")
         deadline = time.monotonic() + limit
+        unexpected = []
         while time.monotonic() < deadline:
             self.sock.settimeout(max(0.2, min(3.0, deadline - time.monotonic())))
             try:
@@ -286,14 +292,25 @@ class HabboTcpSession:
                 return payload
             if packet_id == TCP_IN["ping"]:
                 self._send(TCP_OUT["pong"])
+                continue
             if packet_id in (TCP_IN["disconnect"], TCP_IN["banned"]):
-                raise HabboTcpError("Game server rejected or closed authentication")
-        stage = {
-            TCP_IN["init_dh"]: "server Diffie-Hellman parameters",
-            TCP_IN["finish_dh"]: "server encryption confirmation",
-            TCP_IN["auth_ok"]: "Habbo AuthenticationOK",
-        }.get(wanted, "server response")
-        raise HabboTcpError("Timed out waiting for " + stage)
+                # Numeric reason codes and packet IDs are safe diagnostics.
+                # Never include server response bodies, SSO tokens or cookies.
+                reason = ""
+                if packet_id == TCP_IN["disconnect"] and len(payload) >= 4:
+                    code = struct.unpack_from(">i", payload)[0]
+                    reason = " (reason code " + str(code) + ")"
+                kind = ("disconnect" if packet_id == TCP_IN["disconnect"]
+                        else "denial")
+                raise HabboTcpError(
+                    "Game server sent " + kind + " packet " + str(packet_id)
+                    + reason + " during " + stage)
+            if len(unexpected) < 6:
+                unexpected.append(packet_id)
+        detail = ""
+        if unexpected:
+            detail = " (unexpected packet IDs: " + ",".join(map(str,unexpected)) + ")"
+        raise HabboTcpError("Timed out during " + stage + detail)
 
     def connect(self, ticket, release=None, timeout=12):
         if self.sock:
@@ -311,7 +328,7 @@ class HabboTcpSession:
         try:
             self.sock = socket.create_connection((TCP_HOST, TCP_PORT), timeout=timeout)
             self.sock.settimeout(timeout)
-            self.on_status("TCP connected; performing RSA/DH handshake")
+            self.on_status("TCP connected; awaiting first Diffie-Hellman response")
             self._send(TCP_OUT["hello"], _string(release) + _string("FLASH25")
                        + struct.pack(">ii", 6, 4), plaintext=True)
             self._send(TCP_OUT["init_dh"], plaintext=True)
@@ -323,8 +340,10 @@ class HabboTcpSession:
                 raise HabboTcpError("Invalid DH group")
             private = secrets.randbits(120) | (1 << 119)
             public = pow(g, private, p)
+            self.on_status("Server DH parameters validated; sending client DH key")
             self._send(TCP_OUT["finish_dh"], _string(_rsa_encipher_decimal(public)),
                        plaintext=True)
+            self.on_status("Waiting for server DH key confirmation")
             answer = self._await_packet(TCP_IN["finish_dh"], 15)
             signed_public, offset = _decode_string(answer)
             server_public = _rsa_decipher_decimal(signed_public)

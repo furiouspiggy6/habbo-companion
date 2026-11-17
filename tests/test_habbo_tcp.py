@@ -39,6 +39,14 @@ class ProtocolTests(unittest.TestCase):
             tcp.profile_fingerprint("../../password")
         self.assertNotIn("browser_token", first)
 
+    def test_username_suffix_is_not_part_of_tcp_sso_token(self):
+        session = tcp.HabboTcpSession("012345abcdef")
+        # Launch links can have .username metadata. The TCP transport must
+        # receive only the actual opaque.V4 credential from ticket.secret.
+        with self.assertRaises(ValueError):
+            session.connect("0123456789abcdef.V4.testuser")
+        self.assertIsNone(session.sock)
+
     def test_invalid_sso_and_bad_rsa_unpad_rejected(self):
         with self.assertRaises(tcp.HabboTcpError):
             tcp._rsa_decipher_decimal("00")
@@ -194,6 +202,39 @@ class IdentityStream:
         return bytes(data)
 
 
+class AuthenticationDiagnosticsTests(unittest.TestCase):
+    def test_disconnect_during_handshake_has_stage_and_reason_code(self):
+        fake = FakeGameSocket(
+            tcp._frame(tcp.TCP_IN["disconnect"], struct.pack(">i",122)))
+        session = tcp.HabboTcpSession("012345abcdef")
+        session.sock = fake
+        with self.assertRaises(tcp.HabboTcpError) as caught:
+            session._await_packet(tcp.TCP_IN["init_dh"], limit=1)
+        self.assertIn(
+            "disconnect packet 4000 (reason code 122) during initial Diffie-Hellman handshake",
+            str(caught.exception))
+        session.close()
+
+    def test_denial_during_sso_is_distinguished_from_handshake(self):
+        fake = FakeGameSocket(tcp._frame(tcp.TCP_IN["banned"]))
+        session = tcp.HabboTcpSession("012345abcdef")
+        session.sock = fake
+        with self.assertRaisesRegex(tcp.HabboTcpError,
+                r"denial packet 1510 during SSO authentication"):
+            session._await_packet(tcp.TCP_IN["auth_ok"], limit=1)
+        session.close()
+
+    def test_unexpected_packet_ids_reported_without_payloads(self):
+        fake = FakeGameSocket(tcp._frame(65500, b"private-payload"))
+        session = tcp.HabboTcpSession("012345abcdef")
+        session.sock = fake
+        with self.assertRaises(tcp.HabboTcpError) as caught:
+            session._await_packet(tcp.TCP_IN["init_dh"], limit=0.04)
+        self.assertIn("unexpected packet IDs: 65500", str(caught.exception))
+        self.assertNotIn("private-payload", str(caught.exception))
+        session.close()
+
+
 class SessionIntegrationTests(unittest.TestCase):
     def test_real_frame_handshake_then_server_auth_ok_required(self):
         incoming = (tcp._frame(tcp.TCP_IN["init_dh"],
@@ -259,6 +300,10 @@ class RepositoryIntegrationTests(unittest.TestCase):
         self.assertIn("self._tcp_disconnect_all()", source)
         self.assertIn("account_session_cookie_write(", source)
         self.assertIn("Credential Manager", source)
+        self.assertIn("actual=ticket.secret", source)
+        self.assertNotIn("actual=ticket.secret + ('.'+ticket.username", source)
+        self.assertIn("self._tcp_log_event(ident,self._tcp_states[ident])", source)
+        self.assertIn("TCP connection steps and incoming packet IDs", source)
         self.assertIn("tcp_auto_connect=False", source)
         self.assertIn("self.root.after(1200,self._tcp_auto_connect_startup)", source)
         self.assertIn("Automatically connect saved TCP accounts", source)
