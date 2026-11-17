@@ -10,6 +10,23 @@ import habbo_tcp as tcp
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_documented_air_handshake_header_registry(self):
+        # The client-side AIR packet registry, not a standalone bot's guessed
+        # headers. Live 2026 compatibility still requires real verification.
+        self.assertEqual(tcp.TCP_OUT, {
+            "hello":4000, "init_dh":3110, "finish_dh":773, "version":1053,
+            "unique":2490, "sso":2419, "info":357,
+            "pong":2596, "latency":295,
+        })
+        self.assertEqual(tcp.TCP_IN, {
+            "init_dh":1347, "finish_dh":3885, "auth_ok":2491,
+            "ping":3928, "disconnect":4000,
+        })
+        self.assertEqual(tcp.TCP_FALLBACK_RELEASE,
+                         "WIN63-202611041140-327405090")
+        self.assertEqual(tcp.TCP_CLIENT_DATA,
+                         "https://www.habbo.com/gamedata/external_variables")
+
     def test_binary_frame_string_and_sizes(self):
         self.assertEqual(tcp._frame(4000, tcp._string("test")),
                          struct.pack(">IHH", 8, 4000, 4) + b"test")
@@ -215,13 +232,15 @@ class AuthenticationDiagnosticsTests(unittest.TestCase):
             str(caught.exception))
         session.close()
 
-    def test_denial_during_sso_is_distinguished_from_handshake(self):
-        fake = FakeGameSocket(tcp._frame(tcp.TCP_IN["banned"]))
+    def test_unverified_header_is_not_labeled_as_a_ban(self):
+        fake = FakeGameSocket(tcp._frame(1510, b"unverified")
+                              + tcp._frame(tcp.TCP_IN["disconnect"]))
         session = tcp.HabboTcpSession("012345abcdef")
         session.sock = fake
-        with self.assertRaisesRegex(tcp.HabboTcpError,
-                r"denial packet 1510 during SSO authentication"):
+        with self.assertRaises(tcp.HabboTcpError) as caught:
             session._await_packet(tcp.TCP_IN["auth_ok"], limit=1)
+        self.assertIn("disconnect packet 4000", str(caught.exception))
+        self.assertNotIn("denial packet 1510", str(caught.exception))
         session.close()
 
     def test_unexpected_packet_ids_reported_without_payloads(self):
