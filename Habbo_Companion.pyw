@@ -2039,7 +2039,7 @@ def account_playwright_is_official(url):
     try:
         u=urllib.parse.urlsplit(url)
         host=(u.hostname or '').lower()
-        return (u.scheme=='https:'[:-1] and u.port in (None,443) and
+        return (u.scheme=='https' and u.port in (None,443) and
                 (host=='habbo.com' or host.endswith('.habbo.com')))
     except (TypeError,ValueError):
         return False
@@ -2212,7 +2212,7 @@ class AccountPlaywrightMonitor:
             if self.lines<11:
                 self._log('CLIENT -> #'+str(num)+' '+method+' '+path+
                           ' ('+site+', '+kind+').')
-        except (OSError,RuntimeError,ValueError,TypeError):
+        except Exception:
             pass
 
     def on_response(self,res):
@@ -2229,7 +2229,7 @@ class AccountPlaywrightMonitor:
                       ' ('+site+').',important=code>=400)
             if code>=400 and site=='Habbo':
                 self.failure_responses.append(res)
-        except (OSError,RuntimeError,ValueError,TypeError):
+        except Exception:
             pass
 
     def on_failed(self,req):
@@ -2277,7 +2277,7 @@ class AccountPlaywrightMonitor:
                     self._log('SERVER <- Safe error code '+code+'.',important=True)
                 if message:
                     self._log('SERVER <- '+message,important=True)
-            except (OSError,RuntimeError,ValueError,TypeError):
+            except Exception:
                 pass
         self.report('Login network: '+str(self.outgoing)+' request(s), '+
                     str(self.received)+' HTTP response(s), '+
@@ -2292,7 +2292,7 @@ class AccountPlaywrightMonitor:
             (self.page,'console',self.on_console)):
             try:
                 emitter.remove_listener(event,callback)
-            except (OSError,RuntimeError,ValueError):
+            except Exception:
                 pass
 
 
