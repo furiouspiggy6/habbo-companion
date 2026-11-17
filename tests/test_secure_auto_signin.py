@@ -135,11 +135,12 @@ class AutoSigninTests(unittest.TestCase):
         count=[]
         a['account_submit_saved_login']=lambda *_:(count.append(1) or True)
         a['time']=SimpleNamespace(sleep=lambda _:None)
+        a['account_login_diagnostic']=lambda ws:'still-on-form'
         reports=[]
         self.assertEqual(a['account_attempt_auto_play'](
             44321,reports.append,('e@example.com','wrongsecret')),'login')
         self.assertEqual(len(count),1)
-        self.assertIn('verification',reports[-1].lower())
+        self.assertIn('login form',reports[-1].lower())
         self.assertNotIn('wrongsecret',' '.join(reports))
 
     def test_plaintext_password_is_not_a_profile_setting(self):
