@@ -17,6 +17,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
 
 TCP_HOST = "game-us.habbo.com"
 TCP_PORT = 30000
@@ -32,14 +33,15 @@ TCP_RSA_N = int(
 )
 TCP_RSA_E = 65537
 
-# Explicitly sourced from the AIR client's HabboMessages.as packet registry
-# (habbo-cc/Habbo-Sky feature-air). These headers supersede unverified
-# numbers copied from a bot, but 2026 live compatibility is still unproven.
-# Do not reinterpret unrelated headers as ban/disconnect messages.
-TCP_OUT = dict(hello=4000, init_dh=3110, finish_dh=773, version=1053,
-               unique=2490, sso=2419, info=357, pong=2596, latency=295)
-TCP_IN = dict(init_dh=1347, finish_dh=3885, auth_ok=2491,
-              ping=3928, disconnect=4000)
+# The previous 2016 PRODUCTION mapping is from a private retro emulator,
+# not from Habbo.com 2026. It caused a silent 15-second timeout on 2026-11-17.
+# This newer community AIR client mapping (devlyresh/Habbo-Bot) previously
+# reached an explicit server disconnect. It is NOT verified on Habbo.com 2026;
+# do not cycle headers, guess packet IDs, or automatically retry SSO tickets.
+TCP_OUT = dict(hello=4000, init_dh=1445, finish_dh=3393, version=1422,
+               unique=760, sso=3674, info=3745, pong=2418, latency=1255)
+TCP_IN = dict(init_dh=503, finish_dh=3722, auth_ok=115,
+              ping=2829, disconnect=4000)
 _TICKET = re.compile(r"^[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?$", re.I)
 _RELEASE = re.compile(r"\bWIN63-[0-9]{12}-[0-9]{5,}\b")
 
@@ -48,8 +50,27 @@ class HabboTcpError(Exception):
     """A valid TCP connection does not imply game authentication."""
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
+def _valid_gamedata_redirect(url):
+    """Only follow Habbo's same-origin content-hashed external variables."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        return (parts.scheme == "https"
+                and parts.netloc == "www.habbo.com"
+                and re.fullmatch(
+                    r"/gamedata/external_variables/[a-f0-9]{40}", parts.path
+                ) is not None
+                and not parts.query and not parts.fragment)
+    except (TypeError, ValueError):
+        return False
+
+
+class _RestrictedRedirect(urllib.request.HTTPRedirectHandler):
+    def __init__(self, allow_gamedata):
+        self.allow_gamedata = allow_gamedata
+
     def redirect_request(self, request, fp, code, msg, headers, newurl):
+        if self.allow_gamedata and _valid_gamedata_redirect(newurl):
+            return super().redirect_request(request, fp, code, msg, headers, newurl)
         return None
 
 
@@ -57,12 +78,17 @@ def _official_request(url, method="GET", headers=None, timeout=10):
     if url not in (TCP_CLIENT_DATA, TCP_SSO_URL):
         raise ValueError("Only official Habbo.com endpoints are supported")
     request = urllib.request.Request(url, method=method, headers=headers or {})
-    opener = urllib.request.build_opener(_NoRedirect)
+    opener = urllib.request.build_opener(_RestrictedRedirect(url == TCP_CLIENT_DATA))
+    # The official public variables response is considerably larger than 64KiB.
+    cap = 524288 if url == TCP_CLIENT_DATA else 65536
     with opener.open(request, timeout=timeout) as response:
-        if response.geturl() != url:
+        final_url = response.geturl()
+        if final_url != url and not (
+            url == TCP_CLIENT_DATA and _valid_gamedata_redirect(final_url)
+        ):
             raise HabboTcpError("Unexpected redirect from Habbo.com")
-        body = response.read(65537)
-    if len(body) > 65536:
+        body = response.read(cap + 1)
+    if len(body) > cap:
         raise HabboTcpError("Habbo.com response too large")
     return body
 
@@ -234,6 +260,8 @@ class HabboTcpSession:
         # across retries without advancing the stream cipher twice.
         self._recv_pending = bytearray()
         self._frame_size = None
+        self._recv_bytes = 0
+        self._send_bytes = 0
 
     def _recv(self, amount):
         if not 0 < amount <= TCP_MAX_FRAME:
@@ -247,6 +275,7 @@ class HabboTcpSession:
             block = sock.recv(amount - len(self._recv_pending))
             if not block:
                 raise HabboTcpError("Game socket closed by server")
+            self._recv_bytes += len(block)
             self._recv_pending.extend(block)
         result = bytes(self._recv_pending[:amount])
         del self._recv_pending[:amount]
@@ -278,6 +307,7 @@ class HabboTcpSession:
             if self.tx and not plaintext:
                 data = self.tx.apply(data)
             sock.sendall(data)
+            self._send_bytes += len(data)
 
     def _await_packet(self, wanted, limit=15):
         stage = {
@@ -313,6 +343,15 @@ class HabboTcpSession:
         detail = ""
         if unexpected:
             detail = " (unexpected packet IDs: " + ",".join(map(str,unexpected)) + ")"
+        if self._recv_bytes == 0:
+            detail += " (no game-server bytes received)"
+        else:
+            detail += " (received " + str(self._recv_bytes) + " socket bytes"
+            if self._frame_size is not None:
+                detail += "; awaiting remaining frame bytes"
+            elif self._recv_pending:
+                detail += "; incomplete frame header buffered"
+            detail += ")"
         raise HabboTcpError("Timed out during " + stage + detail)
 
     def connect(self, ticket, release=None, timeout=12):
@@ -323,7 +362,7 @@ class HabboTcpSession:
         if release is None:
             release, is_current = official_release()
             if not is_current:
-                self.on_status("Official version lookup unavailable; using public 2026-11-04 AIR build (not live-verified)")
+                self.on_status("WIN63 release not verified by public config; using 2026-11-04 AIR build (not live-verified)")
         elif not _RELEASE.fullmatch(release):
             raise ValueError("Invalid Habbo client release version")
         self.stop.clear()
@@ -331,7 +370,10 @@ class HabboTcpSession:
         try:
             self.sock = socket.create_connection((TCP_HOST, TCP_PORT), timeout=timeout)
             self.sock.settimeout(timeout)
-            self.on_status("TCP connected (AIR "+release+"; documented AIR packet IDs); awaiting first DH response")
+            self.on_status(
+                "TCP connected (AIR " + release
+                + "; community packet mapping, not live-verified); "
+                + "awaiting first DH response")
             self._send(TCP_OUT["hello"], _string(release) + _string("FLASH25")
                        + struct.pack(">ii", 6, 4), plaintext=True)
             self._send(TCP_OUT["init_dh"], plaintext=True)

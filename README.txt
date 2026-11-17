@@ -556,3 +556,17 @@ variables from the current official Habbo.com endpoint, and updates the
 compatibility release baseline to the public 2026-11-04 AIR build.
 The 2026 game server's exact protocol remains unverified. It never
 tries alternate packet IDs automatically. Credentials are not logged.
+
+
+Version 1.1.48 — More precise initial TCP handshake diagnosis
+---------------------------------------------------------------
+- Return from the 2016 retro-emulator packet mapping (silent timeouts)
+  to the newer community AIR mapping (previously received disconnect),
+  retaining the documented November 2026 AIR version baseline. Current
+  game-server header compatibility is still not verified.
+- Official public external_variables fetch now follows a tightly scoped,
+  same-site content-hashed redirect and supports larger configuration files.
+- SSO ticket HTTP endpoint still disallows redirects.
+- Handshake timeout reports how many socket bytes arrived (counts only,
+  no packet payloads or secrets).
+This is not a confirmed live login fix. Do not retry repeatedly if rejected.
