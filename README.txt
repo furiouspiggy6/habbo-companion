@@ -521,3 +521,13 @@ website sessions stored in Windows Credential Manager for each Habbo account.
 No Brave, game launcher, or G-Earth is launched by this TCP feature.
 The separate TCP connections still need live Habbo AuthenticationOK.
 Expired or revoked website sessions require a new official sign-in.
+
+
+Version 1.1.45 — Robust direct TCP frame reassembly
+----------------------------------------------------
+Prevent fragmented incoming TCP packet headers and bodies being lost if
+socket reads time out during the handshake or authenticated session. Cipher
+position is preserved on resume. More specific handshake timeout messages.
+No Bobba code, Bobba API, AIR client assets or third-party dependency is added.
+This does not remove the need for a legitimate Habbo login/session or prove
+live Habbo protocol compatibility.
