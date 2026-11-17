@@ -977,6 +977,142 @@ def account_fetch_ticket_from_signed_in_profile(debug_port):
     return account_parse_official_ticket_response(obj.get('value'))
 
 
+def account_capture_habbo_session_cookies(debug_port):
+    """Read only the two requested cookies from an authenticated account tab.
+
+    Uses Chromium's supported DevTools cookie API (including HttpOnly cookies)
+    on the existing isolated Companion browser profile. Never reads other
+    browser profiles or dumps the full cookie jar to logs, disk or UI.
+    """
+    page=account_habbo_page(debug_port)
+    if page is None or page.get('_inspect_error'):
+        raise ValueError('Companion account browser is not available or inspectable.')
+    state=page.get('_preflight_step',{}).get('kind')
+    if state not in ('play','play-now','launch','signed_in','download'):
+        raise ValueError('This Habbo browser profile is not signed in.')
+    ws=page['webSocketDebuggerUrl']
+    parsed=urllib.parse.urlsplit(ws)
+    if (parsed.scheme!='ws' or parsed.hostname!='127.0.0.1'
+        or parsed.port!=int(debug_port)
+        or not parsed.path.startswith('/devtools/page/')):
+        raise ValueError('Account browser is not on its isolated local control port.')
+    # Network.getCookies returns HttpOnly entries and scopes the request to
+    # the URL below. Never use Runtime.evaluate/document.cookie here.
+    result=account_cdp_call(ws,'Network.getCookies',{
+        'urls':['https://www.habbo.com/']
+    })
+    cookies=result.get('cookies')
+    if not isinstance(cookies,list) or len(cookies)>250:
+        raise ValueError('Habbo cookie response is unavailable or invalid.')
+    found={}
+    for cookie in cookies:
+        if not isinstance(cookie,dict):
+            continue
+        name=cookie.get('name')
+        if name not in ('session.id','browser_token'):
+            continue
+        domain=cookie.get('domain')
+        if not isinstance(domain,str) or domain.lower() not in (
+                'www.habbo.com','habbo.com','.habbo.com'):
+            continue
+        if cookie.get('secure') is not True:
+            continue
+        val=cookie.get('value')
+        if (not isinstance(val,str) or not 1<=len(val)<=900
+            or any(ord(ch)<33 or ord(ch)>126 or ch in ';,\r\n'
+                   for ch in val)):
+            raise ValueError('One of the required Habbo cookies is invalid.')
+        if name in found and found[name]!=val:
+            raise ValueError('Ambiguous duplicate Habbo session cookie.')
+        found[name]=val
+    if len(found)!=2:
+        raise ValueError('Habbo session.id/browser_token not found in this '
+                         'signed-in account browser.')
+    return found['session.id'],found['browser_token']
+
+
+def account_import_session_automatically(account,report):
+    """On demand: headless isolated browser login -> two cookies -> fresh SSO.
+
+    Uses an existing local account browser if one is running. Otherwise,
+    starts this account's private Chromium profile in HEADLESS mode and
+    attempts the existing saved-login flow once. Website MFA/CAPTCHA are
+    never bypassed. The official ticket is validated before cookies are
+    persisted in the per-account Windows Credential Manager vault.
+    """
+    ident=account['id']
+    _account_credential_target(ident)
+    port=account_browser_debug_port(ident)
+    browser=account_login_browser()
+    if browser is None:
+        raise ValueError('Brave, Chrome or Edge is required to renew a website session.')
+    # Never attach the wrong account: dedicated browser profile & CDP port.
+    folder=APP_DIR/'account_browser_profiles'/ident
+    browser_url=validate_habbo_login_url(account['url'])
+    try:
+        credentials=account_saved_login_read(ident)
+    except (OSError,ValueError):
+        raise ValueError('Could not read the saved login for this account.') from None
+    spawned=None
+    try:
+        try:
+            account_browser_pages(port)
+            report('Reusing the existing isolated account browser session.')
+        except (OSError,ValueError,TimeoutError,UnicodeError,
+                urllib.error.URLError):
+            folder.mkdir(parents=True,exist_ok=True)
+            command=account_browser_command(browser,folder,browser_url,port)
+            # Chromium can use its regular persistent profile while headless.
+            # A first-time captcha or 2FA needs the Accounts login window.
+            command.insert(-1,'--headless=new')
+            command.insert(-1,'--window-size=1280,900')
+            report('Opening this account in a private background browser.')
+            spawned=subprocess.Popen(
+                command,cwd=str(browser.parent),
+                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            for _ in range(24):
+                time.sleep(0.4)
+                try:
+                    account_browser_pages(port)
+                    break
+                except (OSError,ValueError,TimeoutError,UnicodeError,
+                        urllib.error.URLError):
+                    continue
+            else:
+                raise ValueError(
+                    'Background browser control unavailable. Open account '
+                    'login from Accounts to renew this profile.')
+        report('Checking the saved Habbo website sign-in.')
+        login_result=account_attempt_auto_play(
+            port,lambda _message:None,credentials=credentials,login_only=True)
+        if login_result!='signed_in':
+            raise ValueError(
+                'Habbo website sign-in needs attention. Save the login under '
+                'Accounts, or use Open account login for CAPTCHA/2FA once.')
+        report('Habbo signed in; importing session cookies without Developer Tools.')
+        cookies=account_capture_habbo_session_cookies(port)
+        # Verify the cookies by obtaining a real one-time ticket before saving.
+        raw_ticket=fetch_habbo_sso_ticket(*cookies)
+        ticket=account_parse_official_ticket_response(raw_ticket)
+        account_session_cookie_write(ident,*cookies)
+        report('Official session validated and saved in Windows vault.')
+        return ticket
+    finally:
+        # Only close a browser process created by this invocation. Never
+        # close a user-opened browser or another account's browser.
+        if spawned is not None:
+            try:
+                page=account_habbo_page(port)
+                if page:
+                    account_cdp_call(page['webSocketDebuggerUrl'],
+                                     'Browser.close',timeout=2)
+            except (OSError,ValueError,TimeoutError,RuntimeError):
+                try:
+                    spawned.terminate()
+                except OSError:
+                    pass
+
+
 def account_is_native_habbo_window(title):
     """Strict native AIR title filter; excludes Habbo webpages and Launcher."""
     return bool(re.match(r'^HabboAir(?:Plus)?(?:\b|[\s\[\-])',
