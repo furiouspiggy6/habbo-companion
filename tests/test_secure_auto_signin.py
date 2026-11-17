@@ -1,5 +1,6 @@
 """Offline tests for automatic Habbo website login via Windows credential vault."""
 import ast
+import json
 from pathlib import Path
 import re
 from types import SimpleNamespace
@@ -18,7 +19,7 @@ FUNCTIONS={
 
 def scope():
     nodes=[n for n in TREE.body if isinstance(n,ast.FunctionDef) and n.name in FUNCTIONS]
-    space={'re':re}
+    space={'re':re,'json':json}
     for node in TREE.body:
         if (isinstance(node,ast.Assign) and any(
             isinstance(t,ast.Name) and t.id=='HABBO_LOGIN_FIELDS_JS'
