@@ -35,7 +35,8 @@ function el(props){
     autocomplete:'',placeholder:'',getAttribute:()=>null,
     getBoundingClientRect:()=>rect(100,100),
     closest:()=>null,
-    focus(){ global.document.activeElement=this; }
+    focus(){ global.document.activeElement=this; },
+    click(){ global.__lastClicked=this; }
   },props||{});
 }
 const outside=el({type:'text',getBoundingClientRect:()=>rect(20,20)});
@@ -144,7 +145,7 @@ class SafeDiagnosticsTests(unittest.TestCase):
 
     def test_element_based_login_submit_uses_official_form_and_no_coordinates(self):
         js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
-        self.assertEqual(run_js(js,{})['kind'],'focused')
+        self.assertEqual(run_js(js,{})['kind'],'clicked')
         self.assertEqual(run_js(js,{'hostname':'habbo.com.fake.example'}),
                          {'kind':'unverified-page'})
         self.assertNotIn('getBoundingClientRect().left+',js)

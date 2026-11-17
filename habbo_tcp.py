@@ -119,7 +119,7 @@ def fetch_habbo_sso_ticket(session_id, browser_token):
         decoded = json.loads(data)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            raise HabboTcpError("Habbo rejected the website session (401/403)") from None
+            raise HabboTcpError("Habbo rejected the website session HTTP " + str(exc.code)) from None
         raise HabboTcpError("Habbo ticket endpoint returned HTTP " + str(exc.code)) from None
     except (urllib.error.URLError, TimeoutError, ValueError, UnicodeError) as exc:
         raise HabboTcpError("Official Habbo ticket request failed: " + type(exc).__name__) from None

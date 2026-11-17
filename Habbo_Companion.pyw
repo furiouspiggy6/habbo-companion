@@ -914,8 +914,15 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   const submit=controls.find(el=>/^(let'?s go!?|sign in|log in|login|continue)$/i
       .test(text(el))) || controls.find(el=>el.type==='submit');
   if (!submit) return {kind:'no-submit'};
-  submit.focus({preventScroll:true});
-  return {kind:document.activeElement===submit?'focused':'not-focused'};
+  // The previous Enter-key approach could focus a button without invoking
+  // the site's click handler. Element.click() dispatches a normal DOM click
+  // event to the exact identified control, without any X/Y screen coordinates.
+  try {
+    submit.click();
+    return {kind:'clicked'};
+  } catch (e) {
+    return {kind:'click-error'};
+  }
 })()'''
 
 
@@ -959,12 +966,52 @@ def account_login_safe_error_code(body):
     return None
 
 
-class AccountLoginNetworkProbe:
-    """One short-lived local DevTools event stream; never persists raw events.
 
-    Network.requestWillBeSent may contain private headers and bodies. Inspect
-    only request method, verified hostname and endpoint path in memory. Never
-    print requests, URLs, headers, response bodies, or cookies to the UI.
+def account_login_safe_server_message(body):
+    """Expose only generic, known authentication-denial text verbatim.
+
+    Servers sometimes include email, names or tokens in error strings. Never
+    display arbitrary response text. Unrecognised messages remain withheld
+    while the actual HTTP status and safe symbolic codes are still shown.
+    """
+    if not isinstance(body,str) or len(body)>8192:
+        return None
+    try:
+        obj=json.loads(body)
+    except (ValueError,TypeError):
+        return None
+    if not isinstance(obj,dict):
+        return None
+    entries=[obj]
+    if isinstance(obj.get('error'),dict):
+        entries.append(obj['error'])
+    permitted={
+        'invalid credentials','invalid email or password',
+        'invalid username or password','incorrect email or password',
+        'incorrect username or password','wrong email or password',
+        'wrong username or password','incorrect password',
+        'invalid password','authentication failed','login failed',
+        'verification required','captcha required','access denied',
+        'account locked','account disabled','too many requests',
+        'too many login attempts','rate limit exceeded',
+        'unauthorized','forbidden'
+    }
+    for item in entries:
+        for name in ('message','error_description','detail'):
+            msg=item.get(name)
+            if isinstance(msg,str) and 5<=len(msg)<=140:
+                simple=' '.join(msg.strip().lower().strip(' .!').split())
+                if simple in permitted:
+                    return msg.strip()
+    return None
+
+class AccountLoginNetworkProbe:
+    """Short-lived, account-specific page traffic monitor.
+
+    Watch every HTTPS page request, rather than guessing an auth endpoint from
+    its URL. Only print bounded, redacted method/type/origin-class and status
+    summaries. No URLs, query strings, request headers, payloads, cookies,
+    tokens, or raw browser console strings leave this monitor.
     """
     def __init__(self,websocket_url):
         self.url=websocket_url
@@ -978,7 +1025,18 @@ class AccountLoginNetworkProbe:
         self.mime=''
         self.finished_id=None
         self.error_code=None
+        self.error_message=None
         self.javascript_exceptions=0
+        self.requests={}
+        self.request_count=0
+        self.interesting_count=0
+        self.responses=0
+        self.failure_count=0
+        self.redirect_count=0
+        self.error_candidates=[]
+        self.report=None
+        self.lines_printed=0
+        self.important_lines=0
 
     def __enter__(self):
         url=urllib.parse.urlsplit(self.url)
@@ -1070,36 +1128,122 @@ class AccountLoginNetworkProbe:
             return message
         raise TimeoutError('Too many browser protocol events.')
 
+    def _emit(self,line,important=False):
+        # Reserve room for HTTP errors even if background XHR traffic is noisy.
+        # All callers construct redacted, bounded, no-secret strings.
+        if important:
+            if self.important_lines>=8:
+                return
+            self.important_lines+=1
+        else:
+            if self.lines_printed>=12:
+                return
+            self.lines_printed+=1
+        if self.report is not None:
+            self.report(line)
+
     def _event(self,msg):
         name=msg.get('method')
         data=msg.get('params') or {}
         ident=data.get('requestId')
         if name=='Network.requestWillBeSent':
             req=data.get('request') or {}
-            if (len(self.auth_ids)<20 and account_login_auth_request(
-                    req.get('url'),req.get('method'))):
+            method=req.get('method')
+            url=req.get('url')
+            if not isinstance(url,str) or not isinstance(method,str):
+                return
+            try:
+                target=urllib.parse.urlsplit(url)
+                host=(target.hostname or '').lower()
+            except (TypeError,ValueError):
+                return
+            if target.scheme!='https' or not host:
+                return
+            self.request_count+=1
+            # The browser may reuse a request ID for an HTTP redirect.
+            prior=self.requests.pop(ident,None)
+            redirect=data.get('redirectResponse')
+            if prior and isinstance(redirect,dict):
+                self.redirect_count+=1
+                status=redirect.get('status')
+                if isinstance(status,(int,float)) and 300<=status<=399:
+                    self._emit('SERVER <- HTTP '+str(int(status))+
+                               ' redirect ('+prior['site']+').')
+            is_habbo=(host=='habbo.com' or host.endswith('.habbo.com'))
+            site='Habbo site' if is_habbo else 'external HTTPS site'
+            resource=data.get('type')
+            if resource not in ('Fetch','XHR','Document'):
+                resource='Other'
+            # Include all methods capable of login submission and all XHR
+            # and fetch traffic regardless of URL path, including external
+            # identity providers. Ignore static images/scripts and never
+            # expose the hostname or query string in UI/logs.
+            relevant=(method in ('POST','PUT','PATCH','DELETE','OPTIONS') or
+                      resource in ('Fetch','XHR','Document'))
+            if not relevant:
+                return
+            self.interesting_count+=1
+            if len(self.requests)>=48:
+                return
+            if not re.fullmatch(r'[A-Z]{2,10}',method):
+                method='HTTP'
+            self.requests[ident]={'site':site,'method':method,
+                                  'resource':resource,'status':None,
+                                  'mime':'','failed':None}
+            if account_login_auth_request(url,method):
                 self.auth_ids.add(ident)
                 self.seen=True
-        elif name=='Network.responseReceived' and ident in self.auth_ids:
+            self._emit('CLIENT -> '+method+' ('+site+', '+resource+').')
+        elif name=='Network.responseReceived' and ident in self.requests:
+            rec=self.requests[ident]
             response=data.get('response') or {}
             code=response.get('status')
             if isinstance(code,(int,float)) and 100<=code<=599:
+                rec['status']=int(code)
                 self.http_status=int(code)
-            self.mime=str(response.get('mimeType','')).lower()
-        elif name=='Network.loadingFailed' and ident in self.auth_ids:
+                self.responses+=1
+                self._emit('SERVER <- HTTP '+str(int(code))+
+                           ' ('+rec['site']+', '+rec['resource']+').',
+                           important=int(code)>=400)
+            mime=response.get('mimeType')
+            rec['mime']=mime.lower() if isinstance(mime,str) else ''
+            self.mime=rec['mime']
+        elif name=='Network.loadingFailed' and ident in self.requests:
+            rec=self.requests[ident]
             blocked=data.get('blockedReason')
             error=data.get('errorText')
             if isinstance(blocked,str) and re.fullmatch(r'[A-Za-z_-]{2,32}',blocked):
-                self.failed='blocked-'+blocked
+                kind='blocked-'+blocked
             elif isinstance(error,str) and re.fullmatch(r'net::ERR_[A-Z_]{2,50}',error):
-                self.failed=error
+                kind=error
             else:
-                self.failed='network-error'
-        elif name=='Network.loadingFinished' and ident in self.auth_ids:
-            if self.http_status is not None and self.http_status>=400:
+                kind='network-error'
+            rec['failed']=kind
+            self.failed=kind
+            self.failure_count+=1
+            self._emit('NETWORK <- '+kind+' ('+rec['site']+').',
+                       important=True)
+        elif name=='Network.loadingFinished' and ident in self.requests:
+            rec=self.requests[ident]
+            if (rec['status'] is not None and rec['status']>=400 and
+                'json' in rec['mime'] and rec['site']=='Habbo site' and
+                len(self.error_candidates)<3):
+                self.error_candidates.append(ident)
                 self.finished_id=ident
         elif name=='Runtime.exceptionThrown':
             self.javascript_exceptions+=1
+            if self.javascript_exceptions<=2:
+                self._emit('BROWSER <- JavaScript exception detected '
+                           '(details withheld; no server response implied).',
+                           important=True)
+        elif name=='Log.entryAdded':
+            entry=data.get('entry') or {}
+            if entry.get('level')=='error':
+                self.javascript_exceptions+=1
+                if self.javascript_exceptions<=2:
+                    self._emit('BROWSER <- Page console error '
+                               '(details withheld for account safety).',
+                               important=True)
 
     def _command(self,method,params=None,timeout=3):
         self.sequence+=1
@@ -1118,6 +1262,11 @@ class AccountLoginNetworkProbe:
     def enable(self):
         self._command('Network.enable',{'maxTotalBufferSize':1048576})
         self._command('Runtime.enable',{})
+        try:
+            self._command('Log.enable',{},timeout=1.5)
+        except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
+            # Not all Chromium builds support this domain on a page target.
+            pass
 
     def observe(self,seconds=5.0):
         deadline=time.monotonic()+seconds
@@ -1128,57 +1277,63 @@ class AccountLoginNetworkProbe:
                 continue
             except (OSError,ValueError,TimeoutError):
                 break
-            if self.seen and self.finished_id is not None:
-                break
-        # Failure responses may have a safe symbolic error code. Never read
-        # successful response bodies (which can contain auth tokens).
-        if (self.finished_id and self.http_status is not None and
-            self.http_status>=400 and 'json' in self.mime):
+        # Only read unsuccessful JSON responses from the verified Habbo
+        # origin, never successful bodies or external-provider payloads.
+        for ident in self.error_candidates[:2]:
             try:
                 result=self._command('Network.getResponseBody',
-                                     {'requestId':self.finished_id},timeout=2)
+                                     {'requestId':ident},timeout=2)
                 body=result.get('body')
                 if result.get('base64Encoded') and isinstance(body,str):
                     body=base64.b64decode(body,validate=True).decode('utf-8')
-                self.error_code=account_login_safe_error_code(body)
+                code=account_login_safe_error_code(body)
+                message=account_login_safe_server_message(body)
+                if code:
+                    self.error_code=code
+                    self._emit('SERVER <- Error code: '+code+'.',important=True)
+                if message:
+                    self.error_message=message
+                    self._emit('SERVER <- Error message: '+message+'.',
+                               important=True)
+                if code or message:
+                    break
             except (OSError,ValueError,RuntimeError,TimeoutError,
                     UnicodeError,TypeError):
-                pass
+                continue
 
     def summary(self):
-        if not self.seen:
-            return ('Login diagnostic: no matching first-party authentication '
-                    'POST was observed; the form may not have submitted, or '
-                    'the site may use another endpoint.')
-        if self.failed:
-            return 'Login diagnostic: authentication request failed ('+self.failed+').'
+        if self.interesting_count==0:
+            return ('Login diagnostic: '+str(self.request_count)+
+                    ' HTTPS request(s) observed on this page, but no '
+                    'XHR/fetch/form request. No server login response '
+                    'was captured; a browser-side issue is possible.')
+        result=('Login diagnostic: '+str(self.interesting_count)+
+                ' XHR/fetch/form request(s), '+str(self.responses)+
+                ' HTTP response(s), '+str(self.redirect_count)+
+                ' redirect(s), '+str(self.failure_count)+
+                ' network failure(s).')
         if self.http_status is not None:
-            status='Login diagnostic: Habbo authentication HTTP '+str(self.http_status)
-            if self.error_code:
-                status+='; server error code '+self.error_code
-            return status+' (not proof of a signed-in session).'
-        return ('Login diagnostic: Habbo authentication request started, '
-                'but no HTTP response was observed.')
+            result+=' Last observed HTTP '+str(self.http_status)+'.'
+        if self.error_code:
+            result+=' Server error code: '+self.error_code+'.'
+        if self.error_message:
+            result+=' Server message: '+self.error_message+'.'
+        if not self.seen:
+            result+=' No endpoint was independently identified as authentication.'
+        if self.javascript_exceptions:
+            result+=' Browser error(s): '+str(self.javascript_exceptions)+'.'
+        result+=' HTTP 2xx alone does not confirm login; official SSO checks follow.'
+        return result
 
 
 def account_focus_and_submit_login(websocket_url):
-    """Use the actual login button + keyboard Enter, never a coordinate click."""
+    """Activate the verified Habbo login element directly, not X/Y or Enter."""
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
         'expression':HABBO_LOGIN_SUBMIT_FOCUS_JS,'returnByValue':True})
-    value=result.get('result',{}).get('value',{})
-    if not isinstance(value,dict) or value.get('kind')!='focused':
+    if result.get('exceptionDetails'):
         return False
-    for event in ('keyDown','keyUp'):
-        try:
-            account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
-                'type':event,'key':'Enter','code':'Enter',
-                'windowsVirtualKeyCode':13,'nativeVirtualKeyCode':13})
-        except (OSError,ValueError,RuntimeError,TimeoutError):
-            if event=='keyDown':
-                raise
-            # Navigation immediately after keyDown may close the page socket.
-            break
-    return True
+    value=result.get('result',{}).get('value',{})
+    return isinstance(value,dict) and value.get('kind')=='clicked'
 
 
 def account_submit_with_network_diagnostics(websocket_url,report):
@@ -1186,12 +1341,14 @@ def account_submit_with_network_diagnostics(websocket_url,report):
     started=False
     try:
         with AccountLoginNetworkProbe(websocket_url) as probe:
+            probe.report=report
             probe.enable()
             started=True
+            report('BROWSER -> Activating Habbo LETS GO login control via DOM.')
             submitted=account_focus_and_submit_login(websocket_url)
             if not submitted:
-                report('Habbo LETS GO submit element was not focusable; '
-                       'no login request was initiated.')
+                report('BROWSER <- Habbo login button was not activated; '
+                       'no login submission was confirmed.')
                 return False
             probe.observe()
             report(probe.summary())
@@ -1663,6 +1820,29 @@ def account_import_session_automatically(account,report):
             raw=fetch_habbo_sso_ticket(*cookies)
             return account_parse_official_ticket_response(raw),cookies
 
+        def report_session_verification_failure(error):
+            # Never print an exception verbatim: browser/session exceptions
+            # could contain confidential data in future integrations.
+            if isinstance(error,HabboTcpError):
+                safe=str(error)
+                if 'HTTP 401' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 401 '
+                           '(website session rejected).')
+                elif 'HTTP 403' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 403 '
+                           '(website session rejected).')
+                elif 'HTTP 429' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 429 '
+                           '(request rate limited).')
+                elif 'HTTP 500' in safe or 'HTTP 503' in safe:
+                    report('SESSION <- Official Habbo SSO returned a server error.')
+                else:
+                    report('SESSION <- Official Habbo SSO ticket was not '
+                           'available or could not be verified.')
+            else:
+                report('SESSION <- Browser did not provide a verified pair '
+                       'of Habbo session cookies and a valid SSO ticket.')
+
         report('Checking for an existing Habbo session in this account profile.')
         try:
             ticket,cookies=verified_ticket_from_browser()
@@ -1700,8 +1880,8 @@ def account_import_session_automatically(account,report):
             try:
                 ticket,cookies=verified_ticket_from_browser()
             except (OSError,ValueError,RuntimeError,HabboTcpError,
-                    socket.timeout,TimeoutError):
-                pass
+                    socket.timeout,TimeoutError) as exc:
+                report_session_verification_failure(exc)
             else:
                 account_session_cookie_write(ident,*cookies)
                 report('Official Habbo HTTPS session is valid despite the '
@@ -1727,7 +1907,13 @@ def account_import_session_automatically(account,report):
                 'Website sign-in could not be confirmed. Use Accounts > '
                 'Open account login to complete it.'))
         report('Website sign-in confirmed; verifying session with Habbo HTTPS.')
-        ticket,cookies=verified_ticket_from_browser()
+        try:
+            ticket,cookies=verified_ticket_from_browser()
+        except (OSError,ValueError,RuntimeError,HabboTcpError,
+                socket.timeout,TimeoutError) as exc:
+            report_session_verification_failure(exc)
+            raise ValueError('Website sign-in appeared successful, but Habbo '
+                             'did not validate the session for Direct TCP.') from None
         account_session_cookie_write(ident,*cookies)
         report('Official Habbo session validated and saved in Windows vault.')
         return ticket

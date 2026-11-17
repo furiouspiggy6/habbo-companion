@@ -404,7 +404,8 @@ class AutomaticLoginAndImport(TestCase):
             account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
                 ('invalid-session','invalid-token'),
             fetch_habbo_sso_ticket=lambda sid,tok:(
-                (_ for _ in ()).throw(error_type('rejected'))),
+                (_ for _ in ()).throw(error_type(
+                    'Habbo rejected the website session HTTP 403'))),
             account_parse_official_ticket_response=lambda raw:
                 self.fail('rejected ticket must not parse'),
             account_session_cookie_write=lambda *args:
@@ -415,6 +416,8 @@ class AutomaticLoginAndImport(TestCase):
         with self.assertRaisesRegex(ValueError,'Website login form remains visible'):
             ns['account_import_session_automatically'](account(),log.append)
         self.assertTrue(any('checking the official' in message for message in log))
+        self.assertTrue(any('HTTP 403' in message for message in log))
+        self.assertNotIn('invalid-token',' '.join(log))
 
 
 class AppIntegration(TestCase):
