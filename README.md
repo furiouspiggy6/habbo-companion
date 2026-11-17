@@ -255,3 +255,52 @@ successful real login to the official Habbo.com server**. The code does not
 cycle unknown headers, brute-force packets, repeatedly retry rejected
 tickets, or bypass official login/MFA. Test with one account once; the
 subsequent log will show whether the DH handshake progresses.
+
+
+## v1.1.51 — Automatic session import for Direct TCP
+
+Direct TCP can now collect the exact two Habbo.com website cookies
+(\`session.id\` and \`browser_token\`) **without asking the user to find or
+paste them in browser Developer Tools**.
+
+With **Auto-import session and connect (selected account)** or
+**Auto-import and connect all**, Companion:
+1. Uses this account's own isolated Brave/Chrome/Edge browser profile.
+   An already-running profile is reused. Otherwise it opens a temporary
+   \`--headless=new\` browser from that account's private profile folder,
+   with a loopback-only Chrome DevTools debugging port.
+2. Reuses the logged-in website session or attempts a *single* ordinary
+   official-site sign-in using credentials previously saved in the
+   **Accounts → Save login securely** Windows vault feature.
+3. Confirms the website shows authenticated controls, then calls
+   Chrome DevTools \`Network.getCookies\` scoped **only** to
+   \`https://www.habbo.com/\`. It extracts only the exact named,
+   HTTPS-secure Habbo cookies, ignoring other sites' entries.
+4. Validates both tokens through Habbo.com's official HTTPS SSO endpoint.
+   Only a valid ticket causes them to be saved in the account-specific
+   Windows Credential Manager session target, then starts the verified
+   direct AIR TCP handshake. Cookies/passwords/tickets are never emitted
+   in UI logs, settings.json, command-line args or GitHub.
+5. Closes only the temporary headless browser it opened; an existing
+   user-opened account browser is left alone. A stale saved cookie on a
+   normal **Connect selected / Connect all saved** attempt gets one
+   automatic refresh if Habbo explicitly returns 401/403.
+
+The existing **Connect selected** also attempts automatic import when
+no session has yet been saved. **Connect all saved** and opt-in startup
+auto-connect remain limited to accounts with saved sessions, but
+explicit 401/403 expiration can trigger the same one-time refresh.
+
+**Initial setup:** in **Accounts**, save that profile's actual Habbo
+login once. If Habbo requires 2FA, CAPTCHA, consent, or another
+human verification, use **Accounts → Open account login** and complete
+the official sign-in. Headless mode does **not** bypass those checks.
+The feature only accesses Companion's separate per-account profiles,
+**not** the user's normal unrestricted Brave/Chrome profiles.
+Sessions can expire again. No login is guaranteed without valid
+website authentication; successful TCP login is reported only after the
+actual game-server AuthenticationOK packet.
+
+The new session-import flow is validated with offline CDP, profile
+isolation, headless-launch, and vault-write tests. Live new-login
+capture still needs testing on Windows with Habbo.com.
