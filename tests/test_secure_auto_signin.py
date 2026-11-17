@@ -172,7 +172,7 @@ class AutoSigninTests(unittest.TestCase):
         steps=iter([{'kind':'login'},
                     {'kind':'play','x':20,'y':40,'page':'/'}])
         a['account_inspect_play_page']=lambda url:next(steps)
-        a['account_submit_saved_login']=lambda *_:True
+        a['account_submit_saved_login']=lambda *_,**kwargs:True
         a['account_click_play_button']=lambda *_:self.fail('should not click Play')
         a['time']=SimpleNamespace(sleep=lambda _:None)
         reports=[]
@@ -187,7 +187,7 @@ class AutoSigninTests(unittest.TestCase):
             'webSocketDebuggerUrl':'ws://127.0.0.1:44321/devtools/page/abc'}
         a['account_inspect_play_page']=lambda url:{'kind':'login'}
         count=[]
-        a['account_submit_saved_login']=lambda *_:(count.append(1) or True)
+        a['account_submit_saved_login']=lambda *_,**kwargs:(count.append(1) or True)
         a['time']=SimpleNamespace(sleep=lambda _:None)
         a['account_login_diagnostic']=lambda ws:'still-on-form'
         reports=[]
