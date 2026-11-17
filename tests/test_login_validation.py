@@ -49,6 +49,9 @@ global.location={protocol:'https:',hostname:scenario.hostname||'www.habbo.com',p
 global.innerWidth=1200;global.innerHeight=900;
 global.getComputedStyle=()=>({display:'block',visibility:'visible'});
 global.document={
+  activeElement:scenario.inputKind?
+    el({tagName:'INPUT',type:scenario.inputKind,
+        value:scenario.populated?'test-value':''}):null,
   querySelector:()=>null,
   querySelectorAll:selector=>{
     if (selector.startsWith('iframe[title*=challenge i]')) {
@@ -108,6 +111,23 @@ class SafeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(status['kind'],'form')
         self.assertEqual(status['email'],{'x':145,'y':215})
         self.assertEqual(status['password'],{'x':145,'y':265})
+
+    def test_login_entry_confirmation_is_origin_locked_and_redacted(self):
+        js=js_constant('HABBO_LOGIN_INPUT_READY_JS')
+        self.assertEqual(
+            run_js(js,{'inputKind':'email','populated':True}),
+            {'kind':'populated','field':'email'})
+        self.assertEqual(
+            run_js(js,{'inputKind':'password','populated':True}),
+            {'kind':'populated','field':'password'})
+        self.assertEqual(
+            run_js(js,{'inputKind':'password','populated':False}),
+            {'kind':'empty','field':'password'})
+        denied=run_js(js,{'hostname':'habbo.com.fake.example',
+                          'inputKind':'password','populated':True})
+        self.assertEqual(denied,{'kind':'unverified-page'})
+        self.assertNotIn('test-value',
+                         str(run_js(js,{'inputKind':'password','populated':True})))
 
     def test_diagnostic_adapter_whitelists_returned_codes(self):
         node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)

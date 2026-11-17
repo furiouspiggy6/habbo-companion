@@ -11,7 +11,7 @@ TREE=ast.parse(TEXT)
 
 FUNCTIONS={
     '_account_credential_target','account_submit_saved_login',
-    'account_attempt_auto_play'
+    'account_login_input_confirmed','account_attempt_auto_play'
 }
 
 
@@ -23,6 +23,10 @@ def scope():
             isinstance(t,ast.Name) and t.id=='HABBO_LOGIN_FIELDS_JS'
             for t in node.targets)):
             space['HABBO_LOGIN_FIELDS_JS']=ast.literal_eval(node.value)
+        if (isinstance(node,ast.Assign) and any(
+            isinstance(t,ast.Name) and t.id=='HABBO_LOGIN_INPUT_READY_JS'
+            for t in node.targets)):
+            space['HABBO_LOGIN_INPUT_READY_JS']=ast.literal_eval(node.value)
     exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),'exec'),space)
     return space
 
@@ -55,15 +59,22 @@ class AutoSigninTests(unittest.TestCase):
         a=scope()
         sent=[]
         clicks=[]
+        calls={'n':0}
         def cdp(url,method,params):
             sent.append((url,method,params))
             if method=='Runtime.evaluate':
+                calls['n']+=1
+                if calls['n']==1:
+                    return {'result':{'value':{
+                        'kind':'form','email':{'x':10,'y':30},
+                        'password':{'x':20,'y':40},
+                        'submit':{'x':80,'y':90}}}}
                 return {'result':{'value':{
-                    'kind':'form','email':{'x':10,'y':30},
-                    'password':{'x':20,'y':40},
-                    'submit':{'x':80,'y':90}}}}
+                    'kind':'populated',
+                    'field':'email' if calls['n']==2 else 'password'}}}
             return {}
         a['account_cdp_call']=cdp
+        a['time']=SimpleNamespace(sleep=lambda _:None)
         a['account_click_play_button']=lambda url,step:clicks.append(step)
         self.assertTrue(a['account_submit_saved_login'](
             'ws://127.0.0.1:44321/devtools/page/abc','email@example.com',
@@ -74,6 +85,44 @@ class AutoSigninTests(unittest.TestCase):
                                  {'x':80,'y':90}])
         self.assertEqual(sent[0][1],'Runtime.evaluate')
         self.assertNotIn('super-secret-password',sent[0][2]['expression'])
+
+    def test_does_not_click_submit_when_field_input_not_confirmed(self):
+        a=scope()
+        clicks=[]
+        inserted=[]
+        responses={'n':0}
+        def cdp(url,method,params):
+            if method=='Runtime.evaluate':
+                responses['n']+=1
+                if responses['n']==1:
+                    return {'result':{'value':{
+                        'kind':'form','email':{'x':10,'y':20},
+                        'password':{'x':10,'y':50},
+                        'submit':{'x':10,'y':90}}}}
+                return {'result':{'value':{'kind':'not-focused'}}}
+            if method=='Input.insertText':
+                inserted.append(params['text'])
+            return {}
+        a['account_cdp_call']=cdp
+        a['time']=SimpleNamespace(sleep=lambda _:None)
+        a['account_click_play_button']=lambda ws,step:clicks.append(step)
+        self.assertFalse(a['account_submit_saved_login'](
+            'ws://127.0.0.1:44321/devtools/page/abc',
+            'user@example.com','not-a-real-password'))
+        self.assertEqual(inserted,['user@example.com','user@example.com'])
+        self.assertNotIn({'x':10,'y':90},clicks)
+
+    def test_input_ready_status_returns_only_boolean(self):
+        a=scope()
+        events=[]
+        def cdp(ws,method,params):
+            events.append(params)
+            return {'result':{'value':{'kind':'populated','field':'password'}}}
+        a['account_cdp_call']=cdp
+        self.assertTrue(a['account_login_input_confirmed']('ws','password'))
+        self.assertFalse(a['account_login_input_confirmed']('ws','email'))
+        self.assertNotIn('password=',str(events))
+        self.assertNotIn('value=',str(events))
 
     def test_does_not_enter_password_when_form_not_verified(self):
         a=scope()

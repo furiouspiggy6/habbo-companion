@@ -814,6 +814,35 @@ def account_login_diagnostic(websocket_url):
         return 'unknown'
 
 
+# Detect input automation failures without exporting any field value, its
+# length, the user's email, or the password. The website receives the ordinary
+# saved login via its visible form; only a boolean readiness result is returned.
+HABBO_LOGIN_INPUT_READY_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const active=document.activeElement;
+  if (!active || active.tagName?.toLowerCase()!=='input')
+    return {kind:'not-focused'};
+  const type=(active.type||'').toLowerCase();
+  if (!['password','email','text'].includes(type))
+    return {kind:'not-focused'};
+  return {kind:active.value && active.value.length>0?'populated':'empty',
+          field:type==='password'?'password':'email'};
+})()'''
+
+
+def account_login_input_confirmed(websocket_url,field):
+    """Confirm a visible Habbo input received text, without returning text."""
+    result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+        'expression':HABBO_LOGIN_INPUT_READY_JS,'returnByValue':True})
+    if result.get('exceptionDetails'):
+        return False
+    value=result.get('result',{}).get('value',{})
+    return (isinstance(value,dict) and value.get('kind')=='populated'
+            and value.get('field')==field)
+
+
 def account_submit_saved_login(websocket_url,email,password):
     """Type into the official Habbo login, never into unrelated websites."""
     inspection=account_cdp_call(websocket_url,'Runtime.evaluate',{
@@ -822,15 +851,26 @@ def account_submit_saved_login(websocket_url,email,password):
     if fields.get('kind')!='form':
         return False
     for field,value in (('email',email),('password',password)):
-        account_click_play_button(websocket_url,fields[field])
-        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
-            'type':'keyDown','key':'a','code':'KeyA',
-            'windowsVirtualKeyCode':65,'modifiers':2})
-        account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
-            'type':'keyUp','key':'a','code':'KeyA',
-            'windowsVirtualKeyCode':65,'modifiers':2})
-        # Text is sent to loopback Chrome DevTools, never a URL, shell or log.
-        account_cdp_call(websocket_url,'Input.insertText',{'text':value})
+        # The original code assumed Chrome's Input.insertText succeeded.
+        # A click may fail to focus the target in headless mode, leaving the
+        # login form untouched while incorrectly reporting success.
+        for attempt in range(2):
+            account_click_play_button(websocket_url,fields[field])
+            account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+                'type':'keyDown','key':'a','code':'KeyA',
+                'windowsVirtualKeyCode':65,'modifiers':2})
+            account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
+                'type':'keyUp','key':'a','code':'KeyA',
+                'windowsVirtualKeyCode':65,'modifiers':2})
+            # Sent only over isolated loopback CDP. Never return/log values.
+            account_cdp_call(websocket_url,'Input.insertText',{'text':value})
+            time.sleep(0.15)
+            if account_login_input_confirmed(websocket_url,field):
+                break
+        else:
+            # Do not press submit unless BOTH fields were populated.
+            return False
+    time.sleep(0.2)
     account_click_play_button(websocket_url,fields['submit'])
     return True
 
@@ -934,7 +974,9 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                 continue
             if not account_submit_saved_login(
                     page['webSocketDebuggerUrl'],credentials[0],credentials[1]):
-                report('Habbo login fields changed. Sign in manually this time.')
+                report('Saved login could not be confirmed in the Habbo email/password '
+                       'inputs. No login submission was sent; check the form or '
+                       'use Accounts > Open account login.')
                 return 'login'
             login_submitted=True
             report('Submitted saved login for this account. '
