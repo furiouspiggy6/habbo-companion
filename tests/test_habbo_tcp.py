@@ -3,6 +3,7 @@ import socket
 import struct
 import threading
 import time
+import urllib.error
 import unittest
 from unittest import mock
 
@@ -129,6 +130,20 @@ class ProtocolTests(unittest.TestCase):
         self.assertNotIn("id_abcdef", repr(ticket))
         with self.assertRaises(ValueError):
             tcp.fetch_habbo_sso_ticket("bad;cookie", "safe")
+
+    def test_rejected_website_session_retains_exact_http_status(self):
+        for status in (401,403):
+            with self.subTest(status=status):
+                rejected=urllib.error.HTTPError(
+                    'https://www.habbo.com/api/client/clientnative/url',
+                    status,'No ticket',{},None)
+                with mock.patch.object(tcp,'_official_request',
+                                       side_effect=rejected):
+                    with self.assertRaisesRegex(tcp.HabboTcpError,
+                                               'HTTP '+str(status)) as ctx:
+                        tcp.fetch_habbo_sso_ticket('local-sid','local-browser')
+                self.assertNotIn('local-sid',str(ctx.exception))
+                self.assertNotIn('local-browser',str(ctx.exception))
 
     def test_official_release_fallback_without_network(self):
         with mock.patch.object(tcp, "_official_request",
