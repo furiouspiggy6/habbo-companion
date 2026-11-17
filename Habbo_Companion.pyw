@@ -997,7 +997,7 @@ def account_capture_habbo_session_cookies(debug_port):
         or not parsed.path.startswith('/devtools/page/')):
         raise ValueError('Account browser is not on its isolated local control port.')
     # Network.getCookies returns HttpOnly entries and scopes the request to
-    # the URL below. Never use Runtime.evaluate/document.cookie here.
+    # the URL below. Never evaluate website JavaScript to read them.
     result=account_cdp_call(ws,'Network.getCookies',{
         'urls':['https://www.habbo.com/']
     })
