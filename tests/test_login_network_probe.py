@@ -11,6 +11,7 @@ import urllib.parse
 SOURCE=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 TREE=ast.parse(SOURCE.read_text(encoding='utf-8'))
 NAMES={'account_login_auth_request','account_login_safe_error_code',
+       'account_login_safe_server_message',
        'AccountLoginNetworkProbe','account_focus_and_submit_login',
        'account_submit_with_network_diagnostics'}
 
@@ -79,6 +80,67 @@ class NetworkClassificationTests(unittest.TestCase):
             self.assertNotIn(secret,msg)
         self.assertEqual(probe.finished_id,'req1')
 
+
+    def test_external_http_and_non_matching_habbo_endpoint_are_visible(self):
+        cls=scope()['AccountLoginNetworkProbe']
+        out=[]
+        probe=cls('ws://127.0.0.1:44000/devtools/page/abc')
+        probe.report=out.append
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'r2','type':'Fetch',
+                                'request':{'method':'POST',
+                                    'url':'https://identity.example.com/take?secret=123'}}})
+        probe._event({'method':'Network.responseReceived',
+                      'params':{'requestId':'r2','response':{
+                          'status':403,'mimeType':'application/json'}}})
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'r3','type':'XHR',
+                                'request':{'method':'POST',
+                                    'url':'https://www.habbo.com/user/action'}}})
+        probe._event({'method':'Network.responseReceived',
+                      'params':{'requestId':'r3','response':{
+                          'status':422,'mimeType':'application/json'}}})
+        self.assertEqual(probe.interesting_count,2)
+        self.assertEqual(probe.responses,2)
+        self.assertEqual(probe.request_count,2)
+        self.assertFalse(probe.seen)
+        self.assertIn('HTTP 403',' '.join(out))
+        self.assertIn('HTTP 422',' '.join(out))
+        self.assertIn('external HTTPS site',' '.join(out))
+        for secret in ('identity.example.com','user/action','?secret=123'):
+            self.assertNotIn(secret,' '.join(out))
+
+    def test_redirects_and_page_script_errors_are_reported_without_raw_data(self):
+        cls=scope()['AccountLoginNetworkProbe']
+        out=[]
+        probe=cls('ws://127.0.0.1:44000/devtools/page/abc')
+        probe.report=out.append
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'one','type':'Document',
+                                'request':{'method':'GET',
+                                           'url':'https://habbo.com/signon'}}})
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'one','type':'Document',
+                                'redirectResponse':{'status':302},
+                                'request':{'method':'GET',
+                                           'url':'https://habbo.com/home'}}})
+        probe._event({'method':'Runtime.exceptionThrown',
+                      'params':{'exceptionDetails':{'text':'session_secret=bad'}}})
+        self.assertEqual(probe.redirect_count,1)
+        self.assertEqual(probe.javascript_exceptions,1)
+        self.assertIn('HTTP 302 redirect',' '.join(out))
+        self.assertNotIn('session_secret',' '.join(out))
+
+    def test_allowed_server_error_messages_are_verbatim_and_unknowns_hidden(self):
+        fn=scope()['account_login_safe_server_message']
+        self.assertEqual(fn('{"message":"Invalid email or password."}'),
+                         'Invalid email or password.')
+        self.assertEqual(fn('{"error":{"message":"Too many requests"}}'),
+                         'Too many requests')
+        self.assertIsNone(fn('{"message":"User person@example.com '
+                             'is not allowed, token=TOPSECRET"}'))
+        self.assertIsNone(fn('{"message":"Your special account is bad"}'))
+
     def test_external_login_request_not_observed(self):
         cls=scope()['AccountLoginNetworkProbe']
         probe=cls('ws://127.0.0.1:44000/devtools/page/abc')
@@ -87,28 +149,24 @@ class NetworkClassificationTests(unittest.TestCase):
                                 'request':{'method':'POST',
                                            'url':'https://private.example.com/login'}}})
         self.assertFalse(probe.seen)
-        self.assertIn('no matching first-party',probe.summary())
+        self.assertIn('No endpoint was independently identified',probe.summary())
 
 
 class DomSubmissionTests(unittest.TestCase):
-    def test_keyboard_enter_on_dom_focused_submit_never_uses_mouse_coords(self):
+    def test_dom_click_never_uses_mouse_coords_or_enter(self):
         ns=scope()
         calls=[]
         def cdp(ws,method,params):
             calls.append((method,params))
             if method=='Runtime.evaluate':
-                return {'result':{'value':{'kind':'focused'}}}
+                return {'result':{'value':{'kind':'clicked'}}}
             return {}
         ns['account_cdp_call']=cdp
         self.assertTrue(ns['account_focus_and_submit_login']('ws'))
-        self.assertEqual([method for method,_ in calls],
-                         ['Runtime.evaluate','Input.dispatchKeyEvent',
-                          'Input.dispatchKeyEvent'])
-        self.assertEqual([p['key'] for m,p in calls if m=='Input.dispatchKeyEvent'],
-                         ['Enter','Enter'])
+        self.assertEqual([method for method,_ in calls],['Runtime.evaluate'])
         self.assertNotIn('dispatchMouseEvent',str(calls))
 
-    def test_unverified_submit_never_sends_enter(self):
+    def test_unverified_submit_never_dispatches_click(self):
         ns=scope()
         calls=[]
         ns['account_cdp_call']=lambda ws,method,params:(
