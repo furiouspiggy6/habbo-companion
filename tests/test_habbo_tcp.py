@@ -208,9 +208,11 @@ class AuthenticationDiagnosticsTests(unittest.TestCase):
             tcp._frame(tcp.TCP_IN["disconnect"], struct.pack(">i",122)))
         session = tcp.HabboTcpSession("012345abcdef")
         session.sock = fake
-        with self.assertRaisesRegex(tcp.HabboTcpError,
-                r"disconnect packet 4000 \\(reason code 122\\) during initial Diffie-Hellman handshake"):
+        with self.assertRaises(tcp.HabboTcpError) as caught:
             session._await_packet(tcp.TCP_IN["init_dh"], limit=1)
+        self.assertIn(
+            "disconnect packet 4000 (reason code 122) during initial Diffie-Hellman handshake",
+            str(caught.exception))
         session.close()
 
     def test_denial_during_sso_is_distinguished_from_handshake(self):
