@@ -87,3 +87,26 @@ which handshake/authentication phase failed.
 The website session must still be authenticated through Habbo's normal login
 flow, then Companion can request SSO from its own HTTPS connection. No
 third-party Bobba server, client or launcher is required.
+
+
+## v1.1.46 — Direct TCP login troubleshooting
+
+Fix an SSO formatting mismatch found after the first real Habbo.com test:
+the user-facing `.username` part of an `hhus.<opaque>.V4.username`
+launch ticket is display metadata. Companion now sends only
+`<opaque>.V4` in the actual game-server SSO packet, matching the
+normal AIR launcher invocation. No token values are logged.
+
+Improve rejection diagnostics so the Direct TCP tab shows a **timestamped
+connection-step log** and identifies whether a disconnect/denial arrived
+during initial Diffie-Hellman, key confirmation, or SSO authentication.
+A numeric disconnection reason may be shown when provided; server payload
+bytes, website cookies, SSO tickets, and passwords are never logged.
+Unknown incoming packet IDs may appear on handshake timeout to help identify
+protocol drift. Existing saved website sessions stay in Windows Credential
+Manager and can be reused.
+
+This patch is tested offline with simulated network packets and does **not**
+confirm that Habbo's current live game-server protocol accepts a login.
+If your saved session is expired, sign in normally to renew it. Do not
+publish session cookies or SSO tickets in issue reports.
