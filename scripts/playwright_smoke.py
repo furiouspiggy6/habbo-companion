@@ -48,7 +48,9 @@ def main():
         raise RuntimeError('A system Chromium browser is missing from Windows runner.')
     app=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                        run_name='companion_playwright_smoke')
-    with tempfile.TemporaryDirectory() as temp:
+    # Chromium can leave briefly locked Windows cache journals after exit.
+    # The browser assertions determine test success, not disposable cache cleanup.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
         port=free_port()
         command=[
             str(executable),f'--user-data-dir={temp}',
