@@ -977,19 +977,37 @@ def account_fetch_ticket_from_signed_in_profile(debug_port):
     return account_parse_official_ticket_response(obj.get('value'))
 
 
-def account_capture_habbo_session_cookies(debug_port):
-    """Read only the two requested cookies from an authenticated account tab.
+def account_capture_habbo_session_cookies(debug_port,check_visible_login=True):
+    """Get two first-party cookies from one isolated Companion browser tab.
 
-    Uses Chromium's supported DevTools cookie API (including HttpOnly cookies)
-    on the existing isolated Companion browser profile. Never reads other
-    browser profiles or dumps the full cookie jar to logs, disk or UI.
+    By default require visible signed-in controls. For recovery from sessions
+    where the site UI is unrecognisable, the caller may skip that check *only*
+    if it immediately validates the cookies against the official SSO API
+    before retaining or using them. This does NOT access the normal browser
+    profile or return unrelated website cookies.
     """
-    page=account_habbo_page(debug_port)
-    if page is None or page.get('_inspect_error'):
-        raise ValueError('Companion account browser is not available or inspectable.')
-    state=page.get('_preflight_step',{}).get('kind')
-    if state not in ('play','play-now','launch','signed_in','download'):
-        raise ValueError('This Habbo browser profile is not signed in.')
+    if check_visible_login:
+        page=account_habbo_page(debug_port)
+        if page is None or page.get('_inspect_error'):
+            raise ValueError('Companion account browser is not available or inspectable.')
+        state=page.get('_preflight_step',{}).get('kind')
+        if state not in ('play','play-now','launch','signed_in','download'):
+            raise ValueError('This Habbo browser profile is not signed in.')
+    else:
+        # Do not depend on DOM inspection to recover an existing valid
+        # cookie. Restrict the target to the official www.habbo.com origin.
+        page=None
+        for candidate in account_browser_pages(debug_port):
+            try:
+                url=urllib.parse.urlsplit(candidate['url'])
+            except (ValueError,KeyError,TypeError):
+                continue
+            if (url.scheme=='https' and url.hostname=='www.habbo.com'
+                    and url.port in (None,443)):
+                page=candidate
+                break
+        if page is None:
+            raise ValueError('No official Habbo tab in this isolated browser.')
     ws=page['webSocketDebuggerUrl']
     parsed=urllib.parse.urlsplit(ws)
     if (parsed.scheme!='ws' or parsed.hostname!='127.0.0.1'
@@ -1082,20 +1100,57 @@ def account_import_session_automatically(account,report):
                 raise ValueError(
                     'Background browser control unavailable. Open account '
                     'login from Accounts to renew this profile.')
-        report('Checking the saved Habbo website sign-in.')
-        login_result=account_attempt_auto_play(
-            port,lambda _message:None,credentials=credentials,login_only=True)
-        if login_result!='signed_in':
+        def verified_ticket_from_browser():
+            # The website may have a valid session even when its rendered
+            # Play/profile menu is not recognisable. A genuine SSO ticket from
+            # the official HTTPS endpoint is stronger evidence than the DOM.
+            cookies=account_capture_habbo_session_cookies(
+                port,check_visible_login=False)
+            raw=fetch_habbo_sso_ticket(*cookies)
+            return account_parse_official_ticket_response(raw),cookies
+
+        report('Checking for an existing Habbo session in this account profile.')
+        try:
+            ticket,cookies=verified_ticket_from_browser()
+        except (OSError,ValueError,RuntimeError,HabboTcpError,
+                socket.timeout,TimeoutError):
+            report('No usable existing session; checking saved website login.')
+        else:
+            account_session_cookie_write(ident,*cookies)
+            report('Existing Habbo session verified and saved to Windows vault.')
+            return ticket
+
+        if credentials is None:
             raise ValueError(
-                'Habbo website sign-in needs attention. Save the login under '
-                'Accounts, or use Open account login for CAPTCHA/2FA once.')
-        report('Habbo signed in; importing session cookies without Developer Tools.')
-        cookies=account_capture_habbo_session_cookies(port)
-        # Verify the cookies by obtaining a real one-time ticket before saving.
-        raw_ticket=fetch_habbo_sso_ticket(*cookies)
-        ticket=account_parse_official_ticket_response(raw_ticket)
+                'No valid session or saved Habbo login for this account. '
+                'Use Accounts > Open account login once to sign in, or '
+                'Accounts > Save login securely for automatic sign-in.')
+        outcomes=[]
+        login_result=account_attempt_auto_play(
+            port,lambda message:outcomes.append(str(message)[:160]),
+            credentials=credentials,login_only=True)
+        if login_result!='signed_in':
+            reasons={
+                'login':'Website login form remains visible. Check the saved '
+                        'password or complete CAPTCHA/2FA using Accounts > '
+                        'Open account login.',
+                'waiting':'Habbo website did not expose recognised login '
+                          'controls in headless mode. Use Accounts > '
+                          'Open account login.',
+                'no_habbo_tab':'Official Habbo.com tab did not open in this '
+                               'account browser profile.',
+                'control_error':'Local browser control was unavailable.',
+                'inspect_error':'Browser page inspection failed.',
+                'unknown':'Official Habbo page not recognised.',
+            }
+            raise ValueError(reasons.get(
+                login_result,
+                'Website sign-in could not be confirmed. Use Accounts > '
+                'Open account login to complete it.'))
+        report('Website sign-in confirmed; verifying session with Habbo HTTPS.')
+        ticket,cookies=verified_ticket_from_browser()
         account_session_cookie_write(ident,*cookies)
-        report('Official session validated and saved in Windows vault.')
+        report('Official Habbo session validated and saved in Windows vault.')
         return ticket
     finally:
         # Only close a browser process created by this invocation. Never

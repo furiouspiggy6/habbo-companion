@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase, mock
 import tempfile
+import socket
 import urllib.parse
 import urllib.error
 import unittest
@@ -25,6 +26,8 @@ def execute(**values):
         'subprocess':SimpleNamespace(DEVNULL=-3),
         'time':SimpleNamespace(sleep=lambda _:None),
         'APP_DIR':Path('/not-used'),
+        'socket':socket,
+        'HabboTcpError':type('HabboTcpError',(Exception,),{}),
     }
     space.update(values)
     exec(CODE,space)
@@ -107,7 +110,7 @@ class SessionCookieCapture(TestCase):
 
 
 class AutomaticLoginAndImport(TestCase):
-    def test_reuses_running_browser_and_saves_only_after_ticket_validation(self):
+    def test_valid_existing_browser_session_skips_signin_and_saves_after_validation(self):
         with tempfile.TemporaryDirectory() as folder:
             events=[]
             cookies=('opaque-session','opaque-browser')
@@ -123,7 +126,7 @@ class AutomaticLoginAndImport(TestCase):
                 account_attempt_auto_play=lambda port,report,credentials,login_only:(
                     events.append(('login',port,credentials,login_only))
                     or 'signed_in'),
-                account_capture_habbo_session_cookies=lambda port:cookies,
+                account_capture_habbo_session_cookies=lambda port,check_visible_login=False:cookies,
                 fetch_habbo_sso_ticket=lambda sid,tok:(
                     events.append(('verify',sid,tok)) or 'ticket'),
                 account_parse_official_ticket_response=lambda raw:ticket,
@@ -137,8 +140,8 @@ class AutomaticLoginAndImport(TestCase):
             self.assertLess(
                 next(i for i,x in enumerate(events) if x[0]=='verify'),
                 next(i for i,x in enumerate(events) if x[0]=='write'))
-            self.assertIn(('login',43111,('me@example.com','password'),True),
-                          events)
+            self.assertFalse(any(x[0]=='login' for x in events))
+            self.assertIn(('verify','opaque-session','opaque-browser'),events)
 
     def test_headless_profile_created_with_isolated_folder_and_closed(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -170,7 +173,7 @@ class AutomaticLoginAndImport(TestCase):
                     '--remote-debugging-port='+str(port),url],
                 subprocess=SimpleNamespace(Popen=spawn,DEVNULL=-3),
                 account_attempt_auto_play=lambda *a,**k:'signed_in',
-                account_capture_habbo_session_cookies=lambda port:('abc','def'),
+                account_capture_habbo_session_cookies=lambda port,check_visible_login=False:('abc','def'),
                 fetch_habbo_sso_ticket=lambda *args:'ticket',
                 account_parse_official_ticket_response=lambda x:'token',
                 account_session_cookie_write=lambda *args:None,
@@ -188,7 +191,8 @@ class AutomaticLoginAndImport(TestCase):
                           ' '.join(launches[0]).replace('\\','/'))
             self.assertEqual(closed,['Browser.close'])
 
-    def test_failed_signin_never_reads_or_saves_cookies(self):
+    def test_no_valid_cookie_and_no_login_reports_setup_action(self):
+        calls=[]
         ns=execute(
             _account_credential_target=lambda ident:ident,
             account_browser_debug_port=lambda ident:43111,
@@ -196,14 +200,16 @@ class AutomaticLoginAndImport(TestCase):
             validate_habbo_login_url=lambda url:url,
             account_saved_login_read=lambda ident:None,
             account_browser_pages=lambda port:[signed_in_page(port)],
-            account_attempt_auto_play=lambda *a,**k:'login',
-            account_capture_habbo_session_cookies=lambda port:
-                self.fail('must not read cookies'),
+            account_attempt_auto_play=lambda *a,**k:
+                self.fail('should not attempt login without saved credentials'),
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:
+                (_ for _ in ()).throw(ValueError('no cookies')),
             account_session_cookie_write=lambda *args:
                 self.fail('must not write to vault'),
         )
-        with self.assertRaisesRegex(ValueError,'sign-in needs attention'):
-            ns['account_import_session_automatically'](account(),lambda _:None)
+        with self.assertRaisesRegex(ValueError,'No valid session or saved Habbo login'):
+            ns['account_import_session_automatically'](account(),calls.append)
+        self.assertTrue(any('No usable existing session' in x for x in calls))
 
     def test_ticket_rejected_does_not_write_stale_browser_cookies(self):
         ns=execute(
@@ -214,14 +220,63 @@ class AutomaticLoginAndImport(TestCase):
             account_saved_login_read=lambda ident:None,
             account_browser_pages=lambda port:[signed_in_page(port)],
             account_attempt_auto_play=lambda *a,**k:'signed_in',
-            account_capture_habbo_session_cookies=lambda port:('abc','def'),
+            account_capture_habbo_session_cookies=lambda port,check_visible_login=False:('abc','def'),
             fetch_habbo_sso_ticket=lambda *args:
                 (_ for _ in ()).throw(ValueError('401 rejected')),
             account_session_cookie_write=lambda *args:
                 self.fail('must not save rejected session'),
         )
-        with self.assertRaisesRegex(ValueError,'401 rejected'):
+        with self.assertRaisesRegex(ValueError,'No valid session or saved Habbo login'):
             ns['account_import_session_automatically'](account(),lambda _:None)
+
+
+    def test_invalid_cookie_then_saved_login_can_recover_and_validate(self):
+        events=[]
+        calls={'n':0}
+        def capture(port,check_visible_login=False):
+            calls['n']+=1
+            if calls['n']==1:
+                raise ValueError('old cookie')
+            return ('new-session','new-token')
+        ns=execute(
+            _account_credential_target=lambda ident:ident,
+            account_browser_debug_port=lambda ident:43111,
+            account_login_browser=lambda:Path('/mock/brave.exe'),
+            validate_habbo_login_url=lambda url:url,
+            account_saved_login_read=lambda ident:('user@example.com','password'),
+            account_browser_pages=lambda port:[signed_in_page(port)],
+            account_attempt_auto_play=lambda *a,**k:(
+                events.append('login') or 'signed_in'),
+            account_capture_habbo_session_cookies=capture,
+            fetch_habbo_sso_ticket=lambda sid,token:(
+                events.append('ticket') or 'test-ticket'),
+            account_parse_official_ticket_response=lambda _: 'validated-ticket',
+            account_session_cookie_write=lambda *args:
+                events.append('vault'),
+        )
+        result=ns['account_import_session_automatically'](
+            account(),lambda _:None)
+        self.assertEqual(result,'validated-ticket')
+        self.assertEqual(calls['n'],2)
+        self.assertEqual(events,['login','ticket','vault'])
+
+    def test_valid_cookies_from_unrecognised_page_can_still_be_read(self):
+        page=signed_in_page()
+        page['_preflight_step']={'kind':'waiting'}
+        ns=execute(
+            account_habbo_page=lambda port:
+                self.fail('DOM classification must not be required'),
+            account_browser_pages=lambda port:[page],
+            account_cdp_call=lambda *a,**k:{'cookies':[
+                {'name':'session.id','domain':'.habbo.com',
+                 'secure':True,'value':'session'},
+                {'name':'browser_token','domain':'.habbo.com',
+                 'secure':True,'value':'token'},
+            ]},
+        )
+        self.assertEqual(
+            ns['account_capture_habbo_session_cookies'](
+                43111,check_visible_login=False),('session','token'))
 
 
 class AppIntegration(TestCase):

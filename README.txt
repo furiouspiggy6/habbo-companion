@@ -626,3 +626,24 @@ browsers started by Companion are closed after import.
 One-time setup: Accounts -> Save login securely for each profile. When
 Habbo requires CAPTCHA, MFA or verification, use Accounts -> Open
 account login and complete it normally. No login/security bypass.
+
+
+Version 1.1.52 — Fix automatic Direct TCP account sign-in
+---------------------------------------------------------
+The first account can authenticate to Habbo via direct TCP; the second
+account's background browser was getting rejected before cookie capture.
+
+Auto-import now checks existing first-party Habbo.com cookies in the
+selected account's ISOLATED browser profile and asks the official SSO
+endpoint whether they are valid, without requiring a recognised Play
+button/avatar menu. Only verified cookies are stored in Windows vault.
+
+If the profile has no valid session, Companion can try a normal website
+login using credentials saved under Accounts. A missing saved login,
+unrecognised sign-in page, CAPTCHA/2FA requirement or browser-control
+failure now gets a specific next-step message.
+
+No broad cookie extraction from regular browser profiles, no bypassing
+Habbo verification, and no extra packets for the already-authenticated
+account. The feature is tested offline; live second-account validation
+still depends on that account's normal Habbo login.
