@@ -960,11 +960,12 @@ def account_login_safe_error_code(body):
 
 
 class AccountLoginNetworkProbe:
-    """One short-lived local DevTools event stream; never persists raw events.
+    """Short-lived, account-specific page traffic monitor.
 
-    Network.requestWillBeSent may contain private headers and bodies. Inspect
-    only request method, verified hostname and endpoint path in memory. Never
-    print requests, URLs, headers, response bodies, or cookies to the UI.
+    Watch every HTTPS page request, rather than guessing an auth endpoint from
+    its URL. Only print bounded, redacted method/type/origin-class and status
+    summaries. No URLs, query strings, request headers, payloads, cookies,
+    tokens, or raw browser console strings leave this monitor.
     """
     def __init__(self,websocket_url):
         self.url=websocket_url
@@ -978,7 +979,17 @@ class AccountLoginNetworkProbe:
         self.mime=''
         self.finished_id=None
         self.error_code=None
+        self.error_message=None
         self.javascript_exceptions=0
+        self.requests={}
+        self.request_count=0
+        self.interesting_count=0
+        self.responses=0
+        self.failure_count=0
+        self.redirect_count=0
+        self.error_candidates=[]
+        self.report=None
+        self.lines_printed=0
 
     def __enter__(self):
         url=urllib.parse.urlsplit(self.url)
@@ -1070,36 +1081,112 @@ class AccountLoginNetworkProbe:
             return message
         raise TimeoutError('Too many browser protocol events.')
 
+    def _emit(self,line):
+        # All call sites below construct bounded, no-secret strings.
+        if self.lines_printed>=16:
+            return
+        self.lines_printed+=1
+        if self.report is not None:
+            self.report(line)
+
     def _event(self,msg):
         name=msg.get('method')
         data=msg.get('params') or {}
         ident=data.get('requestId')
         if name=='Network.requestWillBeSent':
             req=data.get('request') or {}
-            if (len(self.auth_ids)<20 and account_login_auth_request(
-                    req.get('url'),req.get('method'))):
+            method=req.get('method')
+            url=req.get('url')
+            if not isinstance(url,str) or not isinstance(method,str):
+                return
+            try:
+                target=urllib.parse.urlsplit(url)
+                host=(target.hostname or '').lower()
+            except (TypeError,ValueError):
+                return
+            if target.scheme!='https' or not host:
+                return
+            self.request_count+=1
+            # The browser may reuse a request ID for an HTTP redirect.
+            prior=self.requests.pop(ident,None)
+            redirect=data.get('redirectResponse')
+            if prior and isinstance(redirect,dict):
+                self.redirect_count+=1
+                status=redirect.get('status')
+                if isinstance(status,(int,float)) and 300<=status<=399:
+                    self._emit('SERVER <- HTTP '+str(int(status))+
+                               ' redirect ('+prior['site']+').')
+            is_habbo=(host=='habbo.com' or host.endswith('.habbo.com'))
+            site='Habbo site' if is_habbo else 'external HTTPS site'
+            resource=data.get('type')
+            if resource not in ('Fetch','XHR','Document'):
+                resource='Other'
+            # Include all methods capable of login submission and all XHR
+            # and fetch traffic regardless of URL path, including external
+            # identity providers. Ignore static images/scripts and never
+            # expose the hostname or query string in UI/logs.
+            relevant=(method in ('POST','PUT','PATCH','DELETE','OPTIONS') or
+                      resource in ('Fetch','XHR','Document'))
+            if not relevant:
+                return
+            self.interesting_count+=1
+            if len(self.requests)>=48:
+                return
+            if not re.fullmatch(r'[A-Z]{2,10}',method):
+                method='HTTP'
+            self.requests[ident]={'site':site,'method':method,
+                                  'resource':resource,'status':None,
+                                  'mime':'','failed':None}
+            if account_login_auth_request(url,method):
                 self.auth_ids.add(ident)
                 self.seen=True
-        elif name=='Network.responseReceived' and ident in self.auth_ids:
+            self._emit('CLIENT -> '+method+' ('+site+', '+resource+').')
+        elif name=='Network.responseReceived' and ident in self.requests:
+            rec=self.requests[ident]
             response=data.get('response') or {}
             code=response.get('status')
             if isinstance(code,(int,float)) and 100<=code<=599:
+                rec['status']=int(code)
                 self.http_status=int(code)
-            self.mime=str(response.get('mimeType','')).lower()
-        elif name=='Network.loadingFailed' and ident in self.auth_ids:
+                self.responses+=1
+                self._emit('SERVER <- HTTP '+str(int(code))+
+                           ' ('+rec['site']+', '+rec['resource']+').')
+            mime=response.get('mimeType')
+            rec['mime']=mime.lower() if isinstance(mime,str) else ''
+            self.mime=rec['mime']
+        elif name=='Network.loadingFailed' and ident in self.requests:
+            rec=self.requests[ident]
             blocked=data.get('blockedReason')
             error=data.get('errorText')
             if isinstance(blocked,str) and re.fullmatch(r'[A-Za-z_-]{2,32}',blocked):
-                self.failed='blocked-'+blocked
+                kind='blocked-'+blocked
             elif isinstance(error,str) and re.fullmatch(r'net::ERR_[A-Z_]{2,50}',error):
-                self.failed=error
+                kind=error
             else:
-                self.failed='network-error'
-        elif name=='Network.loadingFinished' and ident in self.auth_ids:
-            if self.http_status is not None and self.http_status>=400:
+                kind='network-error'
+            rec['failed']=kind
+            self.failed=kind
+            self.failure_count+=1
+            self._emit('NETWORK <- '+kind+' ('+rec['site']+').')
+        elif name=='Network.loadingFinished' and ident in self.requests:
+            rec=self.requests[ident]
+            if (rec['status'] is not None and rec['status']>=400 and
+                'json' in rec['mime'] and rec['site']=='Habbo site' and
+                len(self.error_candidates)<3):
+                self.error_candidates.append(ident)
                 self.finished_id=ident
         elif name=='Runtime.exceptionThrown':
             self.javascript_exceptions+=1
+            if self.javascript_exceptions<=2:
+                self._emit('BROWSER <- JavaScript exception detected '
+                           '(details withheld; no server response implied).')
+        elif name=='Log.entryAdded':
+            entry=data.get('entry') or {}
+            if entry.get('level')=='error':
+                self.javascript_exceptions+=1
+                if self.javascript_exceptions<=2:
+                    self._emit('BROWSER <- Page console error '
+                               '(details withheld for account safety).')
 
     def _command(self,method,params=None,timeout=3):
         self.sequence+=1
@@ -1118,6 +1205,11 @@ class AccountLoginNetworkProbe:
     def enable(self):
         self._command('Network.enable',{'maxTotalBufferSize':1048576})
         self._command('Runtime.enable',{})
+        try:
+            self._command('Log.enable',{},timeout=1.5)
+        except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
+            # Not all Chromium builds support this domain on a page target.
+            pass
 
     def observe(self,seconds=5.0):
         deadline=time.monotonic()+seconds
@@ -1128,37 +1220,48 @@ class AccountLoginNetworkProbe:
                 continue
             except (OSError,ValueError,TimeoutError):
                 break
-            if self.seen and self.finished_id is not None:
-                break
-        # Failure responses may have a safe symbolic error code. Never read
-        # successful response bodies (which can contain auth tokens).
-        if (self.finished_id and self.http_status is not None and
-            self.http_status>=400 and 'json' in self.mime):
+        # Only read unsuccessful JSON responses from the verified Habbo
+        # origin, never successful bodies or external-provider payloads.
+        for ident in self.error_candidates[:2]:
             try:
                 result=self._command('Network.getResponseBody',
-                                     {'requestId':self.finished_id},timeout=2)
+                                     {'requestId':ident},timeout=2)
                 body=result.get('body')
                 if result.get('base64Encoded') and isinstance(body,str):
                     body=base64.b64decode(body,validate=True).decode('utf-8')
-                self.error_code=account_login_safe_error_code(body)
+                code=account_login_safe_error_code(body)
+                message=account_login_safe_server_message(body)
+                if code:
+                    self.error_code=code
+                    self._emit('SERVER <- Error code: '+code+'.')
+                if message:
+                    self.error_message=message
+                    self._emit('SERVER <- Error message: '+message+'.')
+                if code or message:
+                    break
             except (OSError,ValueError,RuntimeError,TimeoutError,
                     UnicodeError,TypeError):
-                pass
+                continue
 
     def summary(self):
-        if not self.seen:
-            return ('Login diagnostic: no matching first-party authentication '
-                    'POST was observed; the form may not have submitted, or '
-                    'the site may use another endpoint.')
-        if self.failed:
-            return 'Login diagnostic: authentication request failed ('+self.failed+').'
+        if self.interesting_count==0:
+            return ('Login diagnostic: '+str(self.request_count)+
+                    ' HTTPS request(s) observed on this page, but no '
+                    'XHR/fetch/form request. No server login response '
+                    'was captured; a browser-side issue is possible.')
+        result=('Login diagnostic: '+str(self.interesting_count)+
+                ' XHR/fetch/form request(s), '+str(self.responses)+
+                ' HTTP response(s), '+str(self.redirect_count)+
+                ' redirect(s), '+str(self.failure_count)+
+                ' network failure(s).')
         if self.http_status is not None:
-            status='Login diagnostic: Habbo authentication HTTP '+str(self.http_status)
-            if self.error_code:
-                status+='; server error code '+self.error_code
-            return status+' (not proof of a signed-in session).'
-        return ('Login diagnostic: Habbo authentication request started, '
-                'but no HTTP response was observed.')
+            result+=' Last observed HTTP '+str(self.http_status)+'.'
+        if not self.seen:
+            result+=' No endpoint was independently identified as authentication.'
+        if self.javascript_exceptions:
+            result+=' Browser error(s): '+str(self.javascript_exceptions)+'.'
+        result+=' HTTP 2xx alone does not confirm login; official SSO checks follow.'
+        return result
 
 
 def account_focus_and_submit_login(websocket_url):
