@@ -6104,7 +6104,8 @@ class ChatOverlayApp:
         tk.Label(right,text='Auto Play launches Classic accounts sequentially '
                  'when native launcher interaction is required. '
                  'One G-Earth packet endpoint can be attached at a time; '
-                 'multiple endpoints need separate configured proxies.',
+                 'multiple endpoints need separate configured proxies. '
+                 'G-Earth routing to multiple game clients is NOT yet implemented.',
                  font=('Segoe UI',9),fg=p['muted'],bg=p['surface'],
                  wraplength=520,justify='left').pack(anchor='w')
         self._accounts_render()
