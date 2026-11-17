@@ -100,7 +100,7 @@ class CompanionDirectUiContractTests(unittest.TestCase):
         self.assertNotIn("self.config['direct_ticket",section)
         self.assertNotIn("self.config['direct_ss",section)
         self.assertIn("self._direct_ticket_queue.clear()",self.app)
-        self.assertIn("self.notebook.add(direct,text='  Direct Classic  ')",self.app)
+        self.assertIn("self._make_direct_classic_panel(self._ui_scroll_area(",self.app)
 
     def test_ui_handles_packet_queue_status_on_main_thread(self):
         self.assertIn("if item[0]=='direct_launch_state':",self.app)

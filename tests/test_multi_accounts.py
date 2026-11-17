@@ -107,7 +107,7 @@ class MultiAccountTests(unittest.TestCase):
     def test_one_account_per_packet_connection_and_no_password_fields(self):
         code=SOURCE
         self.assertIn('self._account_attached_port=port',code)
-        self.assertIn("self.notebook.add(accounts,text='  Accounts  ')",code)
+        self.assertIn("self._make_accounts_panel(self._ui_scroll_area(",code)
         self.assertIn('account_login_browser()',code)
         self.assertIn("cmd=account_browser_command(browser,folder,account['url']",code)
         self.assertIn('one g-earth',code.lower())

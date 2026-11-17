@@ -1,3 +1,31 @@
+HABBO COMPANION v1.1.68 — MODERN DARK WORKSPACE
+=================================================
+
+The Companion control window has been reorganised as a modern dark desktop
+workspace. The original Habbo client overlays and bubble artwork are unchanged.
+
+- Persistent left navigation for Overview, Accounts, Direct TCP, View Chat,
+  Packet Viewer, Packet Manipulator, Direct Classic, Headless Test, Updates.
+- Overview dashboard with real account counts, server-authenticated Direct
+  TCP counts and current pending connection counts; no unverified login is
+  labelled authenticated.
+- Accounts uses a profile list on the left and grouped account details,
+  login/security, G-Earth settings and launcher actions on the right.
+- Shared dark surfaces, headings, fields, table rows, status text, tool buttons
+  and clearly differentiated primary actions across every workspace.
+- Page-specific vertical scrolling keeps long tool panels accessible; mouse
+  wheel events inside packet tables and logs are left to their own controls.
+- Larger default window (1120 x 820) and minimum (940 x 620) accommodate
+  the sidebar and two-column Accounts editor.
+- Existing settings keys, accounts, vault credentials, browser profiles,
+  updater flow, Direct TCP, G-Earth, chat and packet tool callbacks remain
+  unchanged. No migration or external UI dependencies are required.
+
+Verification includes Python source/unit tests, a Windows Chromium Playwright
+smoke test, and a separate Windows Tkinter UI construction/navigation smoke
+test. Actual appearance on a user's monitor may vary with scaling, themes
+and Windows display settings.
+
 HABBO COMPANION v1.1.67 — COLD START BACKGROUND SESSION READINESS
 =================================================================
 
