@@ -110,6 +110,51 @@ class NetworkClassificationTests(unittest.TestCase):
         for secret in ('identity.example.com','user/action','?secret=123'):
             self.assertNotIn(secret,' '.join(out))
 
+    def test_only_failed_first_party_json_body_yields_safe_server_details(self):
+        cls=scope()['AccountLoginNetworkProbe']
+        probe=cls('ws://127.0.0.1:44000/devtools/page/abc')
+        out=[]
+        probe.report=out.append
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'r1','type':'XHR',
+                                'request':{'method':'POST',
+                                    'url':'https://www.habbo.com/identity/method'}}})
+        probe._event({'method':'Network.responseReceived',
+                      'params':{'requestId':'r1','response':{
+                          'status':401,'mimeType':'application/json'}}})
+        probe._event({'method':'Network.loadingFinished',
+                      'params':{'requestId':'r1'}})
+        calls=[]
+        probe._command=lambda method,params=None,timeout=3:(
+            calls.append((method,params)) or {'body':
+                '{"error":{"code":"INVALID_CREDENTIALS",'
+                '"message":"Invalid email or password."},'
+                '"token":"PRIVATE_TOKEN","email":"person@example.com"}'})
+        probe.observe(seconds=0)
+        output=' '.join(out)
+        self.assertIn('SERVER <- Error code: INVALID_CREDENTIALS',output)
+        self.assertIn('SERVER <- Error message: Invalid email or password.',output)
+        self.assertEqual(calls,[('Network.getResponseBody',{'requestId':'r1'})])
+        for private in ('PRIVATE_TOKEN','person@example.com','identity/method'):
+            self.assertNotIn(private,output)
+
+    def test_external_error_response_body_is_never_inspected(self):
+        cls=scope()['AccountLoginNetworkProbe']
+        probe=cls('ws://127.0.0.1:44000/devtools/page/abc')
+        probe._event({'method':'Network.requestWillBeSent',
+                      'params':{'requestId':'external','type':'XHR',
+                                'request':{'method':'POST',
+                                    'url':'https://identity.example.com/signin'}}})
+        probe._event({'method':'Network.responseReceived',
+                      'params':{'requestId':'external','response':{
+                          'status':403,'mimeType':'application/json'}}})
+        probe._event({'method':'Network.loadingFinished',
+                      'params':{'requestId':'external'}})
+        probe._command=lambda *args,**kwargs: self.fail(
+            'External private response bodies must never be inspected')
+        probe.observe(seconds=0)
+        self.assertEqual(probe.error_candidates,[])
+
     def test_redirects_and_page_script_errors_are_reported_without_raw_data(self):
         cls=scope()['AccountLoginNetworkProbe']
         out=[]
