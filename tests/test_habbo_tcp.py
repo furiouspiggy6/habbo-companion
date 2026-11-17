@@ -10,22 +10,64 @@ import habbo_tcp as tcp
 
 
 class ProtocolTests(unittest.TestCase):
-    def test_documented_air_handshake_header_registry(self):
-        # The client-side AIR packet registry, not a standalone bot's guessed
-        # headers. Live 2026 compatibility still requires real verification.
+    def test_community_air_handshake_header_registry(self):
+        # Community AIR mapping is a hypothesis to test against the live
+        # 2026 service, NOT proof of protocol compatibility.
         self.assertEqual(tcp.TCP_OUT, {
-            "hello":4000, "init_dh":3110, "finish_dh":773, "version":1053,
-            "unique":2490, "sso":2419, "info":357,
-            "pong":2596, "latency":295,
+            "hello":4000, "init_dh":1445, "finish_dh":3393, "version":1422,
+            "unique":760, "sso":3674, "info":3745,
+            "pong":2418, "latency":1255,
         })
         self.assertEqual(tcp.TCP_IN, {
-            "init_dh":1347, "finish_dh":3885, "auth_ok":2491,
-            "ping":3928, "disconnect":4000,
+            "init_dh":503, "finish_dh":3722, "auth_ok":115,
+            "ping":2829, "disconnect":4000,
         })
         self.assertEqual(tcp.TCP_FALLBACK_RELEASE,
                          "WIN63-202611041140-327405090")
         self.assertEqual(tcp.TCP_CLIENT_DATA,
                          "https://www.habbo.com/gamedata/external_variables")
+
+    def test_official_gamedata_redirect_is_tightly_scoped(self):
+        self.assertTrue(tcp._valid_gamedata_redirect(
+            "https://www.habbo.com/gamedata/external_variables/"
+            + "a" * 40))
+        for url in (
+            "http://www.habbo.com/gamedata/external_variables/"+"a"*40,
+            "https://evil.example/gamedata/external_variables/"+"a"*40,
+            "https://www.habbo.com/api/client/clientnative/url",
+            "https://www.habbo.com/gamedata/external_variables/"+ "a"*40+"?token=x",
+            "https://www.habbo.com/gamedata/external_variables/../../api",
+        ):
+            self.assertFalse(tcp._valid_gamedata_redirect(url))
+
+    def test_public_gamedata_allows_larger_responses_after_safe_redirect(self):
+        target = tcp.TCP_CLIENT_DATA + "/" + "a"*40
+        payload = b"x"*80000
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.geturl.return_value = target
+        response.read.return_value = payload
+        opener = mock.MagicMock()
+        opener.open.return_value = response
+        with mock.patch.object(tcp.urllib.request,"build_opener",
+                               return_value=opener) as build:
+            result = tcp._official_request(tcp.TCP_CLIENT_DATA)
+        self.assertEqual(result, payload)
+        self.assertEqual(response.read.call_args.args[0], 524289)
+        handler = build.call_args.args[0]
+        self.assertTrue(handler.allow_gamedata)
+
+    def test_sso_api_rejects_all_redirects(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.geturl.return_value = (tcp.TCP_CLIENT_DATA + "/" + "a"*40)
+        opener = mock.MagicMock()
+        opener.open.return_value = response
+        with mock.patch.object(tcp.urllib.request,"build_opener",
+                               return_value=opener) as build:
+            with self.assertRaises(tcp.HabboTcpError):
+                tcp._official_request(tcp.TCP_SSO_URL,method="POST")
+        self.assertFalse(build.call_args.args[0].allow_gamedata)
 
     def test_binary_frame_string_and_sizes(self):
         self.assertEqual(tcp._frame(4000, tcp._string("test")),
@@ -251,6 +293,29 @@ class AuthenticationDiagnosticsTests(unittest.TestCase):
             session._await_packet(tcp.TCP_IN["init_dh"], limit=0.04)
         self.assertIn("unexpected packet IDs: 65500", str(caught.exception))
         self.assertNotIn("private-payload", str(caught.exception))
+        session.close()
+
+
+class TimeoutByteDiagnosticsTests(unittest.TestCase):
+    def test_no_server_bytes_is_explicit(self):
+        fake = FakeGameSocket(b"")
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = fake
+        with self.assertRaises(tcp.HabboTcpError) as caught:
+            session._await_packet(tcp.TCP_IN["init_dh"],limit=0.04)
+        self.assertIn("no game-server bytes received",str(caught.exception))
+        session.close()
+
+    def test_partial_frame_reports_received_byte_count_only(self):
+        fake = FragmentedSocket([
+            b"\x00\x00", socket.timeout(), socket.timeout(),
+        ])
+        session = tcp.HabboTcpSession("abcdef123456")
+        session.sock = fake
+        with self.assertRaises(tcp.HabboTcpError) as caught:
+            session._await_packet(tcp.TCP_IN["init_dh"],limit=0.04)
+        self.assertIn("received 2 socket bytes",str(caught.exception))
+        self.assertIn("incomplete frame header buffered",str(caught.exception))
         session.close()
 
 
