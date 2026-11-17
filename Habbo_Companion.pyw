@@ -977,12 +977,52 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   try { submit.scrollIntoView({block:'center',inline:'center',behavior:'instant'}); }
   catch (_) { submit.scrollIntoView(); }
   const r=submit.getBoundingClientRect();
-  const x=r.left+r.width/2,y=r.top+r.height/2;
-  if (!(x>=0 && y>=0 && x<innerWidth && y<innerHeight))
-    return {kind:'button-offscreen'};
-  const hit=document.elementFromPoint(x,y);
-  if (!hit || (hit!==submit && !submit.contains(hit)))
-    return {kind:'button-obstructed'};
+  // A centre-only hit test incorrectly treats a partly covered button as
+  // wholly blocked. Check nine well-separated points *within the same
+  // verified button*, never click an unrelated overlay or challenge.
+  const offsets=[[.5,.5],[.25,.5],[.75,.5],[.5,.25],[.5,.75],
+                 [.25,.25],[.75,.25],[.25,.75],[.75,.75]];
+  let chosen=null,inspected=0,centerBlocked=false,blocker=null;
+  const isPartOfSubmit=hit=>{
+    if (!hit) return false;
+    if (hit===submit || submit.contains(hit)) return true;
+    // A button may host a shadow-root child; its hit-test belongs to the
+    // submit control, not to a sibling that obstructs the button.
+    const root=typeof hit.getRootNode==='function'?hit.getRootNode():null;
+    return !!(root && root.host===submit);
+  };
+  for (const [fx,fy] of offsets) {
+    const x=r.left+r.width*fx,y=r.top+r.height*fy;
+    if (!(x>=0 && y>=0 && x<innerWidth && y<innerHeight)) continue;
+    const hit=document.elementFromPoint(x,y);
+    inspected++;
+    if (isPartOfSubmit(hit)) {
+      chosen={x,y};
+      break;
+    }
+    if (fx===.5 && fy===.5) centerBlocked=true;
+    if (!blocker && hit) {
+      const tag=String(hit.tagName||'UNKNOWN').toUpperCase();
+      const rawRole=hit.getAttribute&&hit.getAttribute('role');
+      const role=String(rawRole||'').toLowerCase();
+      const allowedTags=['DIV','SPAN','IFRAME','DIALOG','BUTTON','LABEL',
+        'SECTION','FORM','IMG','INPUT','A','BODY','HTML','HEADER','MAIN',
+        'P','ARTICLE','UNKNOWN'];
+      const allowedRoles=['dialog','alertdialog','button','presentation',
+        'none','status','group','form','alert'];
+      blocker={tag:allowedTags.includes(tag)?tag:'OTHER',
+               role:allowedRoles.includes(role)?role:'none'};
+      if ((hit.closest && hit.closest('[role=dialog],[role=alertdialog],dialog')) ||
+          tag==='DIALOG') blocker.role='dialog';
+    }
+  }
+  if (!chosen) {
+    if (inspected===0) return {kind:'button-offscreen'};
+    return {kind:'button-obstructed',tested:inspected,
+            blockerTag:blocker?blocker.tag:'UNKNOWN',
+            blockerRole:blocker?blocker.role:'none'};
+  }
+  const x=chosen.x,y=chosen.y;
   // Lightweight event instrumentation to check whether the browser generated
   // a trusted click and whether the native form submitted. No input values.
   if (!window.__hcLoginEventTrace) {
@@ -999,7 +1039,7 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
     },true);
     window.__hcLoginEventTrace=trace;
   }
-  return {kind:'ready',x,y};
+  return {kind:'ready',x,y,centerBlocked,tested:inspected};
 })()'''
 
 
