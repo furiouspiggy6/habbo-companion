@@ -772,7 +772,7 @@ HABBO_LOGIN_DIAGNOSTIC_JS=r'''(() => {
   if (otp) return {kind:'verification'};
   // Passive/invisible CAPTCHA integrations can be mounted on login pages
   // even when there is no user-facing challenge. Never infer a required
-  // human verification step from a hidden iframe or [data-sitekey] alone.
+  // human verification step from a hidden iframe or passive site markup.
   // Look only for a visible checkbox, challenge, or interactive widget.
   const captcha=Array.from(document.querySelectorAll(
     'iframe[title*=challenge i],iframe[title*=checkbox i],' +
