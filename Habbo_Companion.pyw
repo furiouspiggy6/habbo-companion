@@ -4686,6 +4686,7 @@ class ChatOverlayApp:
         self.fuzz_target_ip_var=tk.StringVar(value='127.0.0.1')
         self.fuzz_live_var=tk.StringVar(value='Passive reader OFF. Connect G-Earth first.')
         self.fuzz_lab_var=tk.StringVar(value='Local boofuzz lab idle; never sends to Habbo.')
+        self.fuzz_connected_server_var=tk.StringVar(value='Connected game server: none detected. Boofuzz traffic stays on your PC.')
         self._packet_auto_retry_after=0.0
         self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
         self.packet_rules=[]
@@ -5468,6 +5469,7 @@ class ChatOverlayApp:
             table.selection_set(ident)
         elif self._account_profiles:
             table.selection_set(self._account_profiles[0]['id'])
+        self._fuzz_refresh_connected_server()
 
     def _tcp_save_session(self):
         account=self._tcp_selected()
@@ -7061,11 +7063,15 @@ class ChatOverlayApp:
                  wraplength=650,justify='left',bg=p['background'],fg=p['muted']).pack(anchor='w',pady=(6,12))
         ttk.Label(holder,textvariable=self.fuzz_live_var,style='Panel.TLabel',
                   wraplength=650).pack(anchor='w',pady=(0,8))
+        ttk.Label(holder,textvariable=self.fuzz_connected_server_var,
+                  style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(0,8))
         live=ttk.Frame(holder,style='Panel.TFrame');live.pack(fill='x',pady=(0,16))
         ttk.Button(live,text='Start / Stop passive reader',
                    command=self._fuzz_toggle_reader).pack(side='left',padx=(0,8))
         ttk.Button(live,text='Export redacted metadata JSON',
                    command=self._fuzz_export).pack(side='left')
+        ttk.Button(live,text='Refresh connected server',
+                   command=self._fuzz_refresh_connected_server).pack(side='left',padx=(8,0))
         ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(6,14))
         tk.Label(holder,text='LOCAL BOOFUZZ TEST',font=('Segoe UI Semibold',13),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
@@ -7093,6 +7099,35 @@ class ChatOverlayApp:
                  'custom IP belongs solely to the synthetic local test server. '
                  'Install boofuzz in the Python running Companion.',
                  wraplength=650,justify='left',bg=p['background'],fg=p['faint']).pack(anchor='w',pady=(16,0))
+
+    def _fuzz_refresh_connected_server(self):
+        """Read connection metadata only; never route test traffic to peers."""
+        statuses=[]
+        direct_peers=set()
+        for session in self._tcp_sessions.values():
+            if not getattr(session,'authenticated',False):
+                continue
+            sock=getattr(session,'sock',None)
+            if sock is None:
+                continue
+            try:
+                peer=sock.getpeername()
+            except (OSError,ValueError):
+                continue
+            if isinstance(peer,tuple) and len(peer)>=2:
+                direct_peers.add(f'{peer[0]}:{peer[1]}')
+        if direct_peers:
+            statuses.append('Active Direct TCP socket peer(s): '+
+                            ', '.join(sorted(direct_peers))+' (verified peer address)')
+        if self._habbo_session_connected:
+            host=self.gearth_host_var.get().strip()
+            port=self.gearth_game_port_var.get().strip()
+            statuses.append(f'G-Earth AIR session active; configured target: {host}:{port} '
+                            '(actual remote IP unverified)')
+        self.fuzz_connected_server_var.set(
+            ' | '.join(statuses)+' — read-only; boofuzz remains on your PC.'
+            if statuses else
+            'Connected game server: none detected. Boofuzz traffic stays on your PC.')
 
     def _fuzz_toggle_reader(self):
         if self.fuzz_monitoring:
@@ -9609,6 +9644,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'A player left; unrelated players remain mapped.')
                 continue
             if item[0]=='session_connection':
+                self._fuzz_refresh_connected_server()
                 self.packet_connection_status.set(
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
