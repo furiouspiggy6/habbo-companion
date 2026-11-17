@@ -2813,7 +2813,7 @@ class ChatOverlayApp:
         if existing:
             existing.close()
             self._tcp_sessions.pop(ident,None)
-        ticket=self._direct_ticket_queue.pop(ident,None)
+        ticket=None
         cookies=None
         if use_form:
             raw=self.tcp_ticket_var.get().strip()
@@ -2830,6 +2830,8 @@ class ChatOverlayApp:
                 cookies=(a,b)
             self.tcp_session_id_var.set('')
             self.tcp_browser_token_var.set('')
+        if ticket is None:
+            ticket=self._direct_ticket_queue.pop(ident,None)
         if ticket is None and cookies is None:
             try:
                 cookies=account_session_cookie_read(ident)
@@ -6365,9 +6367,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 elif event=='tcp_connected':
                     self._tcp_sessions[ident]=item[3]
                     self._tcp_inflight.discard(ident)
-                    self._tcp_states[ident]='Authenticated (direct TCP)'
-                    self.tcp_status_var.set(
-                        'Habbo sent AuthenticationOK; session is active.')
+                    if item[3].authenticated:
+                        self._tcp_states[ident]='Authenticated (direct TCP)'
+                        self.tcp_status_var.set(
+                            'Habbo sent AuthenticationOK; session is active.')
+                    else:
+                        self._tcp_states[ident]='Authentication succeeded, '
+                        self._tcp_states[ident]+='but the game socket closed.'
+                        self.tcp_status_var.set(self._tcp_states[ident])
                     self._tcp_render()
                 elif event=='tcp_failed':
                     self._tcp_inflight.discard(ident)
