@@ -139,6 +139,8 @@ class SurfacedDiagnosticsTests(unittest.TestCase):
             'account_browser_pages':lambda _:[{'type':'page'}],
             'account_capture_habbo_session_cookies':lambda *args,**kwargs:(
                 (_ for _ in ()).throw(ValueError('No valid session'))),
+            'account_fetch_ticket_from_signed_in_profile':lambda port:(
+                _ for _ in ()).throw(ValueError('No signed-in browser ticket')),
             'account_attempt_auto_play':lambda port,report,**kwargs:(
                 report('Password entry stopped on unverified page') or 'unknown'),
             'account_session_cookie_write':lambda *args:
