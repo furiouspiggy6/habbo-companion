@@ -1207,7 +1207,7 @@ def account_submit_with_network_diagnostics(websocket_url,report):
         return account_focus_and_submit_login(websocket_url)
 
 
-def account_submit_saved_login(websocket_url,email,password):
+def account_submit_saved_login(websocket_url,email,password,report=None):
     """Enter a saved login on official Habbo and verify before submission."""
     def fields_now():
         result=account_cdp_call(websocket_url,'Runtime.evaluate',{
@@ -1246,8 +1246,8 @@ def account_submit_saved_login(websocket_url,email,password):
     if fields.get('kind')!='form':
         return False
     time.sleep(0.2)
-    account_click_play_button(websocket_url,fields['submit'])
-    return True
+    return account_submit_with_network_diagnostics(
+        websocket_url,report or (lambda message:None))
 
 
 def account_attempt_auto_play(debug_port,report,credentials=None,login_only=False):
@@ -1348,10 +1348,11 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                 time.sleep(1.2)
                 continue
             if not account_submit_saved_login(
-                    page['webSocketDebuggerUrl'],credentials[0],credentials[1]):
-                report('Saved login could not be confirmed in the Habbo email/password '
-                       'inputs. No login submission was sent; check the form or '
-                       'use Accounts > Open account login.')
+                    page['webSocketDebuggerUrl'],credentials[0],credentials[1],
+                    report=report):
+                report('Saved login could not be submitted to the verified Habbo '
+                       'form. Check the preceding login diagnostic; no session '
+                       'or browser token was saved.')
                 return 'login'
             login_submitted=True
             report('Submitted saved login for this account. '
