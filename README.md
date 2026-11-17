@@ -1,5 +1,16 @@
 # Habbo Companion
 
+## Protocol Lab connected server status (read-only)
+
+Protocol Lab displays an authenticated Direct TCP socket's observed peer IP/port,
+or the configured G-Earth game endpoint when its AIR session is active. G-Earth's
+configured address is **not proof of the actual remote peer IP**. Use **Refresh
+connected server** or watch the status update when sessions connect/disconnect.
+This feature never transmits packets or handles passwords or SSO tickets.
+
+**Boofuzz remains limited to the synthetic server on your own PC.** Discovering
+a live peer does not make it a permitted fuzz target.
+
 ## v1.1.71 — Fuzz a test server on another machine (authenticated)
 
 **Protocol Lab → Remote test machine** now accepts the IPv4 address and port of
