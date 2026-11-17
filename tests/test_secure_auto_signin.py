@@ -11,7 +11,8 @@ TREE=ast.parse(TEXT)
 
 FUNCTIONS={
     '_account_credential_target','account_submit_saved_login',
-    'account_login_input_confirmed','account_attempt_auto_play'
+    'account_login_input_confirmed','account_login_field_action',
+    'account_attempt_auto_play'
 }
 
 
@@ -63,15 +64,14 @@ class AutoSigninTests(unittest.TestCase):
         def cdp(url,method,params):
             sent.append((url,method,params))
             if method=='Runtime.evaluate':
-                calls['n']+=1
-                if calls['n']==1:
-                    return {'result':{'value':{
-                        'kind':'form','email':{'x':10,'y':30},
-                        'password':{'x':20,'y':40},
-                        'submit':{'x':80,'y':90}}}}
+                expression=params['expression']
+                if 'const field=' in expression:
+                    field='password' if 'const field="password"' in expression else 'email'
+                    return {'result':{'value':{'kind':'populated','field':field}}}
                 return {'result':{'value':{
-                    'kind':'populated',
-                    'field':'email' if calls['n']==2 else 'password'}}}
+                    'kind':'form','email':{'x':10,'y':30},
+                    'password':{'x':20,'y':40},
+                    'submit':{'x':80,'y':90}}}}
             return {}
         a['account_cdp_call']=cdp
         a['time']=SimpleNamespace(sleep=lambda _:None)
@@ -109,8 +109,9 @@ class AutoSigninTests(unittest.TestCase):
         self.assertFalse(a['account_submit_saved_login'](
             'ws://127.0.0.1:44321/devtools/page/abc',
             'user@example.com','not-a-real-password'))
-        self.assertEqual(inserted,['user@example.com','user@example.com'])
+        self.assertEqual(inserted,['user@example.com'])
         self.assertNotIn({'x':10,'y':90},clicks)
+        self.assertEqual(len(clicks),1)
 
     def test_input_ready_status_returns_only_boolean(self):
         a=scope()
