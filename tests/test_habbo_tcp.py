@@ -30,6 +30,15 @@ class ProtocolTests(unittest.TestCase):
         other = tcp._ArcFour(key, inbound=True)
         self.assertNotEqual(other.apply(encrypted), plain)
 
+    def test_profile_fingerprints_stable_and_separate(self):
+        first = tcp.profile_fingerprint("abcdef123456")
+        self.assertEqual(first, tcp.profile_fingerprint("abcdef123456"))
+        self.assertRegex(first, r"^~[0-9a-f]{32}$")
+        self.assertNotEqual(first, tcp.profile_fingerprint("aabbccddeeff"))
+        with self.assertRaises(ValueError):
+            tcp.profile_fingerprint("../../password")
+        self.assertNotIn("browser_token", first)
+
     def test_invalid_sso_and_bad_rsa_unpad_rejected(self):
         with self.assertRaises(tcp.HabboTcpError):
             tcp._rsa_decipher_decimal("00")
@@ -215,6 +224,8 @@ class SessionIntegrationTests(unittest.TestCase):
                           tcp.TCP_OUT["finish_dh"], tcp.TCP_OUT["version"],
                           tcp.TCP_OUT["unique"], tcp.TCP_OUT["sso"]])
         self.assertEqual(sent_ids[6], tcp.TCP_OUT["info"])
+        self.assertIn(tcp.profile_fingerprint("012345abcdef").encode("ascii"),
+                      fake.outgoing[4])
         self.assertNotIn(b"0123456789abcdef.V4",
                          b"".join(fake.outgoing[:2]))
 
