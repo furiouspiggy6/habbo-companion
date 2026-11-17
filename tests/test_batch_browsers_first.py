@@ -98,7 +98,7 @@ class BatchBrowserFirst(unittest.TestCase):
                         'Classic selected; client unverified'),stages)
 
     def test_ui_per_account_status_and_not_fake_proxy(self):
-        self.assertIn("('launch_state','Browser / Classic status',340)",CODE)
+        self.assertIn("('launch_state','Status',120)",CODE)
         self.assertIn("self.account_table.set(item[2],'launch_state',item[3])",CODE)
         self.assertIn("if account_select_classic_launcher(16):",CODE)
         self.assertIn("No multi-account G-Earth packet routing yet.",CODE)
