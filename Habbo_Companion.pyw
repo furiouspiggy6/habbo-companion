@@ -2261,7 +2261,10 @@ class AccountPlaywrightMonitor:
     def on_request(self,req):
         try:
             url=req.url
-            service=account_playwright_safe_service(url)
+            # Check verified first-party origin before consulting the
+            # optional service-label helper (also works in isolated tests).
+            service=('Habbo' if account_playwright_is_official(url) else
+                     account_playwright_safe_service(url))
             if service is None:
                 return
             method=req.method
