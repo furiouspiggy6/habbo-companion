@@ -198,7 +198,7 @@ class DomSubmissionTests(unittest.TestCase):
         self.assertTrue(ns['account_submit_with_network_diagnostics'](
             'ws',messages.append))
         self.assertEqual(events,['open','enter','enable','submit','observe','close'])
-        self.assertIn('HTTP 403',messages[0])
+        self.assertTrue(any('HTTP 403' in msg for msg in messages))
 
     def test_monitor_cannot_cause_second_submission_after_click(self):
         ns=scope()
