@@ -38,10 +38,11 @@ global.location={protocol:'https:',hostname:'www.habbo.com',pathname:'/'};
 global.innerWidth=1060;global.innerHeight=800;
 global.getComputedStyle=el=>({display:'block',visibility:'visible',cursor:'pointer'});
 const play=button('PLAY H',935,160,96,42);
+const launch=button('Launch and log in',690,125,300,90);
 const profile=button('dan.alt100',840,95,165,45,true);
 const email=button('',850,270,170,35);
 email.type='password';
-let controls=mode==='play'?[play]:(mode==='profile'?[profile]:[]);
+let controls=mode==='launch'?[launch]:(mode==='play'?[play]:(mode==='profile'?[profile]:[]));
 global.document={querySelectorAll:(selector)=>{
     if(selector==='input[type=password]')return mode==='login'?[email]:[];
     if(selector==='span,strong,div')return [];
@@ -68,6 +69,13 @@ class AuthenticatedPageDetectionTests(unittest.TestCase):
         self.assertEqual(out['kind'],'play')
         self.assertEqual(out['label'],'PLAY H')
         self.assertTrue(out['x']>900)
+
+    def test_launch_modal_button_is_recognised_without_copying_code(self):
+        out=self.js_scenario('launch')
+        self.assertEqual(out['kind'],'launch')
+        self.assertEqual(out['label'],'Launch and log in')
+        self.assertNotIn('ticket',out)
+        self.assertNotIn('code',out)
 
     def test_logged_in_profile_menu_confirms_session_without_play(self):
         out=self.js_scenario('profile')
