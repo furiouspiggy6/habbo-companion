@@ -167,6 +167,16 @@ class RepositoryIntegrationTests(unittest.TestCase):
         self.assertIn("self._tcp_disconnect_all()", source)
         self.assertIn("account_session_cookie_write(", source)
         self.assertIn("Credential Manager", source)
+        self.assertIn("tcp_auto_connect=False", source)
+        self.assertIn("self.root.after(1200,self._tcp_auto_connect_startup)", source)
+        self.assertIn("Automatically connect saved TCP accounts", source)
+        self.assertIn("self._tcp_disconnect_all()", source.split("    def close(self):",1)[1])
+        # The startup path must use the same vetted multi-account connector.
+        startup = source.split("    def _tcp_auto_connect_startup(self):",1)[1].split(
+            "    def _tcp_connect_one(",1)[0]
+        self.assertIn("if not self.tcp_autostart_var.get():", startup)
+        self.assertIn("self._tcp_connect_all()", startup)
+        self.assertNotIn("account_login_browser(", startup)
 
 
 if __name__ == "__main__":

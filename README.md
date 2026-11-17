@@ -47,3 +47,19 @@ authentication and live room behavior still require a Windows test with valid
 tickets. The old Headless Test (loopback fake server) is retained and explicitly
 separate. Original G-Earth packet tools are not automatically wired to these
 direct TCP sessions; the Direct TCP tab displays packet IDs only.
+
+
+## v1.1.44 — Automatically connect saved Direct TCP accounts
+
+Open the **Direct TCP** tab, save an authenticated Habbo.com session separately
+for each account in the Windows Credential Manager vault, then check
+**Automatically connect saved TCP accounts when Companion opens**. Next time
+you open Companion, it attempts a separate TCP connection for all configured
+accounts with saved sessions — no game executable or browser window.
+
+You can also choose **Connect all saved** at any time. This is not a
+password-based, everlasting login: when Habbo expires or revokes a stored
+website session, the account must be signed into Habbo again through the
+official authentication flow before direct TCP can connect. Verification
+codes, MFA and server authentication checks are not bypassed. A positive
+connection status requires the live server AuthenticationOK packet.

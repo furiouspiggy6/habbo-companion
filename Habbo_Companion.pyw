@@ -94,6 +94,7 @@ DEFAULT = dict(
     habbo_launcher_path='',
     account_profiles=[],
     account_active_id='',
+    tcp_auto_connect=False,
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
 
@@ -2351,6 +2352,8 @@ class ChatOverlayApp:
         self.tcp_ticket_var=tk.StringVar(value='')
         self.tcp_session_id_var=tk.StringVar(value='')
         self.tcp_browser_token_var=tk.StringVar(value='')
+        self.tcp_autostart_var=tk.BooleanVar(
+            value=bool(self.config.get('tcp_auto_connect',False)))
         self._headless_manager=HeadlessLocalManager()
         self._headless_server=None
         self._headless_account_states={}
@@ -2537,6 +2540,7 @@ class ChatOverlayApp:
         self.root.after(450,self._setup_wheel_hook)
         self.tick()
         self.root.after(200,self._pump_packets)
+        self.root.after(1200,self._tcp_auto_connect_startup)
         # Pre-arm before the AIR client connects. Starting only after a Habbo
         # window is visible may be too late for its initial network handshake.
         self.root.after(1800,self._auto_prepare_gearth)
@@ -2716,6 +2720,12 @@ class ChatOverlayApp:
                    command=self._tcp_save_session).pack(side='left',padx=(0,7))
         ttk.Button(row,text='Forget saved session',
                    command=self._tcp_forget_session).pack(side='left')
+        ttk.Checkbutton(
+            f,
+            text='Automatically connect saved TCP accounts when Companion opens',
+            variable=self.tcp_autostart_var,
+            command=self._tcp_autostart_changed,
+            style='Panel.TCheckbutton').pack(anchor='w',pady=(3,9))
         row=ttk.Frame(f,style='Panel.TFrame')
         row.pack(fill='x',pady=(0,8))
         ttk.Button(row,text='Connect selected',
@@ -2802,6 +2812,21 @@ class ChatOverlayApp:
         self.tcp_session_id_var.set('')
         self.tcp_browser_token_var.set('')
         self.tcp_status_var.set('Saved website session removed from Windows vault.')
+
+    def _tcp_autostart_changed(self):
+        enabled=bool(self.tcp_autostart_var.get())
+        self.config['tcp_auto_connect']=enabled
+        self.save()
+        self.tcp_status_var.set(
+            'Saved account TCP auto-connect '+('enabled.' if enabled else 'disabled.')
+            +' You will still need to sign in again if Habbo expires a session.')
+
+    def _tcp_auto_connect_startup(self):
+        if not self.tcp_autostart_var.get():
+            return
+        # Only existing saved sessions are requested; never start a browser,
+        # prompt for credentials, or launch a game executable.
+        self._tcp_connect_all()
 
     def _tcp_connect_one(self, account, use_form=False):
         ident=account['id']
@@ -7223,6 +7248,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
 
     def close(self):
         # Tickets never outlive the Companion process.
+        self._tcp_disconnect_all()
         self._direct_ticket_queue.clear()
         self.direct_ticket_var.set('')
         self._headless_manager.disconnect_all()
