@@ -770,9 +770,14 @@ HABBO_LOGIN_DIAGNOSTIC_JS=r'''(() => {
     'input[autocomplete=one-time-code],input[name*=otp i],input[name*=verification i]'
   )).some(visible);
   if (otp) return {kind:'verification'};
-  const captcha=document.querySelector(
-    'iframe[src*=recaptcha],iframe[src*=hcaptcha],.g-recaptcha,'+
-    '.h-captcha,.cf-turnstile,[data-sitekey],input[name*=captcha i]');
+  // Passive/invisible CAPTCHA integrations can be mounted on login pages
+  // even when there is no user-facing challenge. Never infer a required
+  // human verification step from a hidden iframe or passive site markup.
+  // Look only for a visible checkbox, challenge, or interactive widget.
+  const captcha=Array.from(document.querySelectorAll(
+    'iframe[title*=challenge i],iframe[title*=checkbox i],' +
+    '.g-recaptcha,.h-captcha,.cf-turnstile,input[name*=captcha i]'
+  )).some(visible);
   if (captcha) return {kind:'captcha'};
   const notices=Array.from(document.querySelectorAll(
     '[role=alert],[aria-live=assertive],[class*=error],' +
@@ -909,8 +914,10 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
                             'Check Account 2 saved email and password in Accounts.',
                         'verification':'Habbo appears to require a verification '
                             'code. Use Accounts > Open account login.',
-                        'captcha':'Habbo appears to require a human verification '
-                            'step. Use Accounts > Open account login.',
+                        'captcha':'A visible Habbo verification challenge was '
+                            'detected. Open Accounts > Open account login and '
+                            'complete it manually; background retries cannot '
+                            'solve verification.',
                         'rate-limit':'Habbo appears to be limiting login attempts. '
                             'Avoid repeated automatic retries and try later.',
                         'unverified-page':'Browser navigated away from the '
@@ -1275,9 +1282,10 @@ def account_import_session_automatically(account,report):
                        'unrecognised page; saved to Windows vault.')
                 return ticket
             reasons={
-                'login':'Website login form remains visible. Check the saved '
-                        'password or complete CAPTCHA/2FA using Accounts > '
-                        'Open account login.',
+                'login':'Website login form remains visible; '
+                        'Habbo has not confirmed a new session after logout. '
+                        'Use Accounts > Open account login to complete any '
+                        'required verification, then retry Auto-import.',
                 'waiting':'Habbo website did not expose recognised login '
                           'controls in headless mode. Use Accounts > '
                           'Open account login.',

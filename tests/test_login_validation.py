@@ -49,8 +49,17 @@ global.location={protocol:'https:',hostname:scenario.hostname||'www.habbo.com',p
 global.innerWidth=1200;global.innerHeight=900;
 global.getComputedStyle=()=>({display:'block',visibility:'visible'});
 global.document={
-  querySelector:()=>scenario.captcha?{}:null,
+  querySelector:()=>null,
   querySelectorAll:selector=>{
+    if (selector.startsWith('iframe[title*=challenge i]')) {
+      if (scenario.captcha) return [el({})];
+      if (scenario.hiddenChallenge) return [el({
+        getBoundingClientRect:()=>({
+          left:0,top:0,right:0,bottom:0,width:0,height:0
+        })
+      })];
+      return [];
+    }
     if (selector==='input[type=password]')return [pwd];
     if (selector.startsWith('input[autocomplete=one-time-code]'))
       return scenario.otp?[el({})]:[];
@@ -80,6 +89,13 @@ class SafeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(run_js(js,{'captcha':True})['kind'],'captcha')
         self.assertEqual(run_js(js,{'otp':True})['kind'],'verification')
         self.assertEqual(run_js(js,{})['kind'],'still-on-form')
+
+    def test_passive_captcha_markup_is_not_mistaken_for_a_challenge(self):
+        js=js_constant('HABBO_LOGIN_DIAGNOSTIC_JS')
+        self.assertNotIn('[data-sitekey]',js)
+        self.assertNotIn('iframe[src*=recaptcha]',js)
+        self.assertEqual(run_js(js,{'hiddenChallenge':True})['kind'],
+                         'still-on-form')
 
     def test_unrelated_hostname_cannot_disclose_login_status(self):
         status=run_js(js_constant('HABBO_LOGIN_DIAGNOSTIC_JS'),
