@@ -10,6 +10,7 @@ from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
                                 MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)
 from local_classic_launch import (parse_classic_ticket, official_local_executable,
                                   launch_local_classic)
+from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -307,6 +308,65 @@ def account_saved_login_delete(account_id):
     if not api.CredDeleteW(_account_credential_target(account_id),1,0):
         if ctypes.get_last_error()!=1168:
             raise OSError('Windows could not forget this saved login.')
+
+
+
+# Direct TCP website session cookies are opt-in and kept in Windows Credential
+# Manager, never settings.json. They are not Habbo passwords and can expire.
+def _account_session_target(account_id):
+    return _account_credential_target(account_id).replace(':login:', ':session:', 1)
+
+
+def account_session_cookie_write(account_id, session_id, browser_token):
+    # Match strict cookie characters accepted by the official HTTPS requester.
+    for token in (session_id, browser_token):
+        if (not isinstance(token, str) or not 1 <= len(token) <= 900
+            or any(ord(c) < 33 or ord(c) > 126 or c in ';,\r\n' for c in token)):
+            raise ValueError('Invalid Habbo session cookie')
+    blob=json.dumps({'session_id':session_id,'browser_token':browser_token},
+                    separators=(',',':')).encode('utf-16-le')
+    if len(blob)>2560:
+        raise ValueError('Session cookies exceed Windows vault limits')
+    api=_account_credential_api()
+    payload=ctypes.create_string_buffer(blob,len(blob))
+    record=_HabboCredential()
+    record.Type=1
+    record.TargetName=_account_session_target(account_id)
+    record.UserName='habbo.com'
+    record.CredentialBlobSize=len(blob)
+    record.CredentialBlob=ctypes.cast(payload,ctypes.POINTER(ctypes.c_ubyte))
+    record.Persist=2
+    if not api.CredWriteW(ctypes.byref(record),0):
+        raise OSError('Windows could not save Habbo session in Credential Manager')
+
+
+def account_session_cookie_read(account_id):
+    api=_account_credential_api()
+    output=ctypes.POINTER(_HabboCredential)()
+    if not api.CredReadW(_account_session_target(account_id),1,0,
+                         ctypes.byref(output)):
+        if ctypes.get_last_error()==1168:
+            return None
+        raise OSError('Windows could not read saved Habbo session')
+    try:
+        record=output.contents
+        size=record.CredentialBlobSize
+        if not 0<size<=2560 or size%2 or not record.CredentialBlob:
+            raise ValueError('Invalid saved session data')
+        data=json.loads(ctypes.string_at(
+            record.CredentialBlob,size).decode('utf-16-le'))
+        if not isinstance(data,dict):
+            raise ValueError('Invalid saved session record')
+        return (data['session_id'],data['browser_token'])
+    finally:
+        api.CredFree(ctypes.cast(output,ctypes.c_void_p))
+
+
+def account_session_cookie_delete(account_id):
+    api=_account_credential_api()
+    if not api.CredDeleteW(_account_session_target(account_id),1,0):
+        if ctypes.get_last_error()!=1168:
+            raise OSError('Windows could not erase saved Habbo session')
 
 
 def account_login_browser():
@@ -2282,6 +2342,15 @@ class ChatOverlayApp:
         self._direct_launch_states={}
         self._direct_launch_running=False
         self._direct_ticket_fetch_running=False
+        self._tcp_sessions={}
+        self._tcp_inflight=set()
+        self._tcp_generation={}
+        self._tcp_states={}
+        self.tcp_status_var=tk.StringVar(
+            value='Real TCP: enter an official ticket or save an authenticated Habbo session.')
+        self.tcp_ticket_var=tk.StringVar(value='')
+        self.tcp_session_id_var=tk.StringVar(value='')
+        self.tcp_browser_token_var=tk.StringVar(value='')
         self._headless_manager=HeadlessLocalManager()
         self._headless_server=None
         self._headless_account_states={}
@@ -2509,6 +2578,9 @@ class ChatOverlayApp:
         direct=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(direct,text='  Direct Classic  ')
         self._make_direct_classic_panel(direct)
+        tcp=ttk.Frame(self.notebook,style='Panel.TFrame')
+        self.notebook.add(tcp,text='  Direct TCP  ')
+        self._make_live_tcp_panel(tcp)
         headless=ttk.Frame(self.notebook,style='Panel.TFrame')
         self.notebook.add(headless,text='  Headless Test  ')
         self._make_headless_panel(headless)
