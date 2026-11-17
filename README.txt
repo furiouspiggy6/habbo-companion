@@ -533,3 +533,13 @@ timeout messages.
 No Bobba code, Bobba API, AIR client assets or third-party dependency is added.
 This does not remove the need for a legitimate Habbo login/session or prove
 live Habbo protocol compatibility.
+
+Version 1.1.46 — Direct TCP authentication troubleshooting
+----------------------------------------------------------
+- Fix sending username metadata as part of the game-server SSO token.
+- Separate connect/DH handshake/SSO stages and show redacted, timestamped
+  diagnostics with packet IDs and optional numeric disconnect reason code.
+- Keep actual SSO tokens and session cookies out of logs; old stored website
+  sessions are unchanged.
+- Live Habbo login acceptance remains unverified. No need to re-enter saved
+  cookies unless Habbo expired the official website session.
