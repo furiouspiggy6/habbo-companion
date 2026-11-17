@@ -28,6 +28,9 @@ def execute(**values):
     }
     space.update(values)
     exec(CODE,space)
+    # Test doubles for collaborators with the same symbol name as a source
+    # function must be installed AFTER AST definitions are executed.
+    space.update(values)
     return space
 
 
