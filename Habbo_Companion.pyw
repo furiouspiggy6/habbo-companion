@@ -1282,10 +1282,10 @@ def account_import_session_automatically(account,report):
                        'unrecognised page; saved to Windows vault.')
                 return ticket
             reasons={
-                'login':'Habbo has not confirmed a signed-in website '
-                        'session. After signing out, use Accounts > '
-                        'Open account login to complete any required manual '
-                        'verification, then retry Auto-import.',
+                'login':'Website login form remains visible; '
+                        'Habbo has not confirmed a new session after logout. '
+                        'Use Accounts > Open account login to complete any '
+                        'required verification, then retry Auto-import.',
                 'waiting':'Habbo website did not expose recognised login '
                           'controls in headless mode. Use Accounts > '
                           'Open account login.',
