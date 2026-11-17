@@ -9,6 +9,7 @@ import runpy
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
@@ -17,6 +18,7 @@ from playwright.sync_api import sync_playwright
 
 
 ROOT=Path(__file__).resolve().parent.parent
+sys.path.insert(0,str(ROOT))
 
 
 def browser_path():
