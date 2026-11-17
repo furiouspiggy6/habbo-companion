@@ -497,3 +497,17 @@ The optional manual "Queue ticket locally" path remains unchanged.
 The verified ZIP updater still uses the original three application
 files and includes this change inside the bundled .pyw, avoiding
 the legacy "Unexpected files" rejection.
+
+
+Version 1.1.43 - Experimental Direct TCP
+------------------------------------------
+Direct TCP is a separate tab which can connect directly to the real official
+Habbo.com AIR game TCP endpoint, with no Brave/Habbo.exe/G-Earth process.
+It never claims a connected socket is authenticated before receiving Habbo's
+AuthenticationOK packet. A genuine short-lived SSO ticket is required.
+For repeated sessions, authenticated session.id and browser_token cookies may
+be stored locally in Windows Credential Manager, with explicit user consent.
+An expired website session still needs a fresh official login; saved password
+login and captcha/2FA bypass are not supported by this tab.
+Use the original Headless Test tab ONLY for fake local socket tests.
+The live protocol can change. No live authentication has been verified in CI.
