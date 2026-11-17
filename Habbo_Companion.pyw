@@ -38,6 +38,7 @@ import base64
 import socket
 import socketserver
 import ipaddress
+import hmac
 import struct
 import importlib.util
 from datetime import datetime
@@ -150,6 +151,134 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None, bind_ip='127.0.0.1
         server.shutdown()
         server.server_close()
         thread.join(timeout=1)
+
+
+
+def validate_remote_lab_target(host,port,secret):
+    """Remote fuzz target must prove possession of the lab-only key.
+
+    Hostnames are intentionally unsupported to avoid DNS target switching.
+    Never send real Habbo credentials to this server.
+    """
+    try:
+        address=ipaddress.IPv4Address(str(host).strip())
+    except (ipaddress.AddressValueError, ValueError, TypeError):
+        raise ValueError('Enter the numerical IPv4 address of your test server.')
+    if (address.is_unspecified or address.is_multicast or address.is_link_local
+        or address.is_reserved):
+        raise ValueError('Enter a specific reachable IPv4 address, not a wildcard.')
+    try:
+        port=int(str(port).strip())
+    except (TypeError,ValueError):
+        raise ValueError('Enter a TCP port between 1024 and 65535.')
+    if not 1024<=port<=65535:
+        raise ValueError('Enter a TCP port between 1024 and 65535.')
+    if (not isinstance(secret,str) or not 32<=len(secret)<=200
+        or any(ord(ch)<33 or ord(ch)>126 for ch in secret)):
+        raise ValueError('Enter the 32+ character lab key from your own test server.')
+    return str(address),port,secret
+
+
+def run_remote_boofuzz(host,port,secret,seed_id=896,cases=20,output_dir=None):
+    """Fuzz ONLY a remote mock that authenticates with a lab-only HMAC key.
+
+    An unrecognised service never receives a fuzz payload: authentication is
+    enforced on EVERY new TCP connection before boofuzz can send one.
+    No Habbo SSO ticket, cookies or packet contents are accepted.
+    """
+    from boofuzz import (Session,Target,TCPSocketConnection,s_initialize,s_size,
+                         s_block_start,s_block_end,s_word,s_string,s_get,exception)
+    host,port,secret=validate_remote_lab_target(host,port,secret)
+    if not isinstance(seed_id,int) or not 0<=seed_id<=65535:
+        raise ValueError('Invalid numeric message ID')
+    if not isinstance(cases,int) or not 1<=cases<=60:
+        raise ValueError('Use 1 to 60 remote lab cases')
+    counts={'requests':0,'accepted':0,'rejected':0,'other':0}
+    key=secret.encode('utf-8')
+
+    class AuthenticatedLabConnection(TCPSocketConnection):
+        def __init__(self):
+            super().__init__(host,port,send_timeout=1,recv_timeout=1)
+            self._lab_ready=False
+
+        def _recv_exact(self,size):
+            data=bytearray()
+            while len(data)<size:
+                fragment=self._sock.recv(size-len(data))
+                if not fragment:
+                    raise ConnectionError('Test server closed before authenticating')
+                data.extend(fragment)
+            return bytes(data)
+
+        def open(self):
+            self._lab_ready=False
+            try:
+                super().open()
+                challenge=self._recv_exact(21)
+                if not challenge.startswith(b'HCFZ1'):
+                    raise ValueError('Not the Companion synthetic lab service')
+                proof=hmac.new(key,challenge[5:],hashlib.sha256).digest()
+                self._sock.sendall(proof)
+                if self._recv_exact(3)!=b'OK!':
+                    raise ValueError('Remote lab key was not recognised')
+                self._lab_ready=True
+            except (OSError,ConnectionError,TimeoutError,ValueError):
+                self.close()
+                raise exception.BoofuzzTargetConnectionFailedError(
+                    'Remote endpoint did not prove it is your authorised lab server') from None
+
+        def close(self):
+            self._lab_ready=False
+            super().close()
+
+        def send(self,data):
+            if not self._lab_ready:
+                raise exception.BoofuzzTargetConnectionFailedError(
+                    'Remote lab authentication required before sending')
+            written=super().send(data)
+            if written:
+                counts['requests']+=1
+            return written
+
+        def recv(self,max_bytes):
+            data=super().recv(max_bytes)
+            if data==b'OK':
+                counts['accepted']+=1
+            elif data==b'REJECT':
+                counts['rejected']+=1
+            elif data:
+                counts['other']+=1
+            return data
+
+    # Authenticate once before creating a fuzz Session, so misconfigured
+    # servers fail early. The connection class repeats proof on EACH case.
+    probe=AuthenticatedLabConnection()
+    try:
+        probe.open()
+    finally:
+        probe.close()
+    output_dir=Path(output_dir) if output_dir else APP_DIR/'fuzz_lab'
+    output_dir.mkdir(parents=True,exist_ok=True)
+    db=output_dir/('boofuzz_remote_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.db')
+    s_initialize('authenticated_remote_synthetic_frame')
+    s_size('remote_frame_body',length=4,endian='>',name='remote_declared_length')
+    if s_block_start('remote_frame_body'):
+        s_word(seed_id,endian='>',name='remote_message_id')
+        s_size('remote_synthetic_text',length=2,endian='>',name='remote_text_length')
+        if s_block_start('remote_synthetic_text'):
+            s_string('sample',max_len=32,name='remote_synthetic_value')
+            s_block_end()
+        s_block_end()
+    session=Session(
+        target=Target(connection=AuthenticatedLabConnection()),
+        index_end=cases,sleep_time=0.02,receive_data_after_each_request=True,
+        web_address='127.0.0.1',web_port=0,keep_web_open=False,
+        db_filename=str(db),restart_threshold=1,restart_timeout=0)
+    session.connect(s_get('authenticated_remote_synthetic_frame'))
+    session.fuzz()
+    return dict(counts,case_limit=cases,seed_id=seed_id,
+                scope='authenticated synthetic remote lab only',
+                remote_address=host,remote_port=port,boofuzz_db=str(db))
 
 
 APP_NAME = 'Habbo View Chat'
@@ -4684,6 +4813,10 @@ class ChatOverlayApp:
         self.fuzz_running=False
         self.fuzz_last_result=None
         self.fuzz_target_ip_var=tk.StringVar(value='127.0.0.1')
+        self.fuzz_remote_ip_var=tk.StringVar(value='')
+        self.fuzz_remote_port_var=tk.StringVar(value='39099')
+        # Never persist the remote lab key, like an actual Habbo ticket.
+        self.fuzz_remote_key_var=tk.StringVar(value='')
         self.fuzz_live_var=tk.StringVar(value='Passive reader OFF. Connect G-Earth first.')
         self.fuzz_lab_var=tk.StringVar(value='Local boofuzz lab idle; never sends to Habbo.')
         self._packet_auto_retry_after=0.0
@@ -7088,11 +7221,35 @@ class ChatOverlayApp:
                    command=self._fuzz_start_lab).pack(side='left',padx=(0,8))
         ttk.Button(bar,text='Analyse results with local Ollama',
                    command=self._fuzz_analyse_ollama).pack(side='left')
-        tk.Label(holder,text='Actual Habbo SSO and encrypted AIR sessions stay in '
-                 'Direct TCP and connect to the official Habbo endpoint only. This '
-                 'custom IP belongs solely to the synthetic local test server. '
+        ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(17,15))
+        tk.Label(holder,text='REMOTE TEST MACHINE',font=('Segoe UI Semibold',13),
+                 bg=p['background'],fg=p['text']).pack(anchor='w')
+        tk.Label(holder,text='Connect to a test server on another machine, using '
+                 'its IP and TCP port. It must be running the Companion lab_remote_server.py '
+                 'helper and share a lab-only key. Each connection proves server control '
+                 'before any synthetic fuzz packets are sent. This is not an arbitrary '
+                 'Habbo server scanner.',
+                 wraplength=650,justify='left',bg=p['background'],
+                 fg=p['muted']).pack(anchor='w',pady=(5,8))
+        rem=ttk.Frame(holder,style='Panel.TFrame');rem.pack(fill='x',pady=(0,7))
+        ttk.Label(rem,text='Server IPv4',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(rem,textvariable=self.fuzz_remote_ip_var,width=18).pack(
+            side='left',padx=(7,14))
+        ttk.Label(rem,text='TCP port',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(rem,textvariable=self.fuzz_remote_port_var,width=9).pack(
+            side='left',padx=(7,0))
+        ttk.Label(holder,text='Shared lab key (not your Habbo SSO ticket)',
+                  style='Panel.TLabel').pack(anchor='w')
+        ttk.Entry(holder,textvariable=self.fuzz_remote_key_var,show='*').pack(
+            fill='x',pady=(3,8))
+        ttk.Button(holder,text='Run 20 remote lab fuzz cases',
+                   command=self._fuzz_start_remote).pack(anchor='w')
+        tk.Label(holder,text='Only a server under your control running the '
+                 'authenticated helper can receive fuzz payloads. Your official '
+                 'Habbo SSO/encrypted Direct TCP connection is kept separate. '
                  'Install boofuzz in the Python running Companion.',
-                 wraplength=650,justify='left',bg=p['background'],fg=p['faint']).pack(anchor='w',pady=(16,0))
+                 wraplength=650,justify='left',bg=p['background'],
+                 fg=p['faint']).pack(anchor='w',pady=(16,0))
 
     def _fuzz_toggle_reader(self):
         if self.fuzz_monitoring:
@@ -7149,6 +7306,37 @@ class ChatOverlayApp:
                     '" -m pip install boofuzz==0.4.2'))
             except Exception as exc:
                 self._packet_put(('fuzz_error',type(exc).__name__+': '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
+
+    def _fuzz_start_remote(self):
+        if self.fuzz_running:
+            self.fuzz_lab_var.set('A fuzz session is already running.')
+            return
+        try:
+            ip,port,key=validate_remote_lab_target(
+                self.fuzz_remote_ip_var.get(),
+                self.fuzz_remote_port_var.get(),
+                self.fuzz_remote_key_var.get())
+        except ValueError as exc:
+            self.fuzz_lab_var.set(str(exc))
+            return
+        self.fuzz_running=True
+        self.fuzz_lab_var.set(f'Checking authenticated remote test server {ip}:{port}...')
+        outgoing=[(v['count'],mid) for (direction,mid),v in self.fuzz_counts.items()
+                  if direction=='Outgoing']
+        seed=max(outgoing)[1] if outgoing else 896
+        def work():
+            try:
+                result=run_remote_boofuzz(ip,port,key,seed_id=seed,cases=20)
+                self._packet_put(('fuzz_result',result))
+            except ModuleNotFoundError:
+                self._packet_put(('fuzz_error',
+                    'boofuzz not installed. Run: "'+sys.executable+
+                    '" -m pip install boofuzz==0.4.2'))
+            except Exception as exc:
+                # Never display raw passwords or lab keys in error diagnostics.
+                self._packet_put(('fuzz_error',type(exc).__name__+
+                                  ': The remote lab refused or failed the test.'))
         threading.Thread(target=work,daemon=True).start()
 
     def _fuzz_analyse_ollama(self):
@@ -9331,9 +9519,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.fuzz_last_result=item[1]
                 result=item[1]
                 self.fuzz_lab_var.set(
-                    f"Local boofuzz done: {result['requests']} requests; "
+                    f"Lab boofuzz done: {result['requests']} requests; "
                     f"{result['accepted']} accepted / {result['rejected']} rejected. "
-                    'Results are for the synthetic mock only.')
+                    'Results are for a synthetic test server only.')
                 continue
             if item[0]=='fuzz_error':
                 self.fuzz_running=False
