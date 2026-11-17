@@ -1169,6 +1169,7 @@ class AccountLoginNetworkProbe:
         self.report=None
         self.lines_printed=0
         self.important_lines=0
+        self.phase='startup'
 
     def __enter__(self):
         url=urllib.parse.urlsplit(self.url)
@@ -1299,7 +1300,8 @@ class AccountLoginNetworkProbe:
                 self.redirect_count+=1
                 status=redirect.get('status')
                 if isinstance(status,(int,float)) and 300<=status<=399:
-                    self._emit('SERVER <- HTTP '+str(int(status))+
+                    self._emit('SERVER <- #'+str(prior['ref'])+
+                               ' HTTP '+str(int(status))+
                                ' redirect ('+prior['site']+').')
             is_habbo=(host=='habbo.com' or host.endswith('.habbo.com'))
             site='Habbo site' if is_habbo else 'external HTTPS site'
@@ -1321,11 +1323,15 @@ class AccountLoginNetworkProbe:
                 method='HTTP'
             self.requests[ident]={'site':site,'method':method,
                                   'resource':resource,'status':None,
-                                  'mime':'','failed':None}
+                                  'mime':'','failed':None,
+                                  'ref':self.interesting_count,
+                                  'path':account_login_safe_endpoint_path(url)}
             if account_login_auth_request(url,method):
                 self.auth_ids.add(ident)
                 self.seen=True
-            self._emit('CLIENT -> '+method+' ('+site+', '+resource+').')
+            self._emit('CLIENT -> #'+str(self.interesting_count)+
+                       ' '+method+' '+self.requests[ident]['path']+
+                       ' ('+site+', '+resource+').')
         elif name=='Network.responseReceived' and ident in self.requests:
             rec=self.requests[ident]
             response=data.get('response') or {}
@@ -1334,7 +1340,8 @@ class AccountLoginNetworkProbe:
                 rec['status']=int(code)
                 self.http_status=int(code)
                 self.responses+=1
-                self._emit('SERVER <- HTTP '+str(int(code))+
+                self._emit('SERVER <- #'+str(rec['ref'])+' HTTP '+
+                           str(int(code))+' '+rec['path']+
                            ' ('+rec['site']+', '+rec['resource']+').',
                            important=int(code)>=400)
             mime=response.get('mimeType')
@@ -1353,8 +1360,8 @@ class AccountLoginNetworkProbe:
             rec['failed']=kind
             self.failed=kind
             self.failure_count+=1
-            self._emit('NETWORK <- '+kind+' ('+rec['site']+').',
-                       important=True)
+            self._emit('NETWORK <- #'+str(rec['ref'])+' '+kind+
+                       ' ('+rec['site']+').',important=True)
         elif name=='Network.loadingFinished' and ident in self.requests:
             rec=self.requests[ident]
             if (rec['status'] is not None and rec['status']>=400 and
@@ -1364,18 +1371,28 @@ class AccountLoginNetworkProbe:
                 self.finished_id=ident
         elif name=='Runtime.exceptionThrown':
             self.javascript_exceptions+=1
-            if self.javascript_exceptions<=2:
-                self._emit('BROWSER <- JavaScript exception detected '
-                           '(details withheld; no server response implied).',
+            if self.javascript_exceptions<=3:
+                details=data.get('exceptionDetails') or {}
+                exception=details.get('exception') or {}
+                # The raw description may include credentials or app state.
+                # Only return a tightly bounded recognised error category.
+                category=account_login_safe_browser_error(
+                    exception.get('description') or details.get('text'))
+                location=account_login_safe_error_location(
+                    details.get('url'),details.get('lineNumber'))
+                self._emit('BROWSER <- '+self.phase+' JS '+category+location+
+                           ' (not necessarily the login failure).',
                            important=True)
         elif name=='Log.entryAdded':
             entry=data.get('entry') or {}
             if entry.get('level')=='error':
                 self.javascript_exceptions+=1
-                if self.javascript_exceptions<=2:
-                    self._emit('BROWSER <- Page console error '
-                               '(details withheld for account safety).',
-                               important=True)
+                if self.javascript_exceptions<=3:
+                    category=account_login_safe_browser_error(entry.get('text'))
+                    location=account_login_safe_error_location(
+                        entry.get('url'),entry.get('lineNumber'))
+                    self._emit('BROWSER <- '+self.phase+' console '+category+
+                               location+'.',important=True)
 
     def _command(self,method,params=None,timeout=3):
         self.sequence+=1
