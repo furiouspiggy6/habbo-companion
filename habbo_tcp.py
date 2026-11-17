@@ -214,27 +214,42 @@ class HabboTcpSession:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.thread = None
+        # TCP is a byte stream: reads may be fragmented or time out halfway
+        # through a packet. Keep partial bytes and the decoded frame length
+        # across retries without advancing the stream cipher twice.
+        self._recv_pending = bytearray()
+        self._frame_size = None
 
     def _recv(self, amount):
-        result = bytearray()
-        while len(result) < amount:
+        if not 0 < amount <= TCP_MAX_FRAME:
+            raise HabboTcpError("Invalid requested read length")
+        while len(self._recv_pending) < amount:
             sock = self.sock
             if sock is None:
                 raise HabboTcpError("Game socket is disconnected")
-            block = sock.recv(amount - len(result))
+            # Only read the outstanding bytes. This prevents plaintext bytes
+            # from being prefetched past the DH -> encrypted framing boundary.
+            block = sock.recv(amount - len(self._recv_pending))
             if not block:
                 raise HabboTcpError("Game socket closed by server")
-            result.extend(block)
-        return bytes(result)
+            self._recv_pending.extend(block)
+        result = bytes(self._recv_pending[:amount])
+        del self._recv_pending[:amount]
+        return result
 
     def _read(self):
-        head = self._recv(4)
-        if self.rx:
-            head = self.rx.apply(head)
-        size = struct.unpack(">I", head)[0]
-        if size < 2 or size > TCP_MAX_FRAME:
-            raise HabboTcpError("Invalid game packet frame length")
-        body = self._recv(size)
+        if self._frame_size is None:
+            header = self._recv(4)
+            if self.rx:
+                header = self.rx.apply(header)
+            size = struct.unpack(">I", header)[0]
+            if size < 2 or size > TCP_MAX_FRAME:
+                raise HabboTcpError("Invalid game packet frame length")
+            self._frame_size = size
+        # On socket.timeout, _recv preserves partial bytes and _frame_size
+        # remains set, so the next attempt resumes the same frame.
+        body = self._recv(self._frame_size)
+        self._frame_size = None
         if self.rx:
             body = self.rx.apply(body)
         return struct.unpack_from(">H", body, 0)[0], body[2:]
@@ -263,7 +278,12 @@ class HabboTcpSession:
                 self._send(TCP_OUT["pong"])
             if packet_id in (TCP_IN["disconnect"], TCP_IN["banned"]):
                 raise HabboTcpError("Game server rejected or closed authentication")
-        raise HabboTcpError("Timed out waiting for game handshake or authentication")
+        stage = {
+            TCP_IN["init_dh"]: "server Diffie-Hellman parameters",
+            TCP_IN["finish_dh"]: "server encryption confirmation",
+            TCP_IN["auth_ok"]: "Habbo AuthenticationOK",
+        }.get(wanted, "server response")
+        raise HabboTcpError("Timed out waiting for " + stage)
 
     def connect(self, ticket, release=None, timeout=12):
         if self.sock:
@@ -358,3 +378,6 @@ class HabboTcpSession:
                 pass
             sock.close()
         self.tx = self.rx = None
+        # No carryover data/cipher state may survive a disconnected account.
+        self._recv_pending.clear()
+        self._frame_size = None
