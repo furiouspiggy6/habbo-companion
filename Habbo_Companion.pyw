@@ -1957,6 +1957,517 @@ def account_attempt_auto_play(debug_port,report,credentials=None,login_only=Fals
     return 'timeout'
 
 
+
+# Playwright is the sole active browser navigation path. The legacy manual
+# CDP interaction code above is kept temporarily for rollback/testing, but all
+# account sign-in/Play/Launch callers use the new binding below.
+_ACCOUNT_PLAYWRIGHT_VERSION='1.65.2'
+_ACCOUNT_PLAYWRIGHT_INSTALL_LOCK=threading.Lock()
+
+
+def account_playwright_engine(report):
+    """Load or install a pinned Playwright Python runtime without browser downloads.
+
+    The existing isolated Brave/Chrome/Edge process remains the browser; we
+    attach Playwright to its loopback CDP port, preserving per-account profiles.
+    Package dependencies are installed to LOCALAPPDATA, not to system Python.
+    Never log pip output or any environment values.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        pass
+
+    root=(Path(os.environ.get('LOCALAPPDATA',str(APP_DIR)))/
+          'HabboCompanion'/'managed-playwright'/
+          ('py'+str(sys.version_info.major)+str(sys.version_info.minor)))
+    with _ACCOUNT_PLAYWRIGHT_INSTALL_LOCK:
+        if (root/'playwright'/'sync_api').is_dir():
+            if str(root) not in sys.path:
+                sys.path.insert(0,str(root))
+            importlib.invalidate_caches()
+            try:
+                from playwright.sync_api import sync_playwright
+                return sync_playwright
+            except ImportError:
+                # An incomplete prior install is never trusted for account
+                # credential entry. It must be repaired before continuing.
+                pass
+
+        report('Installing the Playwright browser controller for this '
+               'Windows user (first run only; no browser download).')
+        root.parent.mkdir(parents=True,exist_ok=True)
+        staged=root.parent/('staging-'+uuid.uuid4().hex[:12])
+        staged.mkdir(parents=True,exist_ok=False)
+        try:
+            flags=getattr(subprocess,'CREATE_NO_WINDOW',0)
+            args=[sys.executable,'-m','pip','install','--no-input',
+                  '--disable-pip-version-check','--only-binary=:all:',
+                  '--no-warn-script-location','--index-url',
+                  'https://pypi.org/simple','--target',str(staged),
+                  'playwright=='+_ACCOUNT_PLAYWRIGHT_VERSION]
+            try:
+                install=subprocess.run(args,stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,timeout=240,check=False,
+                    creationflags=flags)
+            except (OSError,subprocess.TimeoutExpired):
+                raise RuntimeError(
+                    'Playwright automatic installation could not run. '
+                    'Check internet access and whether this Python has pip.') from None
+            if install.returncode!=0 or not (
+                    staged/'playwright'/'sync_api').is_dir():
+                raise RuntimeError(
+                    'Playwright automatic installation failed. Check internet '
+                    'access and Python pip; no browser login was attempted.')
+            if root.exists():
+                shutil.rmtree(root)
+            staged.rename(root)
+            if str(root) not in sys.path:
+                sys.path.insert(0,str(root))
+            importlib.invalidate_caches()
+            from playwright.sync_api import sync_playwright
+            report('Playwright browser controller is installed.')
+            return sync_playwright
+        finally:
+            if staged.exists():
+                shutil.rmtree(staged,ignore_errors=True)
+
+
+def account_playwright_is_official(url):
+    """Restrict account automation to Habbo's verified HTTPS origin."""
+    try:
+        u=urllib.parse.urlsplit(url)
+        host=(u.hostname or '').lower()
+        return (u.scheme=='https' and u.port in (None,443) and
+                (host=='habbo.com' or host.endswith('.habbo.com')))
+    except (TypeError,ValueError):
+        return False
+
+
+def account_playwright_visible(locator):
+    """Playwright locator query, not a page coordinate or JS hit-test."""
+    try:
+        return locator.filter(visible=True).count()>0
+    except (OSError,RuntimeError):
+        return False
+
+
+def account_playwright_control(page,kind):
+    """Find one visibly labelled Habbo control using Playwright locators."""
+    patterns={
+        'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?$',
+        'submit':r"^(?:let['’]?s\s+go|log\s*in|login|sign\s*in|continue)\s*!?$",
+        'play':r'^play(?:\s+now)?(?:\s+h)?\s*!?$',
+        'launch':r'^launch\s*(?:and|&)\s*log\s*in\s*!?$',
+    }
+    pattern=re.compile(patterns[kind],re.I)
+    # Prefer semantic buttons and links before custom-styled text controls.
+    for role in ('button','link'):
+        target=page.get_by_role(role,name=pattern).filter(visible=True)
+        if account_playwright_visible(target):
+            return target.first
+    target=page.locator('button,a,[role="button"],input[type="submit"]').filter(
+        has_text=pattern,visible=True)
+    if account_playwright_visible(target):
+        return target.first
+    # Some Habbo PLAY buttons render as styled spans. Playwright still
+    # dispatches trusted click input to the text/containing control.
+    if kind in ('play','launch'):
+        target=page.get_by_text(pattern,exact=True).filter(visible=True)
+        if account_playwright_visible(target):
+            return target.first
+    return None
+
+
+def account_playwright_select_page(browser):
+    """Select a Habbo tab from the already isolated browser context."""
+    candidates=[]
+    for context in browser.contexts:
+        for page in context.pages:
+            if not account_playwright_is_official(page.url):
+                continue
+            try:
+                if account_playwright_visible(
+                        page.locator('input[type="password"]:visible')):
+                    priority=3
+                elif account_playwright_control(page,'launch') is not None:
+                    priority=6
+                elif account_playwright_control(page,'play') is not None:
+                    priority=5
+                elif account_playwright_control(page,'open-login') is not None:
+                    priority=2
+                else:
+                    priority=1
+                candidates.append((priority,page))
+            except (OSError,RuntimeError):
+                continue
+    if not candidates:
+        return None
+    return max(candidates,key=lambda pair:pair[0])[1]
+
+
+def account_playwright_login_form(page):
+    """Associate email and submit controls with the visible password field."""
+    passwords=page.locator('input[type="password"]:visible')
+    if not account_playwright_visible(passwords):
+        return None
+    password=passwords.first
+    form=password.locator('xpath=ancestor::form[1]')
+    if form.count()>0:
+        root=form.first
+    else:
+        dialog=password.locator(
+            'xpath=ancestor::*[@role="dialog" or self::dialog][1]')
+        root=dialog.first if dialog.count()>0 else page
+    choices=(
+        'input[type="email"]:visible',
+        'input[autocomplete="username"]:visible',
+        'input[placeholder*="email" i]:visible',
+        'input[aria-label*="email" i]:visible',
+        'input[type="text"]:visible'
+    )
+    email=None
+    for selector in choices:
+        loc=root.locator(selector).filter(visible=True)
+        if account_playwright_visible(loc):
+            email=loc.first
+            break
+    if email is None:
+        return None
+    button=account_playwright_control(root,'submit')
+    if button is None:
+        # HTML submit input's accessible name may not match; still restrict
+        # the fallback to the visible form containing the password.
+        loc=root.locator(
+            'button[type="submit"],input[type="submit"]').filter(visible=True)
+        if account_playwright_visible(loc):
+            button=loc.first
+    return (email,password,button) if button is not None else None
+
+
+def account_playwright_safe_error(exc):
+    """No raw Playwright error text: it can include page HTML/typed values."""
+    detail=str(exc).lower()
+    if 'intercepts pointer events' in detail:
+        return 'another page element intercepts the login click'
+    if 'not visible' in detail:
+        return 'target is not visible'
+    if 'not enabled' in detail or 'disabled' in detail:
+        return 'target is disabled'
+    if 'strict mode violation' in detail:
+        return 'multiple matching elements'
+    if 'timeout' in detail:
+        return 'element did not become actionable before timeout'
+    if 'connection closed' in detail or 'browser has been closed' in detail:
+        return 'account browser disconnected'
+    return 'browser action failed ('+type(exc).__name__+')'
+
+
+class AccountPlaywrightMonitor:
+    """Safe request/response and console diagnostics for one Habbo page."""
+    def __init__(self,page,report):
+        self.page=page
+        self.context=page.context
+        self.report=report
+        self.requests={}
+        self.failure_responses=[]
+        self.outgoing=0
+        self.received=0
+        self.failures=0
+        self.max_lines=18
+        self.lines=0
+
+    def _log(self,description,important=False):
+        if self.lines>=self.max_lines and not important:
+            return
+        if self.lines>=self.max_lines+5:
+            return
+        self.lines+=1
+        self.report(description)
+
+    def on_request(self,req):
+        try:
+            url=req.url
+            kind=req.resource_type
+            method=req.method
+            if not account_playwright_is_official(url):
+                # External identity providers may be involved, but their
+                # hostnames, request URLs, headers and bodies remain private.
+                u=urllib.parse.urlsplit(url)
+                if u.scheme!='https':
+                    return
+                site='external HTTPS'
+                path='[hidden]'
+            else:
+                site='Habbo'
+                path=account_login_safe_endpoint_path(url)
+            if kind not in ('xhr','fetch','document') and method not in (
+                    'POST','PUT','PATCH','DELETE'):
+                return
+            self.outgoing+=1
+            if len(self.requests)>=60:
+                return
+            num=self.outgoing
+            self.requests[req]=(num,path,site)
+            if self.lines<11:
+                self._log('CLIENT -> #'+str(num)+' '+method+' '+path+
+                          ' ('+site+', '+kind+').')
+        except Exception:
+            pass
+
+    def on_response(self,res):
+        try:
+            info=self.requests.get(res.request)
+            if info is None:
+                return
+            num,path,site=info
+            code=res.status
+            if type(code) is not int or not 100<=code<=599:
+                return
+            self.received+=1
+            self._log('SERVER <- #'+str(num)+' HTTP '+str(code)+' '+path+
+                      ' ('+site+').',important=code>=400)
+            if code>=400 and site=='Habbo':
+                self.failure_responses.append(res)
+        except Exception:
+            pass
+
+    def on_failed(self,req):
+        info=self.requests.get(req)
+        if info is None:
+            return
+        self.failures+=1
+        self._log('NETWORK <- #'+str(info[0])+
+                  ' request failed (no HTTP response confirmed).',important=True)
+
+    def on_pageerror(self,exc):
+        self._log('BROWSER <- '+account_login_safe_browser_error(str(exc))+
+                  ' (exception contents withheld).',important=True)
+
+    def on_console(self,msg):
+        if msg.type=='error':
+            self._log('BROWSER <- '+account_login_safe_browser_error(
+                msg.text)+' (console contents withheld).',important=True)
+
+    def start(self):
+        # Context request events include network activity from workers.
+        self.context.on('request',self.on_request)
+        self.context.on('response',self.on_response)
+        self.context.on('requestfailed',self.on_failed)
+        self.page.on('pageerror',self.on_pageerror)
+        self.page.on('console',self.on_console)
+
+    def finish(self):
+        # Parse *only* failed official JSON responses. Never inspect success
+        # bodies, arbitrary external responses, headers, passwords or tokens.
+        for resp in self.failure_responses[:2]:
+            try:
+                headers=resp.headers
+                kind=headers.get('content-type','')
+                size=headers.get('content-length','')
+                if 'json' not in kind or (
+                        size and size.isdigit() and int(size)>8192):
+                    continue
+                body=resp.text()
+                if len(body)>8192:
+                    continue
+                code=account_login_safe_error_code(body)
+                message=account_login_safe_server_message(body)
+                if code:
+                    self._log('SERVER <- Safe error code '+code+'.',important=True)
+                if message:
+                    self._log('SERVER <- '+message,important=True)
+            except Exception:
+                pass
+        self.report('Login network: '+str(self.outgoing)+' request(s), '+
+                    str(self.received)+' HTTP response(s), '+
+                    str(self.failures)+' transport failure(s).')
+
+    def stop(self):
+        for emitter,event,callback in (
+            (self.context,'request',self.on_request),
+            (self.context,'response',self.on_response),
+            (self.context,'requestfailed',self.on_failed),
+            (self.page,'pageerror',self.on_pageerror),
+            (self.page,'console',self.on_console)):
+            try:
+                emitter.remove_listener(event,callback)
+            except Exception:
+                pass
+
+
+def account_playwright_session_hint(context):
+    """Cookie *presence* only; official SSO validation remains authoritative."""
+    try:
+        cookies=context.cookies([
+            'https://www.habbo.com/','https://habbo.com/'])
+    except (OSError,RuntimeError,ValueError):
+        return False
+    names=set()
+    for cookie in cookies:
+        host=str(cookie.get('domain','')).lstrip('.').lower()
+        if (host=='habbo.com' or host=='www.habbo.com') and (
+                cookie.get('secure') is True):
+            if cookie.get('name') in ('session.id','browser_token'):
+                names.add(cookie['name'])
+    return len(names)==2
+
+
+def account_playwright_auto_play(debug_port,report,credentials=None,
+                                 login_only=False):
+    """Playwright-only Habbo website interactions for one isolated profile.
+
+    All logins, Play and Launch controls use Playwright locators. We attach
+    to Companion's *existing* loopback-only Chromium browser (Chrome, Brave,
+    Edge), never open a generic user profile or pass credentials to an URL.
+    No force clicks or CAPTCHA/MFA bypass; SSO is validated downstream.
+    """
+    try:
+        load=account_playwright_engine(report)
+    except (OSError,ValueError,RuntimeError,ImportError):
+        report('Playwright browser controller unavailable. Automatic login '
+               'stopped rather than falling back to coordinate automation.')
+        return 'control_error'
+
+    try:
+        with load() as playwright:
+            browser=playwright.chromium.connect_over_cdp(
+                'http://127.0.0.1:'+str(int(debug_port)),timeout=12000)
+            page=account_playwright_select_page(browser)
+            if page is None:
+                report('Playwright could not find an official HTTPS Habbo tab '
+                       'inside this account browser.')
+                return 'no_habbo_tab'
+            monitor=AccountPlaywrightMonitor(page,report)
+            monitor.start()
+            try:
+                # Never operate on a destination outside verified Habbo HTTPS.
+                if not account_playwright_is_official(page.url):
+                    return 'unknown'
+                form=account_playwright_login_form(page)
+                if form is None:
+                    prompt=account_playwright_control(page,'open-login')
+                    if prompt is not None and credentials is not None:
+                        try:
+                            prompt.click(timeout=7000)
+                            report('Playwright opened the Habbo login form.')
+                            page.locator(
+                                'input[type="password"]:visible').first.wait_for(
+                                state='visible',timeout=9000)
+                            form=account_playwright_login_form(page)
+                        except Exception as exc:
+                            report('Playwright could not open the login form: '+
+                                   account_playwright_safe_error(exc)+'.')
+                            return 'waiting'
+                if form is not None:
+                    if credentials is None:
+                        report('Save an email/password in Accounts or sign in '
+                               'manually to this separate browser profile.')
+                        return 'login'
+                    if not account_playwright_is_official(page.url):
+                        return 'unknown'
+                    email,password,submit=form
+                    try:
+                        email.fill(credentials[0],timeout=8000)
+                        password.fill(credentials[1],timeout=8000)
+                        report('Playwright filled the selected Habbo login '
+                               'form using element-based input events.')
+                        # Inspect only boolean validity, not password values.
+                        valid_email=email.evaluate(
+                            '(el) => !el.validity || el.validity.valid')
+                        valid_password=password.evaluate(
+                            '(el) => !el.validity || el.validity.valid')
+                        if not valid_email or not valid_password:
+                            report('Habbo login fields failed built-in form '
+                                   'validation; nothing was submitted.')
+                            return 'login'
+                        report('Playwright clicking LETS GO with actionability '
+                               'checks (visible, stable, enabled, unblocked).')
+                        submit.click(timeout=10000)
+                    except Exception as exc:
+                        report('Playwright login: '+
+                               account_playwright_safe_error(exc)+
+                               '. No forced click or automatic retry.')
+                        return 'login'
+                    report('Login button clicked; checking Habbo sign-in '
+                           'outcome without re-submitting credentials.')
+                    try:
+                        page.locator(
+                            'input[type="password"]:visible').first.wait_for(
+                            state='hidden',timeout=13000)
+                    except Exception:
+                        # A persistent form can mean rejection, validation,
+                        # security challenge or a failed browser handler.
+                        report('Habbo still shows the password field after '
+                               'Playwright clicked login.')
+                if login_only:
+                    if account_playwright_control(page,'play') is not None or (
+                            account_playwright_control(page,'launch') is not None):
+                        report('Playwright found the signed-in Habbo PLAY UI.')
+                        return 'signed_in'
+                    if account_playwright_session_hint(page.context):
+                        report('Website session cookies detected; the official '
+                               'SSO check will verify authentication.')
+                        return 'signed_in'
+                    if account_playwright_visible(
+                            page.locator('input[type="password"]:visible')):
+                        report('No verified sign-in; login form remains. '
+                               'Complete any visible verification manually.')
+                        return 'login'
+                    report('Habbo login result not yet confirmed by Playwright; '
+                           'the official SSO check will decide.')
+                    return 'waiting'
+
+                # Auto Play: click recognised website Play / Launch elements.
+                # Native launcher approval remains a separate Windows action.
+                last_play=False
+                for _ in range(4):
+                    if not account_playwright_is_official(page.url):
+                        return 'unknown'
+                    launch=account_playwright_control(page,'launch')
+                    if launch is not None:
+                        try:
+                            launch.click(timeout=9000)
+                        except Exception as exc:
+                            report('Playwright launch: '+
+                                   account_playwright_safe_error(exc)+'.')
+                            return 'stalled'
+                        report('Clicked Launch and log in via Playwright. '
+                               'Select Classic/approve Windows prompt if shown.')
+                        return 'launched'
+                    play=account_playwright_control(page,'play')
+                    if play is not None:
+                        if last_play:
+                            report('Habbo PLAY remained unchanged after click; '
+                                   'not sending repeated clicks.')
+                            return 'stalled'
+                        try:
+                            play.click(timeout=9000)
+                        except Exception as exc:
+                            report('Playwright PLAY: '+
+                                   account_playwright_safe_error(exc)+'.')
+                            return 'stalled'
+                        report('Playwright clicked the Habbo PLAY control.')
+                        last_play=True
+                    page.wait_for_timeout(850)
+                return 'waiting'
+            finally:
+                try:
+                    monitor.finish()
+                finally:
+                    monitor.stop()
+    except Exception as exc:
+        report('Playwright could not operate the isolated browser: '+
+               account_playwright_safe_error(exc)+'.')
+        return 'control_error'
+
+
+# Route all existing account-login and Auto Play buttons through Playwright.
+# The older function above is no longer the runtime browser controller.
+account_attempt_auto_play=account_playwright_auto_play
+
+
 # This request uses ONLY the existing isolated browser profile's authenticated
 # HTTPS Habbo.com page. No cookies are exported to Companion; no passwords are
 # read. It cannot create a signed-in session from an email/password alone.
