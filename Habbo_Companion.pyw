@@ -2671,6 +2671,245 @@ class ChatOverlayApp:
         tk.Label(f,text='Ctrl + Shift + F6  ·  show/hide settings\nCtrl + Shift + F7  ·  toggle room background\nCtrl + Shift + PgUp/PgDn  ·  older/newer chat',font=('Segoe UI',9),justify='left',bg='#121a28',fg='#7f9db7').pack(anchor='w',pady=(13,0))
         tk.Label(f,text='Messages do not expire. Only recent bubbles are drawn; scroll for older.\nHistory is bounded in memory and cleared on exit (unless logging is enabled).\nOriginal artwork comes from your existing modified Habbo client.',font=('Segoe UI',8),justify='left',bg='#121a28',fg='#6f8299').pack(anchor='w',pady=(8,0))
 
+
+    def _make_live_tcp_panel(self, parent):
+        """Authenticate a real Habbo socket without running a game client."""
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        f.pack(fill='both',expand=True)
+        tk.Label(f,text='DIRECT HABBO TCP (EXPERIMENTAL)',
+                 font=('Segoe UI Semibold',17),bg='#121a28',
+                 fg='#e6f1ff').pack(anchor='w',pady=(0,8))
+        tk.Label(f,text='Uses a real connection to game-us.habbo.com:30000. '
+                 'No Brave, Habbo.exe, launcher or G-Earth is started. '
+                 'A valid official SSO ticket is still required; server login '
+                 'is confirmed only after the Habbo AuthenticationOK packet.',
+                 bg='#121a28',fg='#9db7cb',justify='left',
+                 wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
+        self.tcp_table=ttk.Treeview(
+            f,columns=('profile','state'),show='headings',
+            height=5,selectmode='browse')
+        self.tcp_table.heading('profile',text='Account profile')
+        self.tcp_table.heading('state',text='Habbo server status')
+        self.tcp_table.column('profile',width=170,stretch=False)
+        self.tcp_table.column('state',width=380,stretch=True)
+        self.tcp_table.pack(fill='x',pady=(0,8))
+        ttk.Label(f,text='Optional: paste an official SSO ticket (selected account)',
+                  style='Panel.TLabel').pack(anchor='w')
+        ttk.Entry(f,textvariable=self.tcp_ticket_var,show='*').pack(
+            fill='x',pady=(3,7))
+        tk.Label(f,text='Alternatively, provide existing Habbo.com session '
+                 'cookies once. They can be stored in Windows Credential '
+                 'Manager and used for later SSO requests until they expire.',
+                 bg='#121a28',fg='#9db7cb',justify='left',
+                 wraplength=615).pack(anchor='w',pady=(1,7))
+        for name,var in (('session.id',self.tcp_session_id_var),
+                         ('browser_token',self.tcp_browser_token_var)):
+            line=ttk.Frame(f,style='Panel.TFrame')
+            line.pack(fill='x',pady=(0,6))
+            ttk.Label(line,text=name,style='Panel.TLabel',width=18).pack(
+                side='left')
+            ttk.Entry(line,textvariable=var,show='*').pack(
+                side='left',fill='x',expand=True)
+        row=ttk.Frame(f,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,8))
+        ttk.Button(row,text='Save session in Windows vault',
+                   command=self._tcp_save_session).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Forget saved session',
+                   command=self._tcp_forget_session).pack(side='left')
+        row=ttk.Frame(f,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,8))
+        ttk.Button(row,text='Connect selected',
+                   command=self._tcp_connect_selected).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Connect all saved',
+                   command=self._tcp_connect_all).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Disconnect selected',
+                   command=self._tcp_disconnect_selected).pack(side='left')
+        row=ttk.Frame(f,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,9))
+        ttk.Button(row,text='Disconnect all',
+                   command=self._tcp_disconnect_all).pack(side='left',padx=(0,7))
+        ttk.Button(row,text='Refresh account list',
+                   command=self._tcp_render).pack(side='left')
+        tk.Label(f,textvariable=self.tcp_status_var,bg='#121a28',
+                 fg='#73c5ab',justify='left',wraplength=615).pack(
+                 anchor='w',fill='x',pady=(0,9))
+        ttk.Label(f,text='Recent incoming packet IDs (payloads and secrets hidden)',
+                  style='Panel.TLabel').pack(anchor='w')
+        self.tcp_log=tk.Text(f,height=5,state='disabled',
+                             bg='#0b1422',fg='#a9c9db',
+                             relief='flat',font=('Consolas',9))
+        self.tcp_log.pack(fill='x',pady=(2,7))
+        tk.Label(f,text='Website authentication still requires a valid '
+                 'Habbo.com session. Saved login passwords alone cannot create '
+                 'one here. Sessions expire, and Habbo may change packet IDs '
+                 'or reject unofficial clients; no anti-bot bypass is provided.',
+                 bg='#121a28',fg='#8ea9c1',justify='left',
+                 wraplength=615).pack(anchor='w')
+        self._tcp_render()
+
+    def _tcp_selected(self):
+        selected=self.tcp_table.selection()
+        if not selected:
+            self.tcp_status_var.set('Select an account first.')
+            return None
+        return next((a for a in self._account_profiles
+                     if a['id']==selected[0]),None)
+
+    def _tcp_render(self):
+        table=self.tcp_table
+        selected=table.selection()
+        ident=selected[0] if selected else None
+        for row in table.get_children():
+            table.delete(row)
+        for account in self._account_profiles:
+            key=account['id']
+            sess=self._tcp_sessions.get(key)
+            state=('Authenticated (direct TCP)' if sess and sess.authenticated
+                   else self._tcp_states.get(key,'Disconnected'))
+            if key in self._tcp_inflight:
+                state=self._tcp_states.get(key,'Connecting...')
+            table.insert('', 'end',iid=key,
+                         values=(account['label'],state))
+        if ident and table.exists(ident):
+            table.selection_set(ident)
+        elif self._account_profiles:
+            table.selection_set(self._account_profiles[0]['id'])
+
+    def _tcp_save_session(self):
+        account=self._tcp_selected()
+        if not account:return
+        try:
+            account_session_cookie_write(
+                account['id'],self.tcp_session_id_var.get(),
+                self.tcp_browser_token_var.get())
+        except (OSError,ValueError) as exc:
+            self.tcp_status_var.set('Session not saved: '+str(exc)[:120])
+            return
+        self.tcp_session_id_var.set('')
+        self.tcp_browser_token_var.set('')
+        self.tcp_status_var.set(
+            'Session saved in this Windows user vault; no website browser needed '
+            'until Habbo expires these cookies.')
+
+    def _tcp_forget_session(self):
+        account=self._tcp_selected()
+        if not account:return
+        try:
+            account_session_cookie_delete(account['id'])
+        except OSError:
+            self.tcp_status_var.set('Windows could not erase the saved session.')
+            return
+        self.tcp_session_id_var.set('')
+        self.tcp_browser_token_var.set('')
+        self.tcp_status_var.set('Saved website session removed from Windows vault.')
+
+    def _tcp_connect_one(self, account, use_form=False):
+        ident=account['id']
+        if ident in self._tcp_inflight:
+            return
+        existing=self._tcp_sessions.get(ident)
+        if existing and existing.authenticated:
+            return
+        if existing:
+            existing.close()
+            self._tcp_sessions.pop(ident,None)
+        ticket=self._direct_ticket_queue.pop(ident,None)
+        cookies=None
+        if use_form:
+            raw=self.tcp_ticket_var.get().strip()
+            self.tcp_ticket_var.set('')
+            if raw:
+                try:
+                    ticket=parse_classic_ticket(raw)
+                except ValueError as exc:
+                    self.tcp_status_var.set('Ticket invalid: '+str(exc)[:120])
+                    return
+            a=self.tcp_session_id_var.get().strip()
+            b=self.tcp_browser_token_var.get().strip()
+            if a or b:
+                cookies=(a,b)
+            self.tcp_session_id_var.set('')
+            self.tcp_browser_token_var.set('')
+        if ticket is None and cookies is None:
+            try:
+                cookies=account_session_cookie_read(ident)
+            except (OSError,ValueError):
+                self._tcp_states[ident]='Could not read saved Windows session'
+                return
+        if ticket is None and cookies is None:
+            self._tcp_states[ident]='No SSO ticket or saved website session'
+            return
+        generation=self._tcp_generation.get(ident,0)+1
+        self._tcp_generation[ident]=generation
+        self._tcp_inflight.add(ident)
+        self._tcp_states[ident]='Starting direct TCP'
+        threading.Thread(
+            target=self._tcp_connect_worker,
+            args=(ident,account['label'],ticket,cookies,generation),
+            daemon=True,name='companion-live-tcp-'+ident).start()
+
+    def _tcp_connect_worker(self,ident,label,ticket,cookies,generation):
+        session=None
+        try:
+            if ticket is None:
+                self._packet_put(('tcp_state',ident,generation,
+                                  'Requesting SSO from official Habbo.com HTTPS'))
+                raw=fetch_habbo_sso_ticket(*cookies)
+                ticket=account_parse_official_ticket_response(raw)
+            actual=ticket.secret + ('.'+ticket.username if ticket.username else '')
+            session=HabboTcpSession(
+                ident,
+                status=lambda msg:self._packet_put(
+                    ('tcp_state',ident,generation,msg)),
+                packet=lambda packet_id,size:self._packet_put(
+                    ('tcp_packet',ident,generation,packet_id,size)))
+            session.connect(actual)
+            self._packet_put(('tcp_connected',ident,generation,session))
+        except (OSError,ValueError,RuntimeError,HabboTcpError,TimeoutError) as exc:
+            if session:
+                session.close()
+            # Never put HTTP responses, cookies, or SSO tokens in UI diagnostics.
+            detail=(str(exc)[:130] if isinstance(exc,(HabboTcpError,ValueError))
+                    else type(exc).__name__)
+            self._packet_put(('tcp_failed',ident,generation,detail))
+
+    def _tcp_connect_selected(self):
+        account=self._tcp_selected()
+        if account:
+            self._tcp_connect_one(account,use_form=True)
+            self._tcp_render()
+            self._direct_render()
+
+    def _tcp_connect_all(self):
+        for account in self._account_profiles:
+            self._tcp_connect_one(account)
+        self._tcp_render()
+        self._direct_render()
+        self.tcp_status_var.set('Requested independent TCP login for each '
+                                'profile with a queued ticket or saved session.')
+
+    def _tcp_disconnect_one(self,ident):
+        self._tcp_generation[ident]=self._tcp_generation.get(ident,0)+1
+        self._tcp_inflight.discard(ident)
+        session=self._tcp_sessions.pop(ident,None)
+        if session:
+            session.close()
+        self._tcp_states[ident]='Disconnected'
+
+    def _tcp_disconnect_selected(self):
+        account=self._tcp_selected()
+        if account:
+            self._tcp_disconnect_one(account['id'])
+            self._tcp_render()
+            self.tcp_status_var.set('Disconnected selected profile.')
+
+    def _tcp_disconnect_all(self):
+        for ident in tuple(self._tcp_generation):
+            self._tcp_disconnect_one(ident)
+        self._tcp_render()
+        self.tcp_status_var.set('All direct TCP sessions disconnected.')
+
+
     def _make_headless_panel(self,parent):
         """Socket-based per-account LOCAL test; never claims live Habbo login."""
         f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
@@ -2745,6 +2984,7 @@ class ChatOverlayApp:
             self.headless_status_var.set(
                 f'Local test supports at most {HEADLESS_TEST_MAX_ACCOUNTS} profiles.')
             return
+        self._tcp_disconnect_all()
         self._headless_manager.disconnect_all()
         if self._headless_server is not None:
             self._headless_server.stop()
@@ -3306,6 +3546,12 @@ class ChatOverlayApp:
             self.account_status_var.set(
                 'Could not remove saved login: '+str(exc)[:160])
             return
+        try:
+            account_session_cookie_delete(account['id'])
+        except OSError:
+            self.account_status_var.set('Could not erase saved website session.')
+            return
+        self._tcp_disconnect_one(account['id'])
         self._account_profiles=[x for x in self._account_profiles
                                 if x['id']!=account['id']]
         if self._account_active_id==account['id']:
@@ -6107,6 +6353,37 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0] in ('tcp_state','tcp_connected','tcp_failed','tcp_packet'):
+                event,ident,generation=item[:3]
+                if generation!=self._tcp_generation.get(ident,0):
+                    if event=='tcp_connected': item[3].close()
+                    continue
+                if event=='tcp_state':
+                    self._tcp_states[ident]=item[3]
+                    self.tcp_status_var.set(item[3])
+                    self._tcp_render()
+                elif event=='tcp_connected':
+                    self._tcp_sessions[ident]=item[3]
+                    self._tcp_inflight.discard(ident)
+                    self._tcp_states[ident]='Authenticated (direct TCP)'
+                    self.tcp_status_var.set(
+                        'Habbo sent AuthenticationOK; session is active.')
+                    self._tcp_render()
+                elif event=='tcp_failed':
+                    self._tcp_inflight.discard(ident)
+                    self._tcp_states[ident]='Connection failed: '+item[3]
+                    self.tcp_status_var.set(self._tcp_states[ident])
+                    self._tcp_render()
+                elif event=='tcp_packet':
+                    if self.tcp_log.winfo_exists():
+                        self.tcp_log.configure(state='normal')
+                        self.tcp_log.insert('end',
+                            f'{ident}: packet {item[3]} ({item[4]} bytes)\n')
+                        if int(self.tcp_log.index('end-1c').split('.')[0])>90:
+                            self.tcp_log.delete('1.0','30.0')
+                        self.tcp_log.see('end')
+                        self.tcp_log.configure(state='disabled')
+                continue
             if item[0]=='direct_ticket_fetched':
                 self._direct_ticket_fetch_running=False
                 ident,ticket=item[1],item[2]
