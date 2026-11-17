@@ -543,3 +543,16 @@ Version 1.1.46 — Direct TCP authentication troubleshooting
   sessions are unchanged.
 - Live Habbo login acceptance remains unverified. No need to re-enter saved
   cookies unless Habbo expired the official website session.
+
+Version 1.1.47 — Correct initial TCP handshake headers
+------------------------------------------------------
+The first live test connected to the socket but received Disconnection
+packet 4000 / reason code 122 before SSO authentication. Investigation
+showed that the previous hard-coded packet IDs came from a standalone
+bot and did not match a documented AIR client message registry.
+
+This update uses documented AIR handshake identifiers, retrieves public
+variables from the current official Habbo.com endpoint, and updates the
+compatibility release baseline to the public 2026-11-04 AIR build.
+The 2026 game server's exact protocol remains unverified. It never
+tries alternate packet IDs automatically. Credentials are not logged.

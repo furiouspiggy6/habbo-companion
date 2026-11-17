@@ -21,20 +21,25 @@ import urllib.request
 TCP_HOST = "game-us.habbo.com"
 TCP_PORT = 30000
 TCP_SITE = "https://www.habbo.com"
-TCP_CLIENT_DATA = TCP_SITE + "/gamedata/external_variables/1"
+TCP_CLIENT_DATA = TCP_SITE + "/gamedata/external_variables"
 TCP_SSO_URL = TCP_SITE + "/api/client/clientnative/url"
-TCP_FALLBACK_RELEASE = "WIN63-202511041237-472105733"
+# Last verified public AIR build identifier (HabboAirPlus, 2026-11-04).
+# This is a compatibility baseline, NOT proof of the server's latest release.
+TCP_FALLBACK_RELEASE = "WIN63-202611041140-327405090"
 TCP_MAX_FRAME = 1_048_576
 TCP_RSA_N = int(
     "C5DFF029848CD5CF4A84ADEFB2DA6685704920D5EBE8850B82C419A97B95302DE3B8021F37719FEBD4B3516E04D1E4702E74C468C9FF4BBBB5DD44A1E3A08687EDBEF7C30A176F7C8C83226A77F7982F7442D884D8149E924C486F43035C07B9167EA998416919DA4116D5E0598C11BA1542B4160136F04135C06EDF80170245E73C0DAD63895F52DCED3735582C5852744C8EC40AF576F26A9C8DC5B64ED3DAD40EFAAC6A76A1F5C2A422A8A4691F8991356467BDA61E1D34D0F35531058C8F741E4661ACFCB15C806A996AC312A8D33BF45079B89E11787537B37364749B883BDBFDE51A1A55086CF16159F5DEBCC76342AC2EF6950DA0C70C5845C97DFD49", 16
 )
 TCP_RSA_E = 65537
 
-# AIR packet IDs; test against the running hotel before treating as stable.
-TCP_OUT = dict(hello=4000, init_dh=1445, finish_dh=3393, version=1422,
-               unique=760, sso=3674, info=3745, pong=2418, latency=1255)
-TCP_IN = dict(init_dh=503, finish_dh=3722, auth_ok=115,
-              ping=2829, disconnect=4000, banned=1510)
+# Explicitly sourced from the AIR client's HabboMessages.as packet registry
+# (habbo-cc/Habbo-Sky feature-air). These headers supersede unverified
+# numbers copied from a bot, but 2026 live compatibility is still unproven.
+# Do not reinterpret unrelated headers as ban/disconnect messages.
+TCP_OUT = dict(hello=4000, init_dh=3110, finish_dh=773, version=1053,
+               unique=2490, sso=2419, info=357, pong=2596, latency=295)
+TCP_IN = dict(init_dh=1347, finish_dh=3885, auth_ok=2491,
+              ping=3928, disconnect=4000)
 _TICKET = re.compile(r"^[A-Za-z0-9-]{8,160}\.V[1-9][0-9]?$", re.I)
 _RELEASE = re.compile(r"\bWIN63-[0-9]{12}-[0-9]{5,}\b")
 
@@ -293,17 +298,15 @@ class HabboTcpSession:
             if packet_id == TCP_IN["ping"]:
                 self._send(TCP_OUT["pong"])
                 continue
-            if packet_id in (TCP_IN["disconnect"], TCP_IN["banned"]):
-                # Numeric reason codes and packet IDs are safe diagnostics.
-                # Never include server response bodies, SSO tokens or cookies.
+            if packet_id == TCP_IN["disconnect"]:
+                # Only confirmed disconnect header is interpreted; unknown
+                # headers are recorded numerically without payload contents.
                 reason = ""
-                if packet_id == TCP_IN["disconnect"] and len(payload) >= 4:
+                if len(payload) >= 4:
                     code = struct.unpack_from(">i", payload)[0]
                     reason = " (reason code " + str(code) + ")"
-                kind = ("disconnect" if packet_id == TCP_IN["disconnect"]
-                        else "denial")
                 raise HabboTcpError(
-                    "Game server sent " + kind + " packet " + str(packet_id)
+                    "Game server sent disconnect packet " + str(packet_id)
                     + reason + " during " + stage)
             if len(unexpected) < 6:
                 unexpected.append(packet_id)
@@ -320,7 +323,7 @@ class HabboTcpSession:
         if release is None:
             release, is_current = official_release()
             if not is_current:
-                self.on_status("Live version unavailable; trying last known AIR version")
+                self.on_status("Official version lookup unavailable; using public 2026-11-04 AIR build (not live-verified)")
         elif not _RELEASE.fullmatch(release):
             raise ValueError("Invalid Habbo client release version")
         self.stop.clear()
@@ -328,7 +331,7 @@ class HabboTcpSession:
         try:
             self.sock = socket.create_connection((TCP_HOST, TCP_PORT), timeout=timeout)
             self.sock.settimeout(timeout)
-            self.on_status("TCP connected; awaiting first Diffie-Hellman response")
+            self.on_status("TCP connected (AIR "+release+"; documented AIR packet IDs); awaiting first DH response")
             self._send(TCP_OUT["hello"], _string(release) + _string("FLASH25")
                        + struct.pack(">ii", 6, 4), plaintext=True)
             self._send(TCP_OUT["init_dh"], plaintext=True)
@@ -386,7 +389,7 @@ class HabboTcpSession:
                     continue
                 if packet_id == TCP_IN["ping"]:
                     self._send(TCP_OUT["pong"])
-                elif packet_id in (TCP_IN["disconnect"], TCP_IN["banned"]):
+                elif packet_id == TCP_IN["disconnect"]:
                     raise HabboTcpError("Game server disconnected this account")
                 self.on_packet(packet_id, len(body))
         except (OSError, HabboTcpError, ValueError):

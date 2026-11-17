@@ -110,3 +110,36 @@ This patch is tested offline with simulated network packets and does **not**
 confirm that Habbo's current live game-server protocol accepts a login.
 If your saved session is expired, sign in normally to renew it. Do not
 publish session cookies or SSO tickets in issue reports.
+
+
+## v1.1.47 — First-handshake compatibility fix
+
+The first real test showed that Habbo accepted the TCP socket and Companion
+fetched an SSO ticket, but then received **DisconnectReason (4000), code 122**
+before the first Diffie-Hellman exchange. No evidence suggests that the game
+server ever reached SSO authentication.
+
+Root-cause investigation found that the initial `habbo_tcp.py` implementation
+used packet identifiers from a standalone bot which *do not match* the AIR
+client's checked-in `HabboMessages.as` registry. Notably the bot's outbound
+`1445` corresponds to `Game2ExitGameMessageComposer` in that AIR registry,
+while `3110` is `InitDiffieHandshakeMessageComposer`.
+
+This release replaces the unverified handshake-related IDs with the
+**documented AIR registry** IDs (source:
+https://github.com/habbo-cc/Habbo-Sky/blob/feature-air/src/com/sulake/habbo/communication/HabboMessages.as),
+and stops treating unverified `1510` as a "banned" response. The official
+external-variables lookup uses the current supported
+`https://www.habbo.com/gamedata/external_variables` URL. Because that data
+does not provide a reliably parseable WIN63 release number, the compatibility
+fallback is now the publicly documented **2026-11-04 AIR build**
+`WIN63-202611041140-327405090` from
+https://github.com/LilithRainbows/HabboAirPlus/blob/main/README.txt.
+This fallback is not claimed to be the latest server-supported version.
+
+**Still unverified on the live 2026 Habbo hotel:** The AIR registry used to
+correct the identifiers is an earlier client snapshot, and the server may
+have changed its protocol since. The app does not brute-force headers,
+replay rejected tickets, bypass official login or use third-party servers.
+If the connection still fails, report only the redacted Direct TCP status
+and packet ID / handshake stage log, not any credentials.
