@@ -977,19 +977,37 @@ def account_fetch_ticket_from_signed_in_profile(debug_port):
     return account_parse_official_ticket_response(obj.get('value'))
 
 
-def account_capture_habbo_session_cookies(debug_port):
-    """Read only the two requested cookies from an authenticated account tab.
+def account_capture_habbo_session_cookies(debug_port,check_visible_login=True):
+    """Get two first-party cookies from one isolated Companion browser tab.
 
-    Uses Chromium's supported DevTools cookie API (including HttpOnly cookies)
-    on the existing isolated Companion browser profile. Never reads other
-    browser profiles or dumps the full cookie jar to logs, disk or UI.
+    By default require visible signed-in controls. For recovery from sessions
+    where the site UI is unrecognisable, the caller may skip that check *only*
+    if it immediately validates the cookies against the official SSO API
+    before retaining or using them. This does NOT access the normal browser
+    profile or return unrelated website cookies.
     """
-    page=account_habbo_page(debug_port)
-    if page is None or page.get('_inspect_error'):
-        raise ValueError('Companion account browser is not available or inspectable.')
-    state=page.get('_preflight_step',{}).get('kind')
-    if state not in ('play','play-now','launch','signed_in','download'):
-        raise ValueError('This Habbo browser profile is not signed in.')
+    if check_visible_login:
+        page=account_habbo_page(debug_port)
+        if page is None or page.get('_inspect_error'):
+            raise ValueError('Companion account browser is not available or inspectable.')
+        state=page.get('_preflight_step',{}).get('kind')
+        if state not in ('play','play-now','launch','signed_in','download'):
+            raise ValueError('This Habbo browser profile is not signed in.')
+    else:
+        # Do not depend on DOM inspection to recover an existing valid
+        # cookie. Restrict the target to the official www.habbo.com origin.
+        page=None
+        for candidate in account_browser_pages(debug_port):
+            try:
+                url=urllib.parse.urlsplit(candidate['url'])
+            except (ValueError,KeyError,TypeError):
+                continue
+            if (url.scheme=='https' and url.hostname=='www.habbo.com'
+                    and url.port in (None,443)):
+                page=candidate
+                break
+        if page is None:
+            raise ValueError('No official Habbo tab in this isolated browser.')
     ws=page['webSocketDebuggerUrl']
     parsed=urllib.parse.urlsplit(ws)
     if (parsed.scheme!='ws' or parsed.hostname!='127.0.0.1'
