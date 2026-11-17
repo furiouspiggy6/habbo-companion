@@ -914,8 +914,15 @@ HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   const submit=controls.find(el=>/^(let'?s go!?|sign in|log in|login|continue)$/i
       .test(text(el))) || controls.find(el=>el.type==='submit');
   if (!submit) return {kind:'no-submit'};
-  submit.focus({preventScroll:true});
-  return {kind:document.activeElement===submit?'focused':'not-focused'};
+  // The previous Enter-key approach could focus a button without invoking
+  // the site's click handler. Element.click() dispatches a normal DOM click
+  // event to the exact identified control, without any X/Y screen coordinates.
+  try {
+    submit.click();
+    return {kind:'clicked'};
+  } catch (e) {
+    return {kind:'click-error'};
+  }
 })()'''
 
 
@@ -958,6 +965,45 @@ def account_login_safe_error_code(body):
                 return value
     return None
 
+
+
+def account_login_safe_server_message(body):
+    """Expose only generic, known authentication-denial text verbatim.
+
+    Servers sometimes include email, names or tokens in error strings. Never
+    display arbitrary response text. Unrecognised messages remain withheld
+    while the actual HTTP status and safe symbolic codes are still shown.
+    """
+    if not isinstance(body,str) or len(body)>8192:
+        return None
+    try:
+        obj=json.loads(body)
+    except (ValueError,TypeError):
+        return None
+    if not isinstance(obj,dict):
+        return None
+    entries=[obj]
+    if isinstance(obj.get('error'),dict):
+        entries.append(obj['error'])
+    permitted={
+        'invalid credentials','invalid email or password',
+        'invalid username or password','incorrect email or password',
+        'incorrect username or password','wrong email or password',
+        'wrong username or password','incorrect password',
+        'invalid password','authentication failed','login failed',
+        'verification required','captcha required','access denied',
+        'account locked','account disabled','too many requests',
+        'too many login attempts','rate limit exceeded',
+        'unauthorized','forbidden'
+    }
+    for item in entries:
+        for name in ('message','error_description','detail'):
+            msg=item.get(name)
+            if isinstance(msg,str) and 5<=len(msg)<=140:
+                simple=' '.join(msg.strip().lower().strip(' .!').split())
+                if simple in permitted:
+                    return msg.strip()
+    return None
 
 class AccountLoginNetworkProbe:
     """Short-lived, account-specific page traffic monitor.
@@ -1265,23 +1311,13 @@ class AccountLoginNetworkProbe:
 
 
 def account_focus_and_submit_login(websocket_url):
-    """Use the actual login button + keyboard Enter, never a coordinate click."""
+    """Activate the verified Habbo login element directly, not X/Y or Enter."""
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
         'expression':HABBO_LOGIN_SUBMIT_FOCUS_JS,'returnByValue':True})
-    value=result.get('result',{}).get('value',{})
-    if not isinstance(value,dict) or value.get('kind')!='focused':
+    if result.get('exceptionDetails'):
         return False
-    for event in ('keyDown','keyUp'):
-        try:
-            account_cdp_call(websocket_url,'Input.dispatchKeyEvent',{
-                'type':event,'key':'Enter','code':'Enter',
-                'windowsVirtualKeyCode':13,'nativeVirtualKeyCode':13})
-        except (OSError,ValueError,RuntimeError,TimeoutError):
-            if event=='keyDown':
-                raise
-            # Navigation immediately after keyDown may close the page socket.
-            break
-    return True
+    value=result.get('result',{}).get('value',{})
+    return isinstance(value,dict) and value.get('kind')=='clicked'
 
 
 def account_submit_with_network_diagnostics(websocket_url,report):
@@ -1289,12 +1325,14 @@ def account_submit_with_network_diagnostics(websocket_url,report):
     started=False
     try:
         with AccountLoginNetworkProbe(websocket_url) as probe:
+            probe.report=report
             probe.enable()
             started=True
+            report('BROWSER -> Activating Habbo LETS GO login control via DOM.')
             submitted=account_focus_and_submit_login(websocket_url)
             if not submitted:
-                report('Habbo LETS GO submit element was not focusable; '
-                       'no login request was initiated.')
+                report('BROWSER <- Habbo login button was not activated; '
+                       'no login submission was confirmed.')
                 return False
             probe.observe()
             report(probe.summary())
