@@ -216,3 +216,42 @@ cryptographic negotiation, room state, or multi-account support. These
 would require separately implementing and testing the modern Classic
 binary protocol before offering a full headless login. No private
 session is uploaded or kept by this probe.
+
+
+## v1.1.50 — Handle live 2026 Habbo AIR keepalive and aligned packet headers
+
+In a real November 17, 2026 test, Companion fetched a valid Habbo.com
+SSO ticket, connected to the official AIR TCP endpoint and received a
+**six-byte, zero-payload packet with header 2935**, then timed out while
+waiting for the initial Diffie-Hellman reply.
+
+A repository using the **same November 4, 2026 WIN63 build identifier**
+labels incoming \`2935\` as **CLIENT_PING** and outgoing \`923\` as
+**CLIENT_PONG**:
+- [November 2026 incoming header registry](https://github.com/plus-emulator/Volt-Renderer/blob/main/packages/communication/src/messages/incoming/IncomingHeader.ts)
+- [November 2026 outgoing header registry](https://github.com/plus-emulator/Volt-Renderer/blob/main/packages/communication/src/messages/outgoing/OutgoingHeader.ts)
+- [Pong composer (empty payload)](https://github.com/plus-emulator/Volt-Renderer/blob/main/packages/communication/src/messages/outgoing/handshake/PongMessageComposer.ts)
+
+Companion now responds to the empty keepalive with a single empty pong and
+logs it without exposing packet payloads or cookies. The full set of initial
+handshake, version, identity, SSO and authentication IDs is aligned with
+this same November 2026 mapping rather than mixing older version mappings.
+These numeric mappings were **independently implemented**, not copied
+source code.
+
+The previously hardcoded \`FLASH25\` platform label (observed in a 2025 AIR
+client) has been replaced with \`FLASH31\`, the platform label seen in the
+latest publicly inspected official AIR October 2026 client source:
+[Oct 15 ClientHello](https://github.com/habbonoob/Client/blob/main/packages/client-WIN63-202610151745-318700621/src/com/sulake/habbo/communication/messages/outgoing/handshake/ClientHelloMessageComposer.ts).
+The exact platform label for the November 4 official AIR build has **not**
+been independently verified. The updated device identity now sends the
+three string fields expected by October 2026 AIR instead of two.
+
+**Critical limitation:** the November mapping comes from the independently
+developed Volt renderer (which explicitly warns it does not imply native
+AIR protocol compatibility). Automated tests simulate a valid initial
+handshake and the early server keepalive. The change **does not confirm a
+successful real login to the official Habbo.com server**. The code does not
+cycle unknown headers, brute-force packets, repeatedly retry rejected
+tickets, or bypass official login/MFA. Test with one account once; the
+subsequent log will show whether the DH handshake progresses.
