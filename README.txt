@@ -1,3 +1,30 @@
+HABBO COMPANION v1.1.65 — DETAILED LOGIN SERVER DIAGNOSTICS
+===========================================================
+
+The Playwright browser controller is unchanged. The login communication
+monitor now distinguishes requests, HTTP responses, completed transfers and
+real network failures. An aborted transfer after HTTP 200 is no longer reported
+as though the server had never responded.
+
+On each account's login attempt, the monitor now reports:
+- Numbered HTTPS requests with safe, redacted endpoint paths and request types.
+- HTTP statuses, redirects, rate-limit Retry-After seconds (when numeric),
+  completed transfers, and safe Chromium transport failure categories.
+- Application-level success=false, authenticated=false, or allowlisted
+  failure/status results in official Habbo JSON, including HTTP 200 responses.
+- Recognised generic server errors, including symbolic error codes.
+- Classified browser JavaScript errors and visible login-page warnings,
+  including incorrect credentials, verification and rate limits.
+- Presence (not contents) of Habbo's two secure session cookies.
+- Aggregate totals and explicit notices when diagnostic events were omitted.
+
+External identity services are reported with an approved service label or
+"external HTTPS", but their response bodies are never read. No raw URLs,
+query strings, credentials, tokens, cookie values, SSO tickets, HTTP headers
+or arbitrary server messages are printed. Some server responses may not
+contain a meaningful reason; in those cases Companion reports the evidence
+available without inventing a cause.
+
 HABBO COMPANION v1.1.64 — PLAYWRIGHT BROWSER CONTROLLER
 =====================================================
 
