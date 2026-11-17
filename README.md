@@ -76,9 +76,10 @@ code, AIR client assets, and Bobba-specific backend connection are **not** used.
 For our independent Direct TCP adapter, fix a real transport problem:
 an incomplete incoming TCP header or payload must survive a socket timeout
 without losing bytes or moving the RC4 keystream ahead twice. Each account
-now preserves the partial frame and completes it on a later read. The original
-per-account sessions and official-only authentication boundaries remain
-unchanged. New offline tests cover fragmented plaintext and encrypted frames,
+now preserves the partial frame and completes it on a later read. Separate
+accounts also keep a distinct stable non-secret client fingerprint rather
+than generating a new one on every reconnect. The original per-account sessions
+and official-only authentication boundaries remain unchanged. New offline tests cover fragmented plaintext and encrypted frames,
 timeouts mid-packet, and malformed length rejection. Timeouts now indicate
 which handshake/authentication phase failed.
 
