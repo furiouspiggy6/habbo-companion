@@ -890,6 +890,42 @@ def account_login_input_confirmed(websocket_url,field):
 # The login form itself is selected by DOM, not its screen coordinates. Focus
 # the actual submit element, then use a browser key event. This operates only
 # on the verified official Habbo HTTPS origin and never exposes field values.
+# Count browser input events only; do not read credentials. CDP's
+# Input.insertText should create trusted events that website handlers receive.
+HABBO_LOGIN_INPUT_EVENTS_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  if (!window.__hcInputEventTrace) {
+    const counts={email:0,password:0,emailTrusted:0,passwordTrusted:0};
+    document.addEventListener('input',e=>{
+      if (!e.target || e.target.tagName!=='INPUT') return;
+      const kind=e.target.type==='password'?'password':
+        (e.target.type==='email'?'email':null);
+      if (!kind) return;
+      counts[kind]=Math.min(10,counts[kind]+1);
+      if (e.isTrusted)
+        counts[kind+'Trusted']=Math.min(10,counts[kind+'Trusted']+1);
+    },true);
+    window.__hcInputEventTrace=counts;
+  }
+  return {kind:'ready'};
+})()'''
+
+
+HABBO_LOGIN_INPUT_EVENTS_RESULT_JS=r'''(() => {
+  if (location.protocol!=='https:' ||
+      !/(^|\.)habbo\.com$/i.test(location.hostname))
+    return {kind:'unverified-page'};
+  const c=window.__hcInputEventTrace;
+  if (!c) return {kind:'not-observed'};
+  return {kind:'counts',email:c.email,password:c.password,
+          emailTrusted:c.emailTrusted,passwordTrusted:c.passwordTrusted};
+})()'''
+
+
+# Inspect the actual login control and native form validity, then use a
+# trusted browser-synthesized pointer click on its current DOM hit point.
 HABBO_LOGIN_SUBMIT_FOCUS_JS=r'''(() => {
   // Inspects the real Habbo form and installs only non-secret event counters.
   // Browser Input.dispatchMouseEvent will perform the actual trusted click.
