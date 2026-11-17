@@ -14,6 +14,7 @@ NAMES={'account_login_auth_request','account_login_safe_error_code',
        'account_login_safe_server_message','account_login_safe_endpoint_path',
        'account_login_safe_browser_error','account_login_safe_error_location',
        'AccountLoginNetworkProbe','account_login_submit_readiness',
+       'account_login_wait_for_submit_point','account_login_preflight_message',
        'account_login_click_trace','account_focus_and_submit_login',
        'account_submit_with_network_diagnostics'}
 
@@ -231,6 +232,40 @@ class NetworkClassificationTests(unittest.TestCase):
 
 
 class DomSubmissionTests(unittest.TestCase):
+    def test_transient_overlay_rechecks_without_resubmitting_credentials(self):
+        ns=scope()
+        states=iter([
+            {'kind':'button-obstructed','tested':9,'blockerTag':'DIV',
+             'blockerRole':'dialog'},
+            {'kind':'ready','x':130.5,'y':245,'centerBlocked':True,'tested':2}
+        ])
+        inspections=[]
+        ns['account_login_submit_readiness']=lambda ws:(
+            inspections.append(ws) or next(states))
+        sleeps=[]
+        ns['time']=SimpleNamespace(sleep=lambda seconds:sleeps.append(seconds))
+        result=ns['account_login_wait_for_submit_point']('ws')
+        self.assertEqual(result['kind'],'ready')
+        self.assertEqual(len(inspections),2)
+        self.assertEqual(sleeps,[0.55])
+        self.assertIn('centre covered',
+                      ns['account_login_preflight_message'](result))
+
+    def test_persistent_real_overlay_prevents_click_and_reports_blocker(self):
+        ns=scope()
+        attempts=[]
+        ns['account_login_submit_readiness']=lambda ws:(
+            attempts.append('inspection') or
+            {'kind':'button-obstructed','tested':9,
+             'blockerTag':'IFRAME','blockerRole':'none'})
+        ns['time']=SimpleNamespace(sleep=lambda _:None)
+        outcome=ns['account_login_wait_for_submit_point']('ws')
+        self.assertEqual(len(attempts),3)
+        self.assertIn('IFRAME',ns['account_login_preflight_message'](outcome))
+        self.assertFalse(ns['account_focus_and_submit_login'](
+            'ws',outcome))
+        self.assertEqual(len(attempts),3)
+
     def test_browser_trusted_click_uses_current_dom_hit_point(self):
         ns=scope()
         calls=[]

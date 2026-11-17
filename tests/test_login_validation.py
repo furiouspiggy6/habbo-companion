@@ -41,7 +41,9 @@ function el(props){
     scrollIntoView(){}
   },props||{});
 }
-const outside=el({type:'text',getBoundingClientRect:()=>rect(20,20)});
+const outside=el({tagName:scenario.blockerTag||'DIV',type:'text',
+  getAttribute:name=>name==='role'?(scenario.blockerRole||null):null,
+  getBoundingClientRect:()=>rect(20,20)});
 const email=el({type:'email',value:scenario.emailValue||'',
   validity:{valid:scenario.emailValid!==false},
   getBoundingClientRect:()=>rect(100,200)});
@@ -61,7 +63,9 @@ global.window={};
 global.getComputedStyle=()=>({display:'block',visibility:'visible'});
 global.document={
   addEventListener:()=>{},
-  elementFromPoint:()=>scenario.obstructed?outside:submit,
+  elementFromPoint:(x,y)=>scenario.obstructed ||
+    (scenario.centerObstructed && Math.abs(x-195)<0.1 &&
+     Math.abs(y-315)<0.1)?outside:submit,
   activeElement:scenario.inputKind?
     el({tagName:'INPUT',type:scenario.inputKind,
         value:scenario.populated?'test-value':''}):null,
@@ -175,6 +179,29 @@ class SafeDiagnosticsTests(unittest.TestCase):
             ({'obstructed':True},'button-obstructed'),
         ]:
             self.assertEqual(run_js(js,{**base,**change})['kind'],reason)
+
+    def test_partly_covered_submit_selects_unobstructed_button_point(self):
+        js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
+        result=run_js(js,{'emailValue':'user@example.com',
+                          'passwordValue':'secret',
+                          'centerObstructed':True,'blockerTag':'DIV'})
+        self.assertEqual(result['kind'],'ready')
+        self.assertEqual((result['x'],result['y']),(172.5,315))
+        self.assertTrue(result['centerBlocked'])
+        self.assertEqual(result['tested'],2)
+        self.assertNotIn('secret',str(result))
+
+    def test_fully_covered_submit_reports_blocking_element_not_credentials(self):
+        js=js_constant('HABBO_LOGIN_SUBMIT_FOCUS_JS')
+        result=run_js(js,{'emailValue':'user@example.com',
+                          'passwordValue':'very-secret',
+                          'obstructed':True,
+                          'blockerTag':'IFRAME','blockerRole':'dialog'})
+        self.assertEqual(result['kind'],'button-obstructed')
+        self.assertEqual(result['tested'],9)
+        self.assertEqual(result['blockerTag'],'IFRAME')
+        self.assertEqual(result['blockerRole'],'dialog')
+        self.assertNotIn('very-secret',str(result))
 
     def test_diagnostic_adapter_whitelists_returned_codes(self):
         node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
