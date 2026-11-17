@@ -527,7 +527,9 @@ Version 1.1.45 — Robust direct TCP frame reassembly
 ----------------------------------------------------
 Prevent fragmented incoming TCP packet headers and bodies being lost if
 socket reads time out during the handshake or authenticated session. Cipher
-position is preserved on resume. More specific handshake timeout messages.
+position is preserved on resume. Separate saved accounts have stable,
+different client identifiers across reconnects. More specific handshake
+timeout messages.
 No Bobba code, Bobba API, AIR client assets or third-party dependency is added.
 This does not remove the need for a legitimate Habbo login/session or prove
 live Habbo protocol compatibility.
