@@ -50,7 +50,8 @@ class DeliveryMonitorTests(unittest.TestCase):
         self.assertIn('0<=seen_at-self._coffee_last_pass_at<=4',block)
 
     def test_fewer_overlay_redraws_and_clickthrough_style_checks(self):
-        tick=CODE[CODE.index('    def tick(self):'):CODE.index('    def close(self):')]
+        start=CODE.index('    def tick(self):')
+        tick=CODE[start:CODE.index('    def close(self):',start)]
         self.assertIn('now-self.last_overlay_draw_at>=0.6',tick)
         self.assertIn('time.monotonic()-self.last_stack_check>0.75',tick)
         self.assertIn('time.monotonic()-self.last_clickthrough_check>6.0',tick)
