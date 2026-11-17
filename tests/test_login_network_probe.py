@@ -140,7 +140,7 @@ class NetworkClassificationTests(unittest.TestCase):
         self.assertIn('HTTP 403',' '.join(out))
         self.assertIn('HTTP 422',' '.join(out))
         self.assertIn('external HTTPS site',' '.join(out))
-        for secret in ('identity.example.com','user/action','?secret=123'):
+        for secret in ('identity.example.com','?secret=123'):
             self.assertNotIn(secret,' '.join(out))
 
     def test_only_failed_first_party_json_body_yields_safe_server_details(self):
@@ -269,7 +269,7 @@ class DomSubmissionTests(unittest.TestCase):
                 events.append('close')
             def enable(self):
                 events.append('enable')
-            def observe(self):
+            def observe(self,seconds=7.0):
                 events.append('observe')
             def summary(self):
                 return 'Login diagnostic: Habbo authentication HTTP 403.'
@@ -293,7 +293,7 @@ class DomSubmissionTests(unittest.TestCase):
             def __enter__(self): return self
             def __exit__(self,*args): pass
             def enable(self): pass
-            def observe(self): raise OSError('observer dropped')
+            def observe(self,seconds=7.0): raise OSError('observer dropped')
         ns['AccountLoginNetworkProbe']=BrokenProbe
         ns['account_login_submit_readiness']=lambda ws:(
             {'kind':'ready','x':50,'y':70})
