@@ -1573,6 +1573,21 @@ def account_login_submit_readiness(websocket_url):
     kind=value.get('kind')
     if kind not in allowed:
         return {'kind':'inspection-error'}
+    if kind=='button-obstructed':
+        # Do not trust arbitrary page text or attributes as log messages.
+        tested=value.get('tested')
+        tag=value.get('blockerTag')
+        role=value.get('blockerRole')
+        if type(tested) is not int or not 1<=tested<=9:
+            tested=0
+        if tag not in ('DIV','SPAN','IFRAME','DIALOG','BUTTON','LABEL',
+                       'SECTION','FORM','IMG','INPUT','A','BODY','HTML',
+                       'HEADER','MAIN','P','ARTICLE','UNKNOWN','OTHER'):
+            tag='UNKNOWN'
+        if role not in ('dialog','alertdialog','button','presentation',
+                        'none','status','group','form','alert'):
+            role='none'
+        return {'kind':kind,'tested':tested,'blockerTag':tag,'blockerRole':role}
     if kind!='ready':
         return {'kind':kind}
     x,y=value.get('x'),value.get('y')
@@ -1581,7 +1596,40 @@ def account_login_submit_readiness(websocket_url):
         not math.isfinite(x) or not math.isfinite(y) or
         not 0<=x<=5000 or not 0<=y<=5000):
         return {'kind':'inspection-error'}
-    return {'kind':'ready','x':x,'y':y}
+    center_blocked=value.get('centerBlocked')
+    tested=value.get('tested')
+    return {'kind':'ready','x':x,'y':y,
+            'centerBlocked':center_blocked is True,
+            'tested':tested if type(tested) is int and 1<=tested<=9 else 0}
+
+
+def account_login_wait_for_submit_point(websocket_url):
+    """Retry hit-testing only; never retry a credential submission."""
+    ready={'kind':'inspection-error'}
+    for attempt in range(3):
+        ready=account_login_submit_readiness(websocket_url)
+        if ready.get('kind')!='button-obstructed':
+            return ready
+        if attempt<2:
+            time.sleep(0.55)
+    return ready
+
+
+def account_login_preflight_message(ready):
+    """Explain an obstructed DOM button without exposing page contents."""
+    kind=ready.get('kind','inspection-error')
+    if kind=='ready':
+        if ready.get('centerBlocked'):
+            return ('FORM <- ready (button centre covered, but a verified '
+                    'unobstructed point on the login button was found).')
+        return 'FORM <- ready (fields populated, button unobstructed).'
+    if kind=='button-obstructed':
+        return ('FORM <- button-obstructed: '+str(ready.get('tested',0))+
+                ' inspected button points covered; top element '+
+                str(ready.get('blockerTag','UNKNOWN'))+' (role '+
+                str(ready.get('blockerRole','none'))+
+                '). No login click attempted.')
+    return 'FORM <- '+kind+' (no login click attempted).'
 
 
 def account_login_click_trace(websocket_url):
@@ -1638,11 +1686,8 @@ def account_submit_with_network_diagnostics(websocket_url,report):
             probe.report=report
             probe.enable()
             started=True
-            ready=account_login_submit_readiness(websocket_url)
-            report('FORM <- '+ready['kind']+
-                   (' (fields populated, native validity passed).'
-                    if ready['kind']=='ready' else
-                    ' (no login submission attempted).'))
+            ready=account_login_wait_for_submit_point(websocket_url)
+            report(account_login_preflight_message(ready))
             if ready['kind']!='ready':
                 return False
             probe.phase='after-submit'
@@ -1670,8 +1715,8 @@ def account_submit_with_network_diagnostics(websocket_url,report):
             return True
         report('Login network observer unavailable. Checking the Habbo form '
                'before one trusted browser click without traffic capture.')
-        ready=account_login_submit_readiness(websocket_url)
-        report('FORM <- '+ready['kind']+'.')
+        ready=account_login_wait_for_submit_point(websocket_url)
+        report(account_login_preflight_message(ready))
         return account_focus_and_submit_login(websocket_url,ready)
 
 
