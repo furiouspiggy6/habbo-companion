@@ -34,12 +34,15 @@ function el(props){
     type:'text',innerText:'',textContent:'',value:'',disabled:false,
     autocomplete:'',placeholder:'',getAttribute:()=>null,
     getBoundingClientRect:()=>rect(100,100),
-    closest:()=>null
+    closest:()=>null,
+    focus(){ global.document.activeElement=this; }
   },props||{});
 }
 const outside=el({type:'text',getBoundingClientRect:()=>rect(20,20)});
-const email=el({type:'email',getBoundingClientRect:()=>rect(100,200)});
-const pwd=el({type:'password',getBoundingClientRect:()=>rect(100,250)});
+const email=el({type:'email',value:scenario.emailValue||'',
+  getBoundingClientRect:()=>rect(100,200)});
+const pwd=el({type:'password',value:scenario.passwordValue||'',
+  getBoundingClientRect:()=>rect(100,250)});
 const submit=el({type:'submit',innerText:'Log in',
   getBoundingClientRect:()=>rect(150,300)});
 const form={querySelectorAll:s=>s.startsWith('button')?[submit]:[email]};
@@ -113,21 +116,31 @@ class SafeDiagnosticsTests(unittest.TestCase):
         self.assertEqual(status['password'],{'x':145,'y':265})
 
     def test_login_entry_confirmation_is_origin_locked_and_redacted(self):
-        js=js_constant('HABBO_LOGIN_INPUT_READY_JS')
-        self.assertEqual(
-            run_js(js,{'inputKind':'email','populated':True}),
-            {'kind':'populated','field':'email'})
-        self.assertEqual(
-            run_js(js,{'inputKind':'password','populated':True}),
-            {'kind':'populated','field':'password'})
-        self.assertEqual(
-            run_js(js,{'inputKind':'password','populated':False}),
-            {'kind':'empty','field':'password'})
-        denied=run_js(js,{'hostname':'habbo.com.fake.example',
-                          'inputKind':'password','populated':True})
+        template=js_constant('HABBO_LOGIN_INPUT_READY_JS')
+        def check(field,action,scenario):
+            js=(template.replace('FIELD_PLACEHOLDER',json.dumps(field))
+                        .replace('ACTION_PLACEHOLDER',json.dumps(action)))
+            return run_js(js,scenario)
+        self.assertEqual(check('email','check',{'emailValue':'test@example.com'}),
+                         {'kind':'populated','field':'email'})
+        self.assertEqual(check('password','check',{'passwordValue':'secret'}),
+                         {'kind':'populated','field':'password'})
+        self.assertEqual(check('password','check',{}),
+                         {'kind':'empty','field':'password'})
+        denied=check('password','check',{'hostname':'habbo.com.fake.example',
+                                         'passwordValue':'secret'})
         self.assertEqual(denied,{'kind':'unverified-page'})
-        self.assertNotIn('test-value',
-                         str(run_js(js,{'inputKind':'password','populated':True})))
+        focused=check('email','focus',{})
+        self.assertEqual(focused,{'kind':'focused'})
+        self.assertNotIn('secret',
+                         str(check('password','check',{'passwordValue':'secret'})))
+
+    def test_reactive_form_rerender_does_not_depend_on_active_element(self):
+        template=js_constant('HABBO_LOGIN_INPUT_READY_JS')
+        js=(template.replace('FIELD_PLACEHOLDER',json.dumps('password'))
+                    .replace('ACTION_PLACEHOLDER',json.dumps('check')))
+        self.assertEqual(run_js(js,{'passwordValue':'secret'}),
+                         {'kind':'populated','field':'password'})
 
     def test_diagnostic_adapter_whitelists_returned_codes(self):
         node=next(n for n in TREE.body if isinstance(n,ast.FunctionDef)
