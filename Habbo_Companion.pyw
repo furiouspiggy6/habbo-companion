@@ -141,7 +141,7 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None, bind_ip='127.0.0.1
             target=Target(connection=TCPSocketConnection(bind_ip,
                              server.server_address[1],recv_timeout=0.5)),
             index_end=cases, sleep_time=0.01, receive_data_after_each_request=True,
-            web_address='127.0.0.1',web_port=0,keep_web_open=False,
+            web_address='127.0.0.1',web_port=None,keep_web_open=False,
             db_filename=str(db))
         session.connect(s_get('synthetic_habbo_frame'))
         session.fuzz()
@@ -272,7 +272,8 @@ def run_remote_boofuzz(host,port,secret,seed_id=896,cases=20,output_dir=None):
     session=Session(
         target=Target(connection=AuthenticatedLabConnection()),
         index_end=cases,sleep_time=0.02,receive_data_after_each_request=True,
-        web_address='127.0.0.1',web_port=0,keep_web_open=False,
+        receive_data_after_fuzz=True,
+        web_address='127.0.0.1',web_port=None,keep_web_open=False,
         db_filename=str(db),restart_threshold=1,restart_timeout=0)
     session.connect(s_get('authenticated_remote_synthetic_frame'))
     session.fuzz()
