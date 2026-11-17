@@ -1375,42 +1375,123 @@ class AccountLoginNetworkProbe:
         return result
 
 
-def account_focus_and_submit_login(websocket_url):
-    """Activate the verified Habbo login element directly, not X/Y or Enter."""
+def account_login_submit_readiness(websocket_url):
+    """Return only safe form readiness and an ephemeral viewport hit point."""
     result=account_cdp_call(websocket_url,'Runtime.evaluate',{
         'expression':HABBO_LOGIN_SUBMIT_FOCUS_JS,'returnByValue':True})
     if result.get('exceptionDetails'):
-        return False
+        return {'kind':'inspection-error'}
     value=result.get('result',{}).get('value',{})
-    return isinstance(value,dict) and value.get('kind')=='clicked'
+    if not isinstance(value,dict):
+        return {'kind':'inspection-error'}
+    allowed=('unverified-page','no-form','no-submit-or-email',
+             'empty-email','empty-password','invalid-email',
+             'invalid-password','invalid-form','button-disabled',
+             'button-not-visible','button-offscreen',
+             'button-obstructed','ready')
+    kind=value.get('kind')
+    if kind not in allowed:
+        return {'kind':'inspection-error'}
+    if kind!='ready':
+        return {'kind':kind}
+    x,y=value.get('x'),value.get('y')
+    if (isinstance(x,bool) or isinstance(y,bool) or
+        not isinstance(x,(int,float)) or not isinstance(y,(int,float)) or
+        not math.isfinite(x) or not math.isfinite(y) or
+        not 0<=x<=5000 or not 0<=y<=5000):
+        return {'kind':'inspection-error'}
+    return {'kind':'ready','x':x,'y':y}
+
+
+def account_login_click_trace(websocket_url):
+    """Read bounded click/submit event counts, never login field contents."""
+    try:
+        result=account_cdp_call(websocket_url,'Runtime.evaluate',{
+            'expression':HABBO_LOGIN_CLICK_TRACE_JS,'returnByValue':True},
+            timeout=2)
+        value=result.get('result',{}).get('value',{})
+        if not isinstance(value,dict) or value.get('kind')!='trace':
+            return None
+        counts=[]
+        for name in ('trusted','untrusted','submits'):
+            count=value.get(name)
+            if not isinstance(count,int) or isinstance(count,bool) or not 0<=count<=3:
+                return None
+            counts.append(count)
+        return counts
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        return None
+
+
+def account_focus_and_submit_login(websocket_url,ready=None):
+    """Trusted Chrome pointer click on the verified DOM button.
+
+    The viewport hit point comes from the inspected element immediately
+    before the click. It is not a stored screen coordinate or a JS .click().
+    This works in headless Chromium without moving the Windows OS cursor.
+    """
+    if ready is None:
+        ready=account_login_submit_readiness(websocket_url)
+    if ready.get('kind')!='ready':
+        return False
+    x,y=ready['x'],ready['y']
+    account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+        'type':'mouseMoved','x':x,'y':y,'button':'none'})
+    account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+        'type':'mousePressed','x':x,'y':y,'button':'left','clickCount':1})
+    # Do not issue the click a second time if navigation immediately closes
+    # the page socket during release. Let the existing session checks decide.
+    try:
+        account_cdp_call(websocket_url,'Input.dispatchMouseEvent',{
+            'type':'mouseReleased','x':x,'y':y,'button':'left','clickCount':1})
+    except (OSError,RuntimeError,ValueError,TimeoutError,socket.timeout):
+        pass
+    return True
 
 
 def account_submit_with_network_diagnostics(websocket_url,report):
-    """Arm passive first-party network monitoring before one DOM submission."""
+    """Monitor safe browser & HTTP evidence before one trusted DOM click."""
     started=False
     try:
         with AccountLoginNetworkProbe(websocket_url) as probe:
             probe.report=report
             probe.enable()
             started=True
-            report('BROWSER -> Activating Habbo LETS GO login control via DOM.')
-            submitted=account_focus_and_submit_login(websocket_url)
-            if not submitted:
-                report('BROWSER <- Habbo login button was not activated; '
-                       'no login submission was confirmed.')
+            ready=account_login_submit_readiness(websocket_url)
+            report('FORM <- '+ready['kind']+
+                   (' (fields populated, native validity passed).'
+                    if ready['kind']=='ready' else
+                    ' (no login submission attempted).'))
+            if ready['kind']!='ready':
                 return False
-            probe.observe()
+            probe.phase='after-submit'
+            report('BROWSER -> Trusted browser click on Habbo LETS GO element.')
+            submitted=account_focus_and_submit_login(websocket_url,ready)
+            if not submitted:
+                report('BROWSER <- Habbo submit element could not be activated.')
+                return False
+            probe.observe(seconds=7.0)
+            trace=account_login_click_trace(websocket_url)
+            if trace is not None:
+                report('BROWSER <- Login button trusted click event(s): '+
+                       str(trace[0])+', untrusted: '+str(trace[1])+
+                       ', native form submit event(s): '+str(trace[2])+'.')
+            else:
+                report('BROWSER <- Click/submit events unavailable after '
+                       'login attempt (possibly due to navigation).')
             report(probe.summary())
             return True
     except (OSError,ValueError,RuntimeError,socket.timeout,TimeoutError):
         if started:
-            # Never retry a click whose result may already have reached Habbo.
-            report('Login network observer was interrupted; '
-                   'the submission outcome is unverified.')
+            # Never retry after a click might already have reached Habbo.
+            report('Login diagnostics interrupted; the submit outcome is '
+                   'unverified. No automatic duplicate request sent.')
             return True
-        report('Login network diagnostics unavailable in this browser; '
-               'trying normal DOM submit without traffic inspection.')
-        return account_focus_and_submit_login(websocket_url)
+        report('Login network observer unavailable. Checking the Habbo form '
+               'before one trusted browser click without traffic capture.')
+        ready=account_login_submit_readiness(websocket_url)
+        report('FORM <- '+ready['kind']+'.')
+        return account_focus_and_submit_login(websocket_url,ready)
 
 
 def account_submit_saved_login(websocket_url,email,password,report=None):
