@@ -511,3 +511,13 @@ An expired website session still needs a fresh official login; saved password
 login and captcha/2FA bypass are not supported by this tab.
 Use the original Headless Test tab ONLY for fake local socket tests.
 The live protocol can change. No live authentication has been verified in CI.
+
+
+Version 1.1.44 - Start saved Direct TCP accounts automatically
+---------------------------------------------------------------
+To avoid repeated clicks, choose Direct TCP > Automatically connect saved
+TCP accounts when Companion opens. This is opt-in and uses the separate
+website sessions stored in Windows Credential Manager for each Habbo account.
+No Brave, game launcher, or G-Earth is launched by this TCP feature.
+The separate TCP connections still need live Habbo AuthenticationOK.
+Expired or revoked website sessions require a new official sign-in.
