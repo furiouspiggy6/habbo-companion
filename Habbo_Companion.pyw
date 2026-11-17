@@ -1808,6 +1808,29 @@ def account_import_session_automatically(account,report):
             raw=fetch_habbo_sso_ticket(*cookies)
             return account_parse_official_ticket_response(raw),cookies
 
+        def report_session_verification_failure(error):
+            # Never print an exception verbatim: browser/session exceptions
+            # could contain confidential data in future integrations.
+            if isinstance(error,HabboTcpError):
+                safe=str(error)
+                if 'HTTP 401' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 401 '
+                           '(website session rejected).')
+                elif 'HTTP 403' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 403 '
+                           '(website session rejected).')
+                elif 'HTTP 429' in safe:
+                    report('SESSION <- Official Habbo SSO returned HTTP 429 '
+                           '(request rate limited).')
+                elif 'HTTP 500' in safe or 'HTTP 503' in safe:
+                    report('SESSION <- Official Habbo SSO returned a server error.')
+                else:
+                    report('SESSION <- Official Habbo SSO ticket was not '
+                           'available or could not be verified.')
+            else:
+                report('SESSION <- Browser did not provide a verified pair '
+                       'of Habbo session cookies and a valid SSO ticket.')
+
         report('Checking for an existing Habbo session in this account profile.')
         try:
             ticket,cookies=verified_ticket_from_browser()
@@ -1845,8 +1868,8 @@ def account_import_session_automatically(account,report):
             try:
                 ticket,cookies=verified_ticket_from_browser()
             except (OSError,ValueError,RuntimeError,HabboTcpError,
-                    socket.timeout,TimeoutError):
-                pass
+                    socket.timeout,TimeoutError) as exc:
+                report_session_verification_failure(exc)
             else:
                 account_session_cookie_write(ident,*cookies)
                 report('Official Habbo HTTPS session is valid despite the '
@@ -1872,7 +1895,13 @@ def account_import_session_automatically(account,report):
                 'Website sign-in could not be confirmed. Use Accounts > '
                 'Open account login to complete it.'))
         report('Website sign-in confirmed; verifying session with Habbo HTTPS.')
-        ticket,cookies=verified_ticket_from_browser()
+        try:
+            ticket,cookies=verified_ticket_from_browser()
+        except (OSError,ValueError,RuntimeError,HabboTcpError,
+                socket.timeout,TimeoutError) as exc:
+            report_session_verification_failure(exc)
+            raise ValueError('Website sign-in appeared successful, but Habbo '
+                             'did not validate the session for Direct TCP.') from None
         account_session_cookie_write(ident,*cookies)
         report('Official Habbo session validated and saved in Windows vault.')
         return ticket
