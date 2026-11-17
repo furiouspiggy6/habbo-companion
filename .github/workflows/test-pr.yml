@@ -39,3 +39,6 @@ jobs:
       - name: Run local isolated-browser Playwright smoke test
         shell: pwsh
         run: python scripts/playwright_smoke.py
+      - name: Construct and navigate modern Tkinter workspace (no network)
+        shell: pwsh
+        run: python scripts/ui_smoke.py
