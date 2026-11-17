@@ -5946,98 +5946,156 @@ class ChatOverlayApp:
         self._packet_put(('direct_launch_finished',))
 
     def _make_accounts_panel(self,parent):
-        """Manage independent login cookies and separately configured ports."""
-        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        """Compact profile list + grouped account settings, all handlers intact."""
+        p=COMPANION_UI
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=(22,19))
         f.pack(fill='both',expand=True)
-        tk.Label(f,text='ACCOUNT SESSIONS',font=('Segoe UI Semibold',18),
-                 fg=COMPANION_UI['text'],bg=COMPANION_UI['background']).pack(anchor='w',pady=(0,8))
-        tk.Label(f,
-            text='Each account uses separate Brave/Chromium cookies. '
-                 'Save its email and password below for automatic website sign-in. '
-                 'Passwords are kept in your Windows Credential Manager, '
-                 'not settings.json or GitHub.',
-            fg=COMPANION_UI['muted'],bg=COMPANION_UI['background'],wraplength=595,justify='left').pack(
-                anchor='w',pady=(0,10))
-        grid=ttk.Frame(f,style='Panel.TFrame')
-        grid.pack(fill='x',pady=(0,9))
+        tk.Label(f,text='Manage your accounts',
+                 font=('Segoe UI Semibold',18),bg=p['background'],
+                 fg=p['text']).pack(anchor='w',pady=(0,3))
+        tk.Label(f,text='Each account has its own private Brave session. '
+                 'Choose a profile to edit it or open its official Habbo login.',
+                 font=('Segoe UI',10),bg=p['background'],fg=p['muted'],
+                 wraplength=790,justify='left').pack(
+                     anchor='w',pady=(0,18))
+        columns=ttk.Frame(f,style='Panel.TFrame')
+        columns.pack(fill='both',expand=True)
+
+        # LEFT — profile selection and lifecycle.
+        left=ttk.Frame(columns,style='Card.TFrame',padding=15,width=316)
+        left.pack(side='left',fill='y',padx=(0,15))
+        left.pack_propagate(False)
+        tk.Label(left,text='SAVED PROFILES',
+                 font=('Segoe UI Semibold',9),
+                 fg=p['accent'],bg=p['surface']).pack(
+                     anchor='w',pady=(2,9))
         self.account_table=ttk.Treeview(
-            grid,columns=('name','port','launch_state'),show='headings',height=7,
-            selectmode='browse')
+            left,columns=('name','port','launch_state'),
+            show='headings',height=10,selectmode='browse')
         for key,heading,width in (
-            ('name','Account',155),('port','G-Earth port',90),
-            ('launch_state','Browser / Classic status',340)):
+            ('name','Account',117),
+            ('port','Port',48),
+            ('launch_state','Status',120)):
             self.account_table.heading(key,text=heading)
-            self.account_table.column(key,width=width,stretch=(key=='launch_state'))
-        self.account_table.pack(fill='x')
+            self.account_table.column(key,width=width,stretch=False)
+        self.account_table.pack(fill='x',pady=(0,12))
         self.account_table.bind('<<TreeviewSelect>>',self._account_on_select)
-        for field,var in (
-            ('Account label',self.account_label_var),
-            ('Login website (HTTPS)',self.account_login_url_var),
-            ('G-Earth extension port',self.account_port_var)):
-            line=ttk.Frame(f,style='Panel.TFrame')
-            line.pack(fill='x',pady=(0,6))
-            ttk.Label(line,text=field,style='Panel.TLabel',width=23).pack(side='left')
-            ttk.Entry(line,textvariable=var).pack(side='left',fill='x',expand=True)
-        for field,var,secret in (
-            ('Login email',self.account_email_var,False),
-            ('Login password',self.account_password_var,True)):
-            line=ttk.Frame(f,style='Panel.TFrame')
-            line.pack(fill='x',pady=(0,6))
-            ttk.Label(line,text=field,style='Panel.TLabel',width=23).pack(side='left')
-            ttk.Entry(line,textvariable=var,show='*' if secret else '').pack(
-                side='left',fill='x',expand=True)
-        secrets_row=ttk.Frame(f,style='Panel.TFrame')
-        secrets_row.pack(fill='x',pady=(3,6))
+        actions=ttk.Frame(left,style='Card.TFrame')
+        actions.pack(fill='x',pady=(0,8))
+        ttk.Button(actions,text='Add account',style='Primary.TButton',
+                   command=self._account_add).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(actions,text='Remove entry',style='Danger.TButton',
+                   command=self._account_remove).pack(side='left')
+        tk.Frame(left,bg=p['border'],height=1).pack(fill='x',pady=(10,12))
+        tk.Label(left,text='PROFILES STAY SEPARATE',
+                 font=('Segoe UI Semibold',9),
+                 fg=p['muted'],bg=p['surface']).pack(anchor='w')
+        tk.Label(left,text='Each account retains its own browser cookies, '
+                 'trusted-device settings and local control port.',
+                 font=('Segoe UI',9),fg=p['muted'],bg=p['surface'],
+                 wraplength=277,justify='left').pack(
+                     anchor='w',pady=(6,0))
+
+        # RIGHT — profile details, login, and separate advanced controls.
+        right=ttk.Frame(columns,style='Card.TFrame',padding=(20,19))
+        right.pack(side='left',fill='both',expand=True)
+        tk.Label(right,text='Account settings',
+                 font=('Segoe UI Semibold',16),
+                 fg=p['text'],bg=p['surface']).pack(anchor='w')
+        tk.Label(right,text='Edit the selected account',
+                 font=('Segoe UI',9),
+                 fg=p['muted'],bg=p['surface']).pack(
+                     anchor='w',pady=(2,14))
+
+        def field(parent,label,var,row,column=0,span=1,secret=False):
+            ttk.Label(parent,text=label,style='Card.TLabel').grid(
+                row=row*2,column=column,columnspan=span,
+                sticky='w',padx=(0,12),pady=(6,4))
+            entry=ttk.Entry(parent,textvariable=var,
+                            show='*' if secret else '')
+            entry.grid(row=row*2+1,column=column,columnspan=span,
+                       sticky='ew',padx=(0,12),pady=(0,8))
+            return entry
+
+        basics=ttk.Frame(right,style='Card.TFrame')
+        basics.pack(fill='x')
+        basics.columnconfigure(0,weight=2)
+        basics.columnconfigure(1,weight=1)
+        field(basics,'Account label',self.account_label_var,0)
+        field(basics,'G-Earth extension port',self.account_port_var,0,1)
+        field(basics,'Login website (HTTPS)',self.account_login_url_var,1,
+              span=2)
+        save_line=ttk.Frame(right,style='Card.TFrame')
+        save_line.pack(fill='x',pady=(5,4))
+        ttk.Button(save_line,text='Save changes',
+                   command=self._account_save_selected).pack(side='left')
+        ttk.Button(save_line,text='Use selected G-Earth port',
+                   command=self._account_use_port).pack(
+                       side='left',padx=(9,0))
+        ttk.Button(save_line,text='Check port',
+                   command=self._account_check_port).pack(
+                       side='left',padx=(9,0))
+
+        tk.Frame(right,bg=p['border'],height=1).pack(
+            fill='x',pady=(15,14))
+        tk.Label(right,text='LOGIN & SECURITY',
+                 font=('Segoe UI Semibold',9),
+                 fg=p['accent'],bg=p['surface']).pack(
+                     anchor='w',pady=(0,6))
+        security=ttk.Frame(right,style='Card.TFrame')
+        security.pack(fill='x')
+        security.columnconfigure(0,weight=1)
+        security.columnconfigure(1,weight=1)
+        field(security,'Login email',self.account_email_var,0)
+        field(security,'Login password',self.account_password_var,0,1,
+              secret=True)
+        secrets_row=ttk.Frame(right,style='Card.TFrame')
+        secrets_row.pack(fill='x',pady=(5,8))
         ttk.Button(secrets_row,text='Save login securely',
-                   command=self._account_save_login).pack(side='left',padx=(0,7))
+                   command=self._account_save_login).pack(
+                       side='left',padx=(0,9))
         ttk.Button(secrets_row,text='Forget saved login',
                    command=self._account_forget_login).pack(side='left')
-        buttons=ttk.Frame(f,style='Panel.TFrame')
-        buttons.pack(fill='x',pady=(6,6))
-        ttk.Button(buttons,text='Add account',
-                   command=self._account_add).pack(side='left',padx=(0,6))
-        ttk.Button(buttons,text='Save changes',
-                   command=self._account_save_selected).pack(side='left',padx=(0,6))
-        ttk.Button(buttons,text='Remove entry',
-                   command=self._account_remove).pack(side='left')
-        actions=ttk.Frame(f,style='Panel.TFrame')
-        actions.pack(fill='x',pady=(3,10))
-        ttk.Button(actions,text='Open account login',
-                   command=self._account_open_login).pack(side='left',padx=(0,6))
-        ttk.Button(actions,text='Use selected G-Earth port',
-                   command=self._account_use_port).pack(side='left',padx=(0,6))
-        ttk.Button(actions,text='Check port',
-                   command=self._account_check_port).pack(side='left')
-        autoplay=ttk.Frame(f,style='Panel.TFrame')
-        autoplay.pack(fill='x',pady=(0,9))
+        ttk.Button(right,text='Open account login',
+                   style='Primary.TButton',
+                   command=self._account_open_login).pack(
+                       anchor='w',pady=(3,7))
+        tk.Label(right,text='Passwords stay in Windows Credential Manager, '
+                 'not settings.json or GitHub. First-time CAPTCHA or email '
+                 'verification is completed on Habbo, not in Companion.',
+                 font=('Segoe UI',9),bg=p['surface'],fg=p['muted'],
+                 wraplength=520,justify='left').pack(
+                     anchor='w',pady=(5,0))
+
+        tk.Frame(right,bg=p['border'],height=1).pack(
+            fill='x',pady=(17,14))
+        tk.Label(right,text='LAUNCH & AUTOMATION',
+                 font=('Segoe UI Semibold',9),
+                 fg=p['accent'],bg=p['surface']).pack(
+                     anchor='w',pady=(0,8))
+        autoplay=ttk.Frame(right,style='Card.TFrame')
+        autoplay.pack(fill='x',pady=(0,7))
         ttk.Button(autoplay,text='Auto Play selected',
-                   command=self._account_auto_play).pack(side='left',padx=(0,7))
+                   command=self._account_auto_play).pack(
+                       side='left',padx=(0,9))
         ttk.Button(autoplay,text='Auto Play all saved accounts',
-                   command=lambda:self._account_auto_play(all_accounts=True)).pack(
-                       side='left')
-        ttk.Button(f,text='Continue unfinished accounts',
+                   command=lambda:self._account_auto_play(
+                       all_accounts=True)).pack(side='left')
+        ttk.Button(right,text='Continue unfinished accounts',
                    command=self._account_resume_pending).pack(
-                       anchor='w',pady=(0,8))
-        tk.Label(f,textvariable=self.account_status_var,
-                 bg=COMPANION_UI['background'],fg=COMPANION_UI['success'],wraplength=620,
-                 justify='left').pack(anchor='w',fill='x',pady=(0,9))
-        tk.Label(f,
-            text='Auto Play all opens/checks each account browser, then tries '
-                 'Classic one at a time. If Classic or an external-app prompt '
-                 'needs manual action, finish it and choose Continue unfinished '
-                 'accounts. Already-requested Classic launches will NOT be '
-                 'replayed. G-Earth routing to multiple game clients is NOT yet implemented.',
-            fg=COMPANION_UI['muted'],bg=COMPANION_UI['background'],wraplength=620,
-            justify='left').pack(anchor='w',pady=(0,9))
-        tk.Label(f,
-            text='Packet isolation: This Companion instance attaches to ONE '
-                 'G-Earth endpoint at a time. Separate endpoints require separate '
-                 'G-Earth proxies configured by you. Starting another browser '
-                 'login does not create another intercepted Habbo connection. '
-                 'Changing endpoints while packet tools are attached is blocked. '
-                 'Do not assign the same extension port to two accounts.',
-            fg=COMPANION_UI['muted'],bg=COMPANION_UI['background'],wraplength=620,
-            justify='left').pack(anchor='w')
+                       anchor='w',pady=(0,11))
+        tk.Label(right,textvariable=self.account_status_var,
+                 bg=p['surface'],fg=p['success'],
+                 wraplength=520,justify='left',
+                 font=('Segoe UI',9)).pack(
+                     anchor='w',fill='x',pady=(2,9))
+        tk.Label(right,text='Auto Play launches Classic accounts sequentially '
+                 'when native launcher interaction is required. '
+                 'One G-Earth packet endpoint can be attached at a time; '
+                 'multiple endpoints need separate configured proxies.',
+                 font=('Segoe UI',9),fg=p['muted'],bg=p['surface'],
+                 wraplength=520,justify='left').pack(anchor='w')
         self._accounts_render()
 
     def _accounts_render(self,select_id=None):
@@ -6052,6 +6110,8 @@ class ChatOverlayApp:
             table.insert('', 'end',iid=item['id'],
                          values=(name,item['port'],
                                   self._account_run_states.get(item['id'],'Not started')))
+        if not select_id and self._account_profiles:
+            select_id=self._account_profiles[0]['id']
         if select_id and table.exists(select_id):
             table.selection_set(select_id)
             table.focus(select_id)
