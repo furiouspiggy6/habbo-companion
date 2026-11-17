@@ -75,6 +75,38 @@ class SessionCookieCapture(TestCase):
                                   {'urls':['https://www.habbo.com/']})])
         self.assertNotIn('Runtime.evaluate',str(calls))
 
+    def test_apex_habbo_site_captures_session_automatically(self):
+        """The official non-www Habbo site must be a valid login origin."""
+        page=signed_in_page()
+        page['url']='https://habbo.com/'
+        calls=[]
+        ns=execute(
+            account_browser_pages=lambda port:[page],
+            account_cdp_call=lambda ws,method,params:(
+                calls.append((method,params)) or {'cookies':[
+                    {'name':'session.id','domain':'habbo.com',
+                     'secure':True,'httpOnly':True,'value':'sid-apex'},
+                    {'name':'browser_token','domain':'.habbo.com',
+                     'secure':True,'httpOnly':True,'value':'token-apex'}
+                ]}),
+        )
+        self.assertEqual(ns['account_capture_habbo_session_cookies'](
+            43111,check_visible_login=False),('sid-apex','token-apex'))
+        self.assertEqual(calls,[('Network.getCookies',
+                                {'urls':['https://habbo.com/']})])
+
+    def test_official_only_cookie_capture_rejects_lookalike_domain(self):
+        page=signed_in_page()
+        page['url']='https://habbo.com.evil.example/login'
+        ns=execute(
+            account_browser_pages=lambda port:[page],
+            account_cdp_call=lambda *a,**k:
+                self.fail('Must not read non-Habbo browser cookies'),
+        )
+        with self.assertRaisesRegex(ValueError,'No official Habbo tab'):
+            ns['account_capture_habbo_session_cookies'](
+                43111,check_visible_login=False)
+
     def test_rejects_login_page_without_reading_any_cookie(self):
         page=signed_in_page()
         page['_preflight_step']={'kind':'login'}
