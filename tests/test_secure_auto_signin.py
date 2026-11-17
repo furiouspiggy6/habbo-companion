@@ -123,7 +123,7 @@ class AutoSigninTests(unittest.TestCase):
         a['account_cdp_call']=cdp
         self.assertTrue(a['account_login_input_confirmed']('ws','password'))
         self.assertFalse(a['account_login_input_confirmed']('ws','email'))
-        self.assertNotIn('password=',str(events))
+        self.assertNotIn('super-secret-password',str(events))
         self.assertNotIn('value=',str(events))
 
     def test_does_not_enter_password_when_form_not_verified(self):
