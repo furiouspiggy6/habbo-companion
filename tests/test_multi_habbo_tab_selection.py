@@ -104,7 +104,8 @@ class MultiHabboTabTests(unittest.TestCase):
         # Explicit, account-scoped import now needs the cookie API, but only
         # for the official Habbo HTTPS origin, never a full-browser dump.
         self.assertIn("'Network.getCookies'",CODE)
-        self.assertIn("'urls':['https://www.habbo.com/']",CODE)
+        self.assertIn("'urls':['https://'+target.hostname+'/']",CODE)
+        self.assertIn("target.hostname not in ('habbo.com','www.habbo.com')",CODE)
         self.assertIn("'inspect_error':'Browser inspection failed'",CODE)
 
 
