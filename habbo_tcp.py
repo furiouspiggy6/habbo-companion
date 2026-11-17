@@ -362,7 +362,7 @@ class HabboTcpSession:
         if release is None:
             release, is_current = official_release()
             if not is_current:
-                self.on_status("Official version lookup unavailable; using public 2026-11-04 AIR build (not live-verified)")
+                self.on_status("WIN63 release not verified by public config; using 2026-11-04 AIR build (not live-verified)")
         elif not _RELEASE.fullmatch(release):
             raise ValueError("Invalid Habbo client release version")
         self.stop.clear()
