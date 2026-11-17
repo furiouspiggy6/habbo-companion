@@ -1,5 +1,36 @@
 # Habbo Companion
 
+## Protocol Lab — passive G-Earth reader + local boofuzz (v1.1.69)
+
+Open **Protocol Lab** in the Companion sidebar. Start the usual G-Earth engine and
+Habbo AIR session through **Packet Viewer**, then click **Start / Stop passive
+reader**. The new reader reuses Companion's existing G-Python extension: it
+records only direction, numerical message ID, and in-memory byte count.
+It never records raw payloads, usernames, messages, SSO tickets, or passwords.
+Export the aggregated, redacted metadata as JSON when useful.
+
+For automated tests, install the optional dependency into **the same Python
+interpreter running Companion**:
+
+\`\`\`powershell
+python -m pip install boofuzz==0.4.2
+\`\`\`
+
+Click **Run 60 local boofuzz cases** to create a temporary synthetic TCP server
+bound to \`127.0.0.1\` on a random port. boofuzz mutates a synthetic
+4-byte frame length / 2-byte message ID / 2-byte text length format. The numeric
+seed can come from passively observed outgoing packet IDs, but **no captured
+payload is ever replayed or forwarded to the fuzzer**. The boofuzz database
+is saved under \`%APPDATA%\\HabboViewChat\\fuzz_lab\`. Click **Analyse results
+with local Ollama** to send only aggregate *mock-server* results to
+\`http://127.0.0.1:11434\`, using \`qwen2.5-coder:7b\`.
+
+**Safety boundary:** This mode has no setting for a remote test target. It does
+not send malformed packets to G-Earth or Habbo and cannot establish a finding
+about Habbo's production infrastructure. No separate extension port is required.
+It does not alter the existing Packet Viewer, Manipulator or Coffee Pass Loop.
+
+
 Windows Habbo AIR companion with viewport-filtered chat, original bubble image support, scrollback, and a G-Earth packet viewer.
 
 ## v1.0.2 — Automatic G-Earth preparation
