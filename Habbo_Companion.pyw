@@ -36,11 +36,93 @@ import hashlib
 import math
 import base64
 import socket
+import socketserver
 import struct
 import importlib.util
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
+
+
+def validate_local_habbo_frame(frame):
+    """Validate the synthetic lab's 4+2+2+N format, not Habbo's real server."""
+    if not isinstance(frame,bytes) or len(frame)<8:
+        return False
+    declared=int.from_bytes(frame[:4],'big')
+    if declared<4 or declared>4096 or declared!=len(frame)-4:
+        return False
+    text_length=int.from_bytes(frame[6:8],'big')
+    return text_length==declared-4
+
+
+def run_local_boofuzz(seed_id=896, cases=60, output_dir=None):
+    """Fuzz an ephemeral 127.0.0.1 mock. Never connect to G-Earth or Habbo."""
+    from boofuzz import (Session,Target,TCPSocketConnection,s_initialize,s_size,
+                         s_block_start,s_block_end,s_word,s_string,s_get)
+    if not isinstance(seed_id,int) or not 0<=seed_id<=65535:
+        raise ValueError('Invalid numeric message ID')
+    if not isinstance(cases,int) or not 1<=cases<=100:
+        raise ValueError('Use 1 to 100 local test cases')
+    stats={'accepted':0,'rejected':0,'requests':0}
+    lock=threading.Lock()
+
+    class LocalHandler(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(0.25)
+            frame=b''
+            try:
+                while len(frame)<8192:
+                    try:chunk=self.request.recv(4096)
+                    except socket.timeout:break
+                    if not chunk:break
+                    frame+=chunk
+                    if len(frame)>=4:
+                        expected=int.from_bytes(frame[:4],'big')+4
+                        if expected>4096 or len(frame)>=expected:break
+                accepted=validate_local_habbo_frame(frame)
+                with lock:
+                    stats['requests']+=1
+                    stats['accepted' if accepted else 'rejected']+=1
+                self.request.sendall(b'OK' if accepted else b'REJECT')
+            except OSError:
+                pass
+
+    class LoopbackServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address=True
+        daemon_threads=True
+
+    # A random port is assigned by the OS. No configuration accepts remote hosts.
+    server=LoopbackServer(('127.0.0.1',0),LocalHandler)
+    thread=threading.Thread(target=server.serve_forever,daemon=True)
+    thread.start()
+    output_dir=Path(output_dir) if output_dir else APP_DIR/'fuzz_lab'
+    output_dir.mkdir(parents=True,exist_ok=True)
+    db=output_dir/('boofuzz_'+datetime.now().strftime('%Y%m%d_%H%M%S')+'.db')
+    try:
+        s_initialize('synthetic_habbo_frame')
+        s_size('frame_body',length=4,endian='>',name='declared_length')
+        if s_block_start('frame_body'):
+            s_word(seed_id,endian='>',name='message_id')
+            s_size('synthetic_text',length=2,endian='>',name='text_length')
+            if s_block_start('synthetic_text'):
+                s_string('sample',max_len=32,name='synthetic_value')
+                s_block_end()
+            s_block_end()
+        session=Session(
+            target=Target(connection=TCPSocketConnection('127.0.0.1',
+                             server.server_address[1],recv_timeout=0.5)),
+            index_end=cases, sleep_time=0.01, receive_data_after_each_request=True,
+            web_address='127.0.0.1',web_port=0,keep_web_open=False,
+            db_filename=str(db))
+        session.connect(s_get('synthetic_habbo_frame'))
+        session.fuzz()
+        return dict(stats,seed_id=seed_id,case_limit=cases,
+                    scope='localhost synthetic mock only',boofuzz_db=str(db))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
+
 
 APP_NAME = 'Habbo View Chat'
 APP_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'HabboViewChat'
@@ -4567,6 +4649,14 @@ class ChatOverlayApp:
         self.packet_active=False
         self.packet_started=False
         self.packet_extension=None
+        # Passive G-Earth metadata: no raw payloads, tickets, or chat text stored.
+        self.fuzz_monitoring=False
+        self.fuzz_counts={}
+        self.fuzz_seen=0
+        self.fuzz_running=False
+        self.fuzz_last_result=None
+        self.fuzz_live_var=tk.StringVar(value='Passive reader OFF. Connect G-Earth first.')
+        self.fuzz_lab_var=tk.StringVar(value='Local boofuzz lab idle; never sends to Habbo.')
         self._packet_auto_retry_after=0.0
         self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
         self.packet_rules=[]
@@ -5011,6 +5101,7 @@ class ChatOverlayApp:
             'tcp':('Direct TCP','Official game-server connections and live diagnostics'),
             'chat':('View Chat','Original Habbo bubbles and overlay settings'),
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
+            'fuzz':('Protocol Lab','Passive G-Earth AIR reader and local boofuzz tests'),
             'manip':('Packet Manipulator','Advanced packet rules and manual actions'),
             'classic':('Direct Classic','Launch the installed Habbo client'),
             'headless':('Headless Test','Local-only connection testing'),
@@ -5042,6 +5133,7 @@ class ChatOverlayApp:
             ('chat','View Chat')))
         self._ui_add_nav('TOOLS',(
             ('packet','Packet Viewer'),
+            ('fuzz','Protocol Lab'),
             ('manip','Packet Manipulator'),
             ('classic','Direct Classic'),
             ('headless','Headless Test')))
@@ -5083,6 +5175,8 @@ class ChatOverlayApp:
             self._ui_pages['overview'],'overview'))
         self._make_packet_panel(self._ui_scroll_area(
             self._ui_pages['packet'],'packet'))
+        self._make_fuzz_panel(self._ui_scroll_area(
+            self._ui_pages['fuzz'],'fuzz'))
         self._make_accounts_panel(self._ui_scroll_area(
             self._ui_pages['accounts'],'accounts'))
         self._make_direct_classic_panel(self._ui_scroll_area(
@@ -6924,6 +7018,117 @@ class ChatOverlayApp:
                  'If Windows accessibility cannot press Connect, G-Earth stays open for manual connection.',
                  bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',font=('Segoe UI',9),
                  wraplength=620).pack(anchor='w',pady=(12,0))
+
+
+    def _make_fuzz_panel(self,parent):
+        """One read-only live feed and an entirely separate loopback fuzz lab."""
+        p=COMPANION_UI
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=18)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='PROTOCOL LAB',font=('Segoe UI Semibold',18),
+                 bg=p['background'],fg=p['text']).pack(anchor='w')
+        tk.Label(holder,text='Read Habbo AIR packet metadata through the existing G-Earth extension. '
+                 'No raw packet contents, passwords, SSO tickets or chat are saved.',
+                 wraplength=650,justify='left',bg=p['background'],fg=p['muted']).pack(anchor='w',pady=(6,12))
+        ttk.Label(holder,textvariable=self.fuzz_live_var,style='Panel.TLabel',
+                  wraplength=650).pack(anchor='w',pady=(0,8))
+        live=ttk.Frame(holder,style='Panel.TFrame');live.pack(fill='x',pady=(0,16))
+        ttk.Button(live,text='Start / Stop passive reader',
+                   command=self._fuzz_toggle_reader).pack(side='left',padx=(0,8))
+        ttk.Button(live,text='Export redacted metadata JSON',
+                   command=self._fuzz_export).pack(side='left')
+        ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(6,14))
+        tk.Label(holder,text='LOCAL BOOFUZZ TEST',font=('Segoe UI Semibold',13),
+                 bg=p['background'],fg=p['text']).pack(anchor='w')
+        tk.Label(holder,text='Uses the most frequently observed outgoing message ID '
+                 'as a numeric seed for a synthetic frame. The generated payloads go ONLY '
+                 'to an ephemeral mock server bound to 127.0.0.1. This cannot diagnose '
+                 'a flaw in Habbo production.',
+                 wraplength=650,justify='left',bg=p['background'],fg=p['muted']).pack(anchor='w',pady=(5,10))
+        ttk.Label(holder,textvariable=self.fuzz_lab_var,style='Panel.TLabel',
+                  wraplength=650).pack(anchor='w',pady=(0,8))
+        bar=ttk.Frame(holder,style='Panel.TFrame');bar.pack(fill='x')
+        ttk.Button(bar,text='Run 60 local boofuzz cases',
+                   command=self._fuzz_start_lab).pack(side='left',padx=(0,8))
+        ttk.Button(bar,text='Analyse results with local Ollama',
+                   command=self._fuzz_analyse_ollama).pack(side='left')
+        tk.Label(holder,text='Optional dependency: install boofuzz into the Python '
+                 'environment running Companion. All test connections are hardcoded to loopback.',
+                 wraplength=650,justify='left',bg=p['background'],fg=p['faint']).pack(anchor='w',pady=(16,0))
+
+    def _fuzz_toggle_reader(self):
+        if self.fuzz_monitoring:
+            self.fuzz_monitoring=False
+            self.fuzz_live_var.set(f'Paused: {self.fuzz_seen} packets; '
+                                   f'{len(self.fuzz_counts)} direction/ID groups.')
+        elif not self.packet_started or not self._habbo_session_connected:
+            self.fuzz_live_var.set('Attach Companion to G-Earth and Habbo AIR first.')
+        else:
+            self.fuzz_monitoring=True
+            self.fuzz_live_var.set('Passive reader ON — recording only ID, direction and byte length.')
+
+    def _fuzz_export(self):
+        if not self.fuzz_counts:
+            self.fuzz_live_var.set('Nothing captured; start the passive reader first.')
+            return
+        destination=filedialog.asksaveasfilename(
+            title='Save redacted G-Earth metadata',defaultextension='.json',
+            filetypes=[('JSON','*.json')])
+        if not destination:return
+        report={'source':'G-Earth read-only Habbo AIR metadata',
+                'total':self.fuzz_seen,'packet_content_included':False,
+                'observations':[{'direction':d,'message_id':mid,
+                                 'count':item['count'],'minimum_bytes':item['min'],
+                                 'maximum_bytes':item['max']}
+                                for (d,mid),item in sorted(self.fuzz_counts.items())]}
+        try:
+            Path(destination).write_text(json.dumps(report,indent=2),encoding='utf-8')
+            self.fuzz_live_var.set('Saved redacted packet metadata: '+str(destination))
+        except OSError as exc:
+            self.fuzz_live_var.set('Export failed: '+str(exc)[:130])
+
+    def _fuzz_start_lab(self):
+        if self.fuzz_running:
+            self.fuzz_lab_var.set('Local boofuzz session already running.')
+            return
+        outgoing=[(v['count'],mid) for (direction,mid),v in self.fuzz_counts.items()
+                  if direction=='Outgoing']
+        seed=max(outgoing)[1] if outgoing else 896
+        self.fuzz_running=True
+        self.fuzz_lab_var.set(f'Running up to 60 synthetic cases on localhost (seed ID {seed})...')
+        def work():
+            try:
+                result=run_local_boofuzz(seed_id=seed,cases=60)
+                self._packet_put(('fuzz_result',result))
+            except ModuleNotFoundError:
+                self._packet_put(('fuzz_error',
+                    'boofuzz not installed. Run: "'+sys.executable+
+                    '" -m pip install boofuzz==0.4.2'))
+            except Exception as exc:
+                self._packet_put(('fuzz_error',type(exc).__name__+': '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
+
+    def _fuzz_analyse_ollama(self):
+        if not self.fuzz_last_result:
+            self.fuzz_lab_var.set('Run a local boofuzz test first.')
+            return
+        summary=dict(self.fuzz_last_result)
+        self.fuzz_lab_var.set('Requesting local Ollama explanation (no packet contents sent)...')
+        def work():
+            prompt=('Explain these SYNTHETIC localhost mock-server fuzz results. '
+                    'Do not infer vulnerabilities in Habbo. Give one practical '
+                    'parser hardening recommendation. Data: '+json.dumps(summary))
+            payload=json.dumps({'model':'qwen2.5-coder:7b','prompt':prompt,
+                                'stream':False}).encode('utf-8')
+            try:
+                req=urllib.request.Request('http://127.0.0.1:11434/api/generate',
+                    data=payload,headers={'Content-Type':'application/json'})
+                with urllib.request.urlopen(req,timeout=90) as resp:
+                    answer=json.load(resp).get('response','No response')
+                self._packet_put(('fuzz_analysis',str(answer)[:1800]))
+            except Exception as exc:
+                self._packet_put(('fuzz_error','Local Ollama: '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
 
     def _make_manipulator_panel(self,parent):
         # Keep original rules and packet replayer; add a separate action-loop tab.
@@ -8952,6 +9157,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             ext.on_event('connection_end',disconnected)
             def hook(direction):
                 def on_message(msg):
+                    if self.fuzz_monitoring:
+                        try:
+                            mid=int(msg.packet.header_id())
+                            raw=getattr(msg.packet,'bytearray',None)
+                            if 0<=mid<=65535 and isinstance(raw,(bytes,bytearray)):
+                                self._packet_put(('fuzz_observation',direction,mid,len(raw)))
+                        except (ValueError,TypeError,AttributeError):
+                            pass
                     if not (self.packet_active or self.manipulation_enabled or
                             self.config.get('whispers_right',True) or direction=='Incoming'):
                         return
@@ -9058,6 +9271,34 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         for _ in range(150):
             try:item=self.packet_queue.get_nowait()
             except queue.Empty:break
+            if item[0]=='fuzz_observation':
+                _,direction,mid,size=item
+                key=(direction,mid)
+                record=self.fuzz_counts.setdefault(key,{'count':0,'min':size,'max':size})
+                record['count']+=1
+                record['min']=min(record['min'],size)
+                record['max']=max(record['max'],size)
+                self.fuzz_seen+=1
+                if self.fuzz_seen%25==0:
+                    self.fuzz_live_var.set(f'Read-only: {self.fuzz_seen} packets, '
+                                           f'{len(self.fuzz_counts)} direction/ID groups.')
+                continue
+            if item[0]=='fuzz_result':
+                self.fuzz_running=False
+                self.fuzz_last_result=item[1]
+                result=item[1]
+                self.fuzz_lab_var.set(
+                    f"Local boofuzz done: {result['requests']} requests; "
+                    f"{result['accepted']} accepted / {result['rejected']} rejected. "
+                    'Results are for the synthetic mock only.')
+                continue
+            if item[0]=='fuzz_error':
+                self.fuzz_running=False
+                self.fuzz_lab_var.set(item[1])
+                continue
+            if item[0]=='fuzz_analysis':
+                self.fuzz_lab_var.set('Ollama: '+item[1])
+                continue
             if item[0]=='classic_ws_probe':
                 self._classic_probe_running=False
                 self.tcp_status_var.set(item[1])
