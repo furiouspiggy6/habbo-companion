@@ -602,6 +602,7 @@ DEFAULT = dict(
     clientless_gearth_intercept=False,
     clientless_auto_walk=False,
     clientless_walk_presets={},
+    clientless_anti_afk_profiles={},
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -5281,6 +5282,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans={}
         self._bot_self_ids={}
         self._bot_user_roster={}
+        # Read-only, generation-scoped avatar location for stationary anti-AFK.
+        self._bot_anti_afk_rooms={}
+        self._bot_anti_afk_positions={}
+        self._bot_anti_afk_last={}
+        self.bot_anti_afk_var=tk.BooleanVar(value=False)
+        self.bot_anti_afk_status_var=tk.StringVar(
+            value='Anti-AFK OFF for the selected profile.')
         self.bot_auto_walk_var=tk.BooleanVar(
             value=bool(self.config.get('clientless_auto_walk',False)))
         self.bot_walk_primary_var=tk.StringVar(value='')
@@ -6262,6 +6270,22 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_load_walk_preset).pack(side='left')
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
+                  style='Section.TLabel').pack(anchor='w',pady=(1,5))
+        ttk.Checkbutton(
+            frame,text='Enable anti-AFK for this saved account',
+            variable=self.bot_anti_afk_var,
+            command=self._bot_anti_afk_changed,
+            style='Panel.TCheckbutton').pack(anchor='w',pady=(0,6))
+        ttk.Label(frame,text='When enabled and in a confirmed room, '
+                  'sends a LookTo action aimed at your avatar\'s current '
+                  'tile about every four minutes. Does not walk or chat. '
+                  'Pauses during auto-walk and other actions. This is not '
+                  'the original HabboAIR internal idle override, and '
+                  'server-side AFK prevention is not guaranteed.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,textvariable=self.bot_anti_afk_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6293,6 +6317,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_chat_log.pack(fill='x',pady=(0,6))
         self._bot_refresh_accounts()
         self._bot_load_walk_preset()
+        self._bot_anti_afk_load_selected()
+        # One bounded Tk timer for all authenticated profiles; no extra
+        # background threads, no activity when disabled or disconnected.
+        self.root.after(10000,self._bot_anti_afk_tick)
 
     def _bot_refresh_accounts(self):
         if not hasattr(self,'bot_account_picker'):
@@ -6302,6 +6330,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_account_picker.configure(values=items)
         if current not in items:
             self.bot_account_var.set(items[0] if items else '')
+        self._bot_anti_afk_load_selected()
 
     def _bot_selected_profile(self):
         selected=self.bot_account_var.get()
@@ -6452,6 +6481,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         """Arm only a saved, user-enabled route for the requested room."""
         self._bot_walk_plans.pop(ident,None)
         self._bot_user_roster.pop(ident,None)
+        self._bot_anti_afk_rooms.pop(ident,None)
+        self._bot_anti_afk_positions.pop(ident,None)
         if not self.bot_auto_walk_var.get():
             return
         stored=self.config.get('clientless_walk_presets',{})
@@ -6635,6 +6666,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._bot_run_account(account)
 
     def _bot_run_selected(self):
+        self._bot_anti_afk_load_selected()
         account=self._bot_selected_profile()
         if account is None:
             self.bot_status_var.set('Choose a saved Habbo account profile first.')
@@ -7065,6 +7097,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         getattr(self,'_bot_walk_plans',{}).pop(ident,None)
         getattr(self,'_bot_self_ids',{}).pop(ident,None)
         getattr(self,'_bot_user_roster',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_rooms',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_positions',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_last',{}).pop(ident,None)
         generation=self._tcp_generation.get(ident,0)+1
         self._tcp_generation[ident]=generation
         self._tcp_inflight.add(ident)
@@ -7169,6 +7204,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans.pop(ident,None)
         self._bot_self_ids.pop(ident,None)
         self._bot_user_roster.pop(ident,None)
+        self._bot_anti_afk_rooms.pop(ident,None)
+        self._bot_anti_afk_positions.pop(ident,None)
+        self._bot_anti_afk_last.pop(ident,None)
         self._tcp_generation[ident]=self._tcp_generation.get(ident,0)+1
         self._tcp_inflight.discard(ident)
         session=self._tcp_sessions.pop(ident,None)
@@ -11809,6 +11847,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._tcp_sessions[ident]=item[3]
                     self._tcp_inflight.discard(ident)
                     if item[3].authenticated:
+                        self._bot_anti_afk_last[ident]=time.monotonic()
                         bridge=self._bot_gearth_bridges.get(ident)
                         self._tcp_states[ident]=(
                             'Authenticated (G-Earth gameplay proxy)'
