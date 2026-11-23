@@ -55,7 +55,7 @@ def validate_official_release_url(url, kind, version=None):
         if version is None:
             # Standalone ZIP validation is useful at the download boundary.
             found=re.fullmatch(
-                r'Habbo_Companion_Update_v(\\d{1,4}\\.\\d{1,4}\\.\\d{1,4})\\.zip',
+                r'Habbo_Companion_Update_v(\d{1,4}\.\d{1,4}\.\d{1,4})\.zip',
                 url[len(TRUSTED_RELEASE_ROOT):] if
                 url.startswith(TRUSTED_RELEASE_ROOT) else '')
             if not found:
