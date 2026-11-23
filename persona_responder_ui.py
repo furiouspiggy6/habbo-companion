@@ -204,9 +204,12 @@ class PersonaResponderMixin:
             selectforeground=p['background'],borderwidth=0,highlightthickness=1,
             relief='flat')
         self.responder_target_search_entry.bind(
-            '<KeyRelease>',self._responder_filter_target_users)
+            '<KeyRelease>',lambda event:self._responder_refresh_room_users(
+                show=event.keysym not in (
+                    'Up','Down','Return','Escape','Tab','Left','Right')))
         self.responder_target_search_entry.bind(
-            '<FocusIn>',lambda event:self._responder_filter_target_users())
+            '<FocusIn>',lambda event:self._responder_refresh_room_users(
+                show=True))
         self.responder_target_search_entry.bind(
             '<Escape>',lambda event:self._responder_hide_target_matches())
         self.responder_target_search_entry.bind(
