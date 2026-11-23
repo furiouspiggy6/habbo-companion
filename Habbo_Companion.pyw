@@ -44,7 +44,8 @@ import importlib.util
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
-from persona_responder import chat_expression_from_template
+from persona_responder import (chat_expression_from_template,
+                               verified_outgoing_chat_frame)
 from persona_responder_ui import PersonaResponderMixin
 
 
@@ -9458,8 +9459,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             pass
                     if not (self.packet_active or self.manipulation_enabled or
                             self.config.get('whispers_right',True) or direction=='Incoming'
-                            or (self.responder.enabled and self._responder_chat_template is None)):
+                            or (self.responder.enabled and self._responder_chat_template is None)
+                            or self._responder_probe_token):
                         return
+                    # The user must explicitly type a fresh, unique phrase in
+                    # Habbo public chat. Match the *raw outgoing frame* before
+                    # asking G-Earth to format it; name tables can be missing.
+                    if direction=='Outgoing' and self._responder_probe_token:
+                        phrase=self._responder_probe_token
+                        if time.monotonic()-self._responder_probe_started<=90:
+                            raw=getattr(msg.packet,'bytearray',None)
+                            if verified_outgoing_chat_frame(raw,phrase):
+                                self._responder_probe_token=None
+                                self._packet_put(('responder_wire_template',bytes(raw)))
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
                     # g_string() is a raw/legacy byte rendering. The previous
@@ -9741,6 +9753,16 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='packet_connect_error':
                 self.packet_connection_status.set('Packet tools failed: '+item[1])
                 continue
+            if item[0]=='responder_wire_template':
+                self._responder_wire_template=item[1]
+                self._responder_probe_token=None
+                self._responder_probe_started=0.0
+                self._responder_probe_phrase_var.set('')
+                self.responder_status_var.set(
+                    'READY: verified outgoing Chat frame learned from your typed phrase.')
+                self._responder_log(
+                    'READY: verified outgoing Chat packet from your manually typed phrase.')
+                continue
             if item[0]=='responder_outgoing_seen':
                 self._responder_log(
                     'G-Earth observed outgoing traffic; looking for a named Chat packet.')
@@ -9889,11 +9911,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if item[1]:
-                    # New AIR connection; never reuse a prior Chat packet ID.
+                    # Never reuse a Chat format from another AIR connection.
                     self._responder_chat_template=None
+                    self._responder_wire_template=None
+                    self._responder_probe_token=None
+                    self._responder_probe_started=0.0
+                    self._responder_probe_phrase_var.set('')
                     self._responder_outgoing_seen=False
                 if not item[1]:
                     self._responder_chat_template=None
+                    self._responder_wire_template=None
+                    self._responder_probe_token=None
+                    self._responder_probe_started=0.0
+                    self._responder_probe_phrase_var.set('')
                     self._responder_outgoing_seen=False
                     self._responder_generation+=1
                     self.responder.running=False
