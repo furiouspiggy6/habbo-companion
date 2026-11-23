@@ -1,3 +1,19 @@
+HABBO COMPANION v1.1.80 — ADJUSTABLE AI REPLY SPEED
+======================================================
+
+AI RESPONDER
+- New REPLY SPEED slider visible on the main responder page.
+- Faster (5 seconds) to Slower (2 minutes), in steps of 5 seconds.
+- Default interval: 30 seconds between AI-generated replies.
+- Dragging adjusts the live responder immediately. Releasing the slider
+  or clicking Save changes persists the selection for the next launch.
+- First eligible reply can be immediate; cooldown applies between replies.
+- The slider limits how often the bot replies, not the literal speed of
+  keyboard typing or an exact delay for every new message.
+- Never enables AI or auto-send by itself. No browser or G-Earth packet
+  sending changes.
+
+
 HABBO COMPANION v1.1.79 — LIVE ROOM SEARCH & COLLAPSING LAYOUT
 =================================================================
 
