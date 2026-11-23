@@ -181,7 +181,8 @@ class PersonaResponder:
     """Main-thread state machine; API work is delegated to a worker."""
 
     def __init__(self, log_dir):
-        self.log_dir = Path(log_dir)
+        self.log_dir = Path(log_dir)  # Read-only style-sample source
+        self.archive_dir = self.log_dir  # Per-user chat archive destination
         self.enabled = False
         # Independent of whether AI responding is enabled. The app feeds
         # public room events here even when the AI is OFF or the page is hidden.
@@ -254,8 +255,11 @@ class PersonaResponder:
         if not name or not body:
             return False
         try:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            with self._file_for(name).open("a", encoding="utf-8") as stream:
+            self.archive_dir.mkdir(parents=True, exist_ok=True)
+            # Archive location is fixed independently of any folder selected
+            # for copying someone else's writing style.
+            target = self.archive_dir / safe_persona_filename(name)
+            with target.open("a", encoding="utf-8") as stream:
                 stamp = time.strftime(
                     "%Y-%m-%d %H:%M:%S",
                     time.localtime(time.time() if now is None else now))
