@@ -4035,6 +4035,63 @@ def build_coffee_group_sequence(cup_one,cup_two,recipients,extra_sources=()):
     return tuple(sequence)
 
 
+def parse_outfit_update_expression(expression):
+    """Only accept the known two-string, named UpdateFigureData outfit action.
+
+    All other outgoing packets are ignored, including similarly named wardrobe
+    save requests. Figures may contain only Habbo clothing token syntax.
+    """
+    if not isinstance(expression,str) or len(expression)>1100:
+        return None
+    match=re.fullmatch(
+        r'\{out:UpdateFigureData\}\{s:"([MFmf])"\}\{s:"([^"\\]{5,1024})"\}',
+        expression)
+    if not match:
+        return None
+    gender,figure=match.group(1).upper(),match.group(2)
+    parts=figure.split('.')
+    if not 2<=len(parts)<=50:
+        return None
+    if not all(re.fullmatch(r'[a-z]{2}-[0-9]{1,7}(?:-[0-9]{1,7}){1,3}',part)
+               for part in parts):
+        return None
+    if not any(part.startswith('hd-') for part in parts):
+        return None
+    return gender,figure
+
+
+def outfit_update_expression(gender,figure):
+    """Build a G-Earth packet with a named live header from validated values."""
+    pair=parse_outfit_update_expression(
+        '{out:UpdateFigureData}{s:'+json.dumps(str(gender))+
+        '}{s:'+json.dumps(str(figure))+'}')
+    if pair is None:
+        raise ValueError('Invalid saved outfit. Capture a normal Looks save in Habbo.')
+    return ('{out:UpdateFigureData}{s:'+json.dumps(pair[0])+
+            '}{s:'+json.dumps(pair[1])+'}')
+
+
+def sanitize_outfit_presets(raw):
+    """Persist only harmless validated figure/gender pairs, max 8."""
+    result=[]
+    if not isinstance(raw,list):
+        return result
+    seen=set()
+    for entry in raw[:48]:
+        if not isinstance(entry,dict):
+            continue
+        gender,figure=entry.get('gender'),entry.get('figure')
+        try:outfit_update_expression(gender,figure)
+        except ValueError:continue
+        key=(str(gender).upper(),figure)
+        if key not in seen:
+            seen.add(key)
+            result.append({'gender':key[0],'figure':figure})
+        if len(result)>=8:
+            break
+    return result
+
+
 def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
     """Build one two-cup/two-pass outgoing cycle from captured action IDs."""
     def positive_id(raw, label):
@@ -5216,6 +5273,22 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._coffee_generation=0
         self._coffee_after_id=None
         self._coffee_start_queued=False
+        # Saved looks are validated client-observed clothing figure strings,
+        # never arbitrary packets, credentials, or user-supplied headers.
+        self.outfit_presets=sanitize_outfit_presets(
+            self.config.get('outfit_presets',[]))
+        self.outfit_status_var=tk.StringVar(
+            value='Capture at least two looks from the Habbo Looks editor.')
+        self.outfit_delay_var=tk.StringVar(
+            value=str(self.config.get('outfit_delay','0.3')))
+        self._outfit_capture_pending=False
+        self._outfit_capture_generation=0
+        self._outfit_running=False
+        self._outfit_generation=0
+        self._outfit_after_id=None
+        self._outfit_index=0
+        self._outfit_sent=0
+        self._outfit_interval=0.3
         self._coffee_queue_after_id=None
         self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
@@ -5568,6 +5641,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'chat':('View Chat','Original Habbo bubbles and overlay settings'),
             'responder':('AI Responder','Room-aware writing style and target controls'),
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
+            'outfits':('Outfit Cycler','Capture looks and rotate through them'),
             'fuzz':('Protocol Lab','Passive G-Earth AIR reader and local boofuzz tests'),
             'manip':('Packet Manipulator','Advanced packet rules and manual actions'),
             'classic':('Direct Classic','Launch the installed Habbo client'),
@@ -5601,6 +5675,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('responder','AI Responder')))
         self._ui_add_nav('TOOLS',(
             ('packet','Packet Viewer'),
+            ('outfits','Outfit Cycler'),
             ('fuzz','Protocol Lab'),
             ('manip','Packet Manipulator'),
             ('classic','Direct Classic'),
@@ -5643,6 +5718,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['overview'],'overview'))
         self._make_packet_panel(self._ui_scroll_area(
             self._ui_pages['packet'],'packet'))
+        self._make_outfit_panel(self._ui_scroll_area(
+            self._ui_pages['outfits'],'outfits'))
         self._make_fuzz_panel(self._ui_scroll_area(
             self._ui_pages['fuzz'],'fuzz'))
         self._make_responder_panel(self._ui_scroll_area(
@@ -7902,6 +7979,215 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._make_coffee_loop_panel(coffee_tab)
 
 
+    def _make_outfit_panel(self,parent):
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='OUTFIT CYCLER',font=('Segoe UI Semibold',18),
+                 fg=COMPANION_UI['text'],bg=COMPANION_UI['background']).pack(anchor='w')
+        ttk.Label(holder,text='Capture your own outfits by saving different looks '
+                  'inside Habbo. The cycler sends the same named outfit-change '
+                  'action, one at a time. No packet ID is guessed.',
+                  style='Panel.TLabel',wraplength=610).pack(anchor='w',pady=(5,13))
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=610).pack(anchor='w',pady=(0,8))
+        self.outfit_listbox=tk.Listbox(holder,height=8,exportselection=False,
+                  bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],
+                  selectbackground=COMPANION_UI['raised'],
+                  selectforeground=COMPANION_UI['text'],
+                  relief='flat',font=('Segoe UI',10))
+        self.outfit_listbox.pack(fill='x',pady=(0,9))
+        bar=ttk.Frame(holder,style='Panel.TFrame')
+        bar.pack(fill='x',pady=(0,12))
+        ttk.Button(bar,text='Capture next outfit change',
+                   command=self._arm_outfit_capture).pack(side='left',padx=(0,8))
+        ttk.Button(bar,text='Remove selected',
+                   command=self._remove_outfit).pack(side='left')
+        speed=ttk.Frame(holder,style='Panel.TFrame')
+        speed.pack(fill='x',pady=(0,12))
+        ttk.Label(speed,text='Seconds per outfit',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(speed,textvariable=self.outfit_delay_var,width=9).pack(
+            side='left',padx=(9,12))
+        ttk.Label(speed,text='0.1–10 seconds; default 0.3',
+                  style='Panel.TLabel').pack(side='left')
+        buttons=ttk.Frame(holder,style='Panel.TFrame')
+        buttons.pack(fill='x',pady=(0,10))
+        ttk.Button(buttons,text='Start cycling',style='Primary.TButton',
+                   command=self._start_outfit_cycle).pack(side='left',padx=(0,10))
+        ttk.Button(buttons,text='STOP',
+                   command=self._stop_outfit_cycle).pack(side='left')
+        ttk.Label(holder,textvariable=self.outfit_status_var,
+                  style='Panel.TLabel',wraplength=610).pack(anchor='w',pady=(0,10))
+        ttk.Label(holder,text='Instructions: Connect G-Earth, press Capture, then '
+                  'open Looks in Habbo and apply/save a different outfit. '
+                  'Repeat for at least two looks. Outfits are saved locally. '
+                  'Cycling stops on disconnect or error. Local send acceptance '
+                  'does not guarantee the server applied every look.',
+                  style='Panel.TLabel',wraplength=610).pack(anchor='w')
+        self._render_outfit_presets()
+
+    def _render_outfit_presets(self):
+        if not hasattr(self,'outfit_listbox'):
+            return
+        selected=self.outfit_listbox.curselection()
+        keep=selected[0] if selected else None
+        self.outfit_listbox.delete(0,'end')
+        for index,preset in enumerate(self.outfit_presets):
+            self.outfit_listbox.insert(
+                'end',f'Outfit {index+1}  ·  {preset["gender"]}  ·  '+
+                f'{len(preset["figure"].split("."))} clothing parts')
+        if keep is not None and keep<len(self.outfit_presets):
+            self.outfit_listbox.selection_set(keep)
+
+    def _arm_outfit_capture(self):
+        if self._outfit_running:
+            self.outfit_status_var.set('Press STOP before recording more looks.')
+            return
+        if (not self.packet_started or self.packet_extension is None
+            or not self._habbo_session_connected):
+            self.outfit_status_var.set('Connect Habbo through G-Earth before capturing.')
+            return
+        if len(self.outfit_presets)>=8:
+            self.outfit_status_var.set('Eight outfits saved. Remove one to capture another.')
+            return
+        self._outfit_capture_generation+=1
+        generation=self._outfit_capture_generation
+        self._outfit_capture_pending=True
+        self.outfit_status_var.set(
+            'Capture armed: change your look and press Save in Habbo within 30 seconds.')
+        self.root.after(30000,
+                        lambda gen=generation:self._outfit_capture_timeout(gen))
+
+    def _outfit_capture_timeout(self,generation):
+        if (generation!=self._outfit_capture_generation
+            or not self._outfit_capture_pending):
+            return
+        self._outfit_capture_pending=False
+        self.outfit_status_var.set(
+            'No verified UpdateFigureData action captured. '
+            'Try another manual Looks save with Habbo connected via G-Earth.')
+
+    def _receive_outfit_capture(self,gender,figure):
+        if not self._outfit_capture_pending:
+            return
+        self._outfit_capture_pending=False
+        try:
+            outfit_update_expression(gender,figure)
+        except ValueError:
+            self.outfit_status_var.set('Look capture rejected: invalid clothing fields.')
+            return
+        pair={'gender':gender,'figure':figure}
+        if pair in self.outfit_presets:
+            self.outfit_status_var.set(
+                'That outfit is already saved. Capture a visibly different look.')
+            return
+        if len(self.outfit_presets)>=8:
+            self.outfit_status_var.set('Eight outfits saved; remove one first.')
+            return
+        self.outfit_presets.append(pair)
+        self.config['outfit_presets']=list(self.outfit_presets)
+        self.save()
+        self._render_outfit_presets()
+        self.outfit_status_var.set(
+            f'Outfit {len(self.outfit_presets)} saved from a real Habbo clothing change. '
+            'Capture one more or press Start cycling.')
+
+    def _remove_outfit(self):
+        if self._outfit_running:
+            self.outfit_status_var.set('Stop cycling before editing saved looks.')
+            return
+        indices=self.outfit_listbox.curselection()
+        if not indices:
+            self.outfit_status_var.set('Select an outfit to remove.')
+            return
+        self.outfit_presets.pop(indices[0])
+        self.config['outfit_presets']=list(self.outfit_presets)
+        self.save()
+        self._render_outfit_presets()
+        self.outfit_status_var.set('Selected outfit removed.')
+
+    def _start_outfit_cycle(self):
+        if self._outfit_running:
+            self.outfit_status_var.set('Already cycling; press STOP to finish.')
+            return
+        if not self.packet_started or not self.packet_extension or not self._habbo_session_connected:
+            self.outfit_status_var.set('Connect Habbo through G-Earth before starting.')
+            return
+        if len(self.outfit_presets)<2:
+            self.outfit_status_var.set('Capture at least two different looks first.')
+            return
+        try:
+            interval=float(self.outfit_delay_var.get().strip())
+            if not math.isfinite(interval) or not 0.1<=interval<=10:
+                raise ValueError('Delay must be between 0.1 and 10 seconds.')
+            for outfit in self.outfit_presets:
+                outfit_update_expression(outfit['gender'],outfit['figure'])
+        except (ValueError,KeyError,TypeError) as exc:
+            self.outfit_status_var.set('Cannot start: '+str(exc)[:125])
+            return
+        self.config['outfit_delay']=str(interval)
+        self.save()
+        self._outfit_capture_pending=False
+        self._outfit_generation+=1
+        self._outfit_running=True
+        self._outfit_interval=interval
+        self._outfit_index=0
+        self._outfit_sent=0
+        self.outfit_status_var.set(
+            f'Cycling {len(self.outfit_presets)} saved looks every {interval:g}s. '
+            'Local sends only; server application is not independently confirmed.')
+        self._outfit_after_id=self.root.after(
+            0,lambda gen=self._outfit_generation:self._outfit_tick(gen))
+
+    def _outfit_tick(self,generation):
+        self._outfit_after_id=None
+        if not self._outfit_running or generation!=self._outfit_generation:
+            return
+        if not self.packet_started or not self.packet_extension or not self._habbo_session_connected:
+            self._stop_outfit_cycle('Habbo/G-Earth disconnected; cycling stopped.')
+            return
+        index=self._outfit_index%len(self.outfit_presets)
+        preset=self.outfit_presets[index]
+        try:
+            expression=outfit_update_expression(preset['gender'],preset['figure'])
+            ext=self.packet_extension
+            packet=ext.string_to_packet(expression)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not build a valid look-change packet.')
+            if ext.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth rejected the look-change request.')
+        except Exception as exc:
+            self._stop_outfit_cycle('Outfit change failed: '+str(exc)[:140])
+            return
+        self._outfit_sent+=1
+        self._outfit_index=(index+1)%len(self.outfit_presets)
+        if self.packet_active:
+            self._packet_put((
+                'outfit_local',datetime.now().strftime('%H:%M:%S'),
+                'Outgoing',f'[Outfit Cycler] UpdateFigureData → Outfit {index+1} | '
+                'local G-Earth send accepted; server application unverified'))
+        self.outfit_status_var.set(
+            f'Cycling — outfit {index+1}/{len(self.outfit_presets)}; '
+            f'local requests: {self._outfit_sent}. '
+            'Server rate limits/accepted changes are unknown.')
+        if self._outfit_running and generation==self._outfit_generation:
+            self._outfit_after_id=self.root.after(
+                max(100,round(self._outfit_interval*1000)),
+                lambda gen=generation:self._outfit_tick(gen))
+
+    def _stop_outfit_cycle(self,reason=None):
+        self._outfit_running=False
+        self._outfit_generation+=1
+        self._outfit_capture_pending=False
+        after_id=self._outfit_after_id
+        self._outfit_after_id=None
+        if after_id is not None:
+            try:self.root.after_cancel(after_id)
+            except (tk.TclError,AttributeError):pass
+        if reason is None:
+            reason='Outfit cycling stopped.'
+        self.outfit_status_var.set(
+            f'{reason} Local requests sent: {self._outfit_sent}.')
+
     def _make_coffee_loop_panel(self,parent):
         holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
         holder.pack(fill='both',expand=True)
@@ -8861,9 +9147,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not rows:self.manipulator_status.set('Select a packet in Packet Viewer first.');return
         values=self.packet_tree.item(rows[0],'values')
         if len(values)<3:return
-        if len(values)>3 and values[3]=='Coffee Pass Loop':
+        if len(values)>3 and values[3] in ('Coffee Pass Loop','Outfit Cycler'):
             self.manipulator_status.set(
-                'Coffee Pass Loop log entries are summaries, not replayable packets.')
+                'Generated-action log entries are summaries, not replayable packets.')
             return
         for t,d,detail in reversed(self.packet_data):
             if t==values[0] and d==values[1] and detail.startswith(values[2]):
@@ -9887,6 +10173,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             pass
                     if not (self.packet_active or self.manipulation_enabled or
                             self.config.get('whispers_right',True) or direction=='Incoming'
+                            or self._outfit_capture_pending
                             or (self.responder.enabled and self._responder_chat_template is None)):
                         return
                     try:detail=str(msg.packet.g_string(ext))
@@ -9908,6 +10195,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 chat_expression_from_template(observed,'probe') is not None):
                                 self._packet_put(('responder_chat_template',observed))
                         except Exception:
+                            pass
+                    if direction=='Outgoing' and self._outfit_capture_pending:
+                        # Validate the actual mapped header, not just an untrusted
+                        # expression printed by G-Earth. Capture only this packet.
+                        try:
+                            records=(getattr(ext,'packet_infos',None) or {}).get(
+                                Direction.TO_SERVER,{}).get(msg.packet.header_id(),())
+                            verified=any(str(info.get('Name','')).casefold()==
+                                         'updatefiguredata' for info in records)
+                            parsed=(parse_outfit_update_expression(
+                                msg.packet.g_expression(ext)) if verified else None)
+                            if parsed is not None:
+                                self._packet_put(('outfit_captured',*parsed))
+                        except (ValueError,TypeError,AttributeError,IndexError):
                             pass
                     if direction=='Outgoing' and self._coffee_furniture_capture_pending:
                         captured=outgoing_furniture_id_from_packet(
@@ -10341,6 +10642,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     f'{len(self._room_users)} player(s) mapped. '
                     'A player left; unrelated players remain mapped.')
                 continue
+            if item[0]=='outfit_captured':
+                self._receive_outfit_capture(item[1],item[2])
+                continue
             if item[0]=='session_connection':
                 self._fuzz_refresh_connected_server()
                 self.packet_connection_status.set(
@@ -10380,17 +10684,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self.coffee_users_status_var.set('Disconnected. Room users cleared.')
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
+                    self._stop_outfit_cycle('Habbo disconnected; cycling stopped.')
                 continue
             if item[0]=='manip_status':
                 self.manipulator_status.set(item[1]);continue
             if item[0]=='manip_off':
                 self.manipulation_enable_var.set(False);continue
-            if item[0] not in ('packet','packet_local'):
+            if item[0] not in ('packet','packet_local','outfit_local'):
                 continue
-            if item[0]=='packet_local' and not self.packet_active:
-                continue  # Pause also pauses local generated-request entries.
+            if item[0] in ('packet_local','outfit_local') and not self.packet_active:
+                continue  # Pause also pauses locally generated-request entries.
             _,timestamp,direction,detail=item
-            source=('Coffee Pass Loop' if item[0]=='packet_local' else 'G-Earth')
+            source=({'packet':'G-Earth','packet_local':'Coffee Pass Loop',
+                     'outfit_local':'Outfit Cycler'}[item[0]])
             self.packet_data.append((timestamp,direction,detail))
             if len(self.packet_data)>500:self.packet_data.pop(0)
             needle=self.packet_filter_var.get().lower().strip()
@@ -11043,6 +11349,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self._headless_server=None
         self._stop_packet_replay('Companion closed. Repeat stopped.')
         self._stop_coffee_loop('Companion closed. Coffee loop stopped.')
+        self._stop_outfit_cycle('Companion closed. Outfit cycling stopped.')
         if self.wheel_hook and os.name=='nt':
             try:
                 u=self.tracker.user32
