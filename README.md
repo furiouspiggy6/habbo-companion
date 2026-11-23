@@ -1,5 +1,35 @@
 # Habbo Companion
 
+## v1.1.100 — G-Earth 1.5.4-beta-29 loopback collision fix
+
+**Fix for the G-Earth error "The port is in use by pythonw.exe" after
+running a clientless profile.** The old v1.1.99 bridge used port
+`31451` on `127.0.0.2` as Companion's relay. However, the actual
+[G-Earth 1.5.4-beta-29 ConnectionInterceptor](https://github.com/G-Realm/G-Earth/blob/1.5.4-beta-29/G-Earth/src/main/java/gearth/app/protocol/interceptor/ConnectionInterceptor.java)
+also binds the FIRST Flash proxy listener to `127.0.0.3:31451`
+(`loopbackIndex=c+1`), unlike the older source which used
+`127.0.0.1`. The two programs were competing for the exact same
+address and port. The corrected routing in v1.1.100 is:
+
+- **G-Earth's Flash listener:** `127.0.0.3:31451`
+- **Companion's relay upstream:** `127.0.0.3:31451`
+- **G-Earth target hostname:** `127.0.0.3.nip.io`
+
+Update, fully close the failed G-Earth instance, and run
+**Clientless Bot → Check bridge hostname** again; it must now say
+`127.0.0.3`. If your local DNS does not resolve the new hostname,
+add `127.0.0.3 127.0.0.3.nip.io` in the Windows hosts file,
+then retry. The old `127.0.0.2` alias is not needed for this mode.
+Do **not** kill `pythonw.exe`; that is the Companion process.
+With G-Earth ON, choose **Run selected profile** again.
+
+A Windows CI regression now binds Python upstream on `127.0.0.3`
+and a Java `ServerSocket` on `127.0.0.2` with the **same port**
+to test the exact arrangement used by your beta. The separate local
+mock-proxy packet replacement/blocking tests also use those addresses.
+This validates the binding and relay design, but the live G-Earth/Habbo
+connection still must be confirmed from Companion's connection logs.
+
 ## v1.1.99 — G-Earth clientless gameplay interception (experimental)
 
 This replaces the v1.1.98 no-op ON preview with an actual **local Flash
@@ -19,13 +49,13 @@ The server still sees a single, properly authenticated Companion socket.
    for one client and must be started with Companion's dedicated hostname).
 3. In **Clientless Bot**, turn **Use G-Earth interception when starting
    Clientless Bot** ON, and click **Check bridge hostname**.
-4. Its local relay hostname `127.0.0.2.nip.io` must resolve to
-   **127.0.0.2**. The automatic DNS service may be unavailable or blocked by
+4. Its local relay hostname `127.0.0.3.nip.io` must resolve to
+   **127.0.0.3**. The automatic DNS service may be unavailable or blocked by
    DNS-rebinding protection. If so, add a single entry to the Windows
    hosts file using an elevated text editor and retry the check:
 
    ```
-   127.0.0.2 127.0.0.2.nip.io
+   127.0.0.3 127.0.0.3.nip.io
    ```
 
    Windows hosts file: `C:\Windows\System32\drivers\etc\hosts`.
@@ -33,9 +63,9 @@ The server still sees a single, properly authenticated Companion socket.
    adds its own earlier redirect while connecting and cleans it on disconnect.
    You may need to flush the OS DNS cache when changing it.
 5. Select **Run selected profile** or select a saved profile. Companion
-   reserves the loopback-only upstream `127.0.0.2:31451`, launches G-Earth
+   reserves the loopback-only upstream `127.0.0.3:31451`, launches G-Earth
    with **Flash** auto-connect, and waits for G-Earth's proxy at
-   `127.0.0.1:31451`. If either side is unavailable, it **does not log
+   `127.0.0.2:31451`. If either side is unavailable, it **does not log
    into Habbo**. The separate extension port (usually `9092`) is *not*
    this clientless game's traffic proxy.
 6. Once the TCP account is authenticated, open G-Earth's packet viewer.
@@ -49,12 +79,12 @@ The server still sees a single, properly authenticated Companion socket.
 
 ```
                   G-Earth local Flash modification pipeline
-Companion plaintext action -> 127.0.0.1:31451 -> 127.0.0.2:31451
+Companion plaintext action -> 127.0.0.2:31451 -> 127.0.0.3:31451
                                                    |
                                                    v
                                     Companion encrypts and sends to Habbo
                                                    |
-Habbo -> Companion decrypts -> 127.0.0.2:31451 -> 127.0.0.1:31451
+Habbo -> Companion decrypts -> 127.0.0.3:31451 -> 127.0.0.2:31451
                                                     |
                                                     v
                                     Companion receives modified incoming
@@ -62,7 +92,7 @@ Habbo -> Companion decrypts -> 127.0.0.2:31451 -> 127.0.0.1:31451
 
 G-Earth's source-pinned Flash proxy normally listens on a local
 `127.0.0.1:port` and opens an upstream socket to the hostname that was
-resolved **before** rewriting the hosts file. Choosing `127.0.0.2` for
+resolved **before** rewriting the hosts file. Choosing `127.0.0.3` for
 the upstream lets the relay occupy the same numeric port without conflicting
 with G-Earth's listener. For background, see
 [G-Realm/G-Earth NormalFlashProxyProvider](https://github.com/G-Realm/G-Earth/blob/master/G-Earth/src/main/java/gearth/protocol/connection/proxy/flash/NormalFlashProxyProvider.java).
