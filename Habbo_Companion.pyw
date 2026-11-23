@@ -509,7 +509,10 @@ def packet_export_record(timestamp,direction,detail,include_contents=False):
                 redact_sensitive_diagnostic(detail)+'\n')
     named=re.search(r'\{(?:in|out):([A-Za-z_][A-Za-z0-9_]{0,63})\}',
                     str(detail))
-    label=('type '+named.group(1)) if named else 'type unknown'
+    coffee=(re.match(r'^\[Coffee Pass Loop\] (UseFurniture|PassCarryItem)\b',
+                     str(detail)) if not named else None)
+    label=('type '+named.group(1) if named else
+           'type '+coffee.group(1) if coffee else 'type unknown')
     return f'{time_part} [{direction_part}] [{label}; payload omitted]\n'
 
 APP_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'HabboViewChat'
@@ -4060,6 +4063,24 @@ def build_coffee_pass_sequence(cup_one, cup_two, recipient, single_cup=False):
 
 
 
+def format_coffee_packet_viewer_event(expression, local_sent):
+    """Summarize generated cup requests without exposing arbitrary packet text."""
+    expression=str(expression)
+    furniture=re.fullmatch(r'\{out:UseFurniture\}\{i:([0-9]{1,10})\}\{i:0\}',expression)
+    recipient=re.fullmatch(r'\{out:PassCarryItem\}\{i:([0-9]{1,10})\}',expression)
+    if furniture:
+        label='UseFurniture → furniture '+furniture.group(1)
+    elif recipient:
+        label='PassCarryItem → recipient '+recipient.group(1)
+    else:
+        # Unknown expressions may contain secrets. Never display them verbatim.
+        label='unrecognized generated action'
+    outcome=('local G-Earth send accepted; server/recipient unverified'
+             if local_sent else
+             'local G-Earth send failed; server/recipient unverified')
+    return '[Coffee Pass Loop] '+label+' | '+outcome
+
+
 # Read the ID/name prefix of Users entries without relying on the full entity
 # parser (whose optional fields changed in the 2026 client update).
 ROOM_USER_PAIR_RE=re.compile(r'\{i:([0-9]{1,10})\}\{s:"((?:\\.|[^"\\])*)"\}')
@@ -7466,8 +7487,13 @@ class ChatOverlayApp(PersonaResponderMixin):
             side='left',fill='x',expand=True,padx=(0,7))
         ttk.Button(opts,text='Pause / Resume',command=self._toggle_capture).pack(side='left')
         region=ttk.Frame(holder,style='Panel.TFrame');region.pack(fill='both',expand=True)
-        self.packet_tree=ttk.Treeview(region,columns=('time','direction','summary'),show='headings',height=15)
-        for col,head,width in [('time','Time',78),('direction','Direction',95),('summary','Packet (read-only)',390)]:
+        self.packet_tree=ttk.Treeview(
+            region,columns=('time','direction','summary','source'),
+            show='headings',height=15)
+        for col,head,width in [
+                ('time','Time',78),('direction','Direction',95),
+                ('summary','Packet (read-only)',325),
+                ('source','Source',125)]:
             self.packet_tree.heading(col,text=head)
             self.packet_tree.column(col,width=width,stretch=(col=='summary'))
         scroller=ttk.Scrollbar(region,orient='vertical',command=self.packet_tree.yview)
@@ -7482,7 +7508,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         actions=ttk.Frame(holder,style='Panel.TFrame');actions.pack(fill='x',pady=(8,0))
         ttk.Button(actions,text='Clear viewer',command=self._clear_packets).pack(side='left')
         ttk.Button(actions,text='Export visible packet log…',command=self._export_packets).pack(side='left',padx=(8,0))
-        tk.Label(holder,text='Packets are stored only in memory (maximum 500). Nothing is sent anywhere.\n'
+        tk.Label(holder,text='Source distinguishes G-Earth traffic from Coffee Pass Loop requests. '
+                 'A local send is not proof of server acceptance or a received cup.\n'
+                 'The viewer retains the most recent 500 packets in memory.\n'
                  'G-Earth must prepare BEFORE Habbo begins connecting. On Companion startup, approve the\n'
                  'Windows administrator prompt. Launch Habbo only after G-Earth is waiting.\n'
                  'If Windows accessibility cannot press Connect, G-Earth stays open for manual connection.',
@@ -8597,12 +8625,23 @@ class ChatOverlayApp(PersonaResponderMixin):
             if ext.send_to_server(packet) is False:
                 raise RuntimeError('G-Earth rejected the send.')
         except Exception as exc:
+            if getattr(self,'packet_active',False):
+                self._packet_put((
+                    'packet_local',datetime.now().strftime('%H:%M:%S'),
+                    'Outgoing',format_coffee_packet_viewer_event(
+                        locals().get('expression',''),False)))
             recorder=getattr(self,'_coffee_recorder',None)
             if recorder is not None:
                 recorder.record('send_error',action_number=self._coffee_sent+1,
                                 note=str(exc)[:160])
             self._stop_coffee_loop('Coffee loop stopped after error: '+str(exc)[:145])
             return
+        # Direct G-Earth sends do not necessarily appear in intercept hooks.
+        # Record the local request only; never infer server/recipient acceptance.
+        if getattr(self,'packet_active',False):
+            self._packet_put((
+                'packet_local',datetime.now().strftime('%H:%M:%S'),
+                'Outgoing',format_coffee_packet_viewer_event(expression,True)))
         self._coffee_sent+=1
         recorder=getattr(self,'_coffee_recorder',None)
         if recorder is not None:
@@ -8822,6 +8861,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not rows:self.manipulator_status.set('Select a packet in Packet Viewer first.');return
         values=self.packet_tree.item(rows[0],'values')
         if len(values)<3:return
+        if len(values)>3 and values[3]=='Coffee Pass Loop':
+            self.manipulator_status.set(
+                'Coffee Pass Loop log entries are summaries, not replayable packets.')
+            return
         for t,d,detail in reversed(self.packet_data):
             if t==values[0] and d==values[1] and detail.startswith(values[2]):
                 self.inject_direction_var.set(d)
@@ -10342,12 +10385,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.manipulator_status.set(item[1]);continue
             if item[0]=='manip_off':
                 self.manipulation_enable_var.set(False);continue
+            if item[0] not in ('packet','packet_local'):
+                continue
+            if item[0]=='packet_local' and not self.packet_active:
+                continue  # Pause also pauses local generated-request entries.
             _,timestamp,direction,detail=item
+            source=('Coffee Pass Loop' if item[0]=='packet_local' else 'G-Earth')
             self.packet_data.append((timestamp,direction,detail))
             if len(self.packet_data)>500:self.packet_data.pop(0)
             needle=self.packet_filter_var.get().lower().strip()
             if needle and needle not in detail.lower():continue
-            self.packet_tree.insert('', 'end',values=(timestamp,direction,detail[:145]))
+            self.packet_tree.insert(
+                '', 'end',values=(timestamp,direction,detail[:145],source))
             children=self.packet_tree.get_children()
             if len(children)>500:self.packet_tree.delete(*children[:len(children)-500])
         self.root.after(200,self._pump_packets)
