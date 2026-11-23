@@ -4,6 +4,7 @@ This instantiates the real controls with background processing disabled. It
 never starts G-Earth, a browser, the real Habbo client, or a network request.
 """
 from pathlib import Path
+import tempfile
 import runpy
 import sys
 import tkinter as tk
@@ -64,22 +65,60 @@ try:
     app._responder_update_target_controls()
     assert not app._responder_targets_frame.winfo_manager(), (
         'Selected users input did not hide')
+    assert app.responder_style_search_entry.winfo_exists(), (
+        'Searchable saved username field is missing')
+    assert app.responder_style_matches_list.winfo_exists(), (
+        'Saved-username suggestions list is missing')
+    assert not app.responder_style_matches_list.winfo_manager(), (
+        'Suggestions should not expand before searching')
     app._responder_toggle_advanced()
     assert app._responder_advanced_open
     assert app._responder_advanced_frame.winfo_manager()=='pack', (
         'Advanced settings did not expand')
-    app.responder_style_mode_var.set('Chat-log style')
-    app._responder_update_style_controls()
     assert app._responder_logs_frame.winfo_manager()=='pack', (
-        'Optional chat-log controls are inaccessible')
-    app.responder_style_mode_var.set('Custom personality')
-    app._responder_update_style_controls()
-    assert not app._responder_logs_frame.winfo_manager(), (
-        'Legacy style fields should hide in custom mode')
+        'Saved chat-log preferences are inaccessible')
     app._responder_toggle_advanced()
     assert not app._responder_advanced_open
     assert not app._responder_advanced_frame.winfo_manager(), (
         'Advanced settings did not collapse')
+    # Verify filtering and selecting a real per-user file automatically switches
+    # to that specific writing style without enabling any live game sends.
+    with tempfile.TemporaryDirectory() as folder:
+        (Path(folder)/'MaraGene.txt').write_text(
+            '[13:01] MaraGene: heyyy lol\n'
+            '[13:02] MaraGene: wbuuu\n',encoding='utf-8')
+        (Path(folder)/'Mario35.txt').write_text(
+            '[13:03] Mario35: hello\n',encoding='utf-8')
+        app.responder_log_dir_var.set(folder)
+        app._responder_refresh_style_users()
+        assert len(app._responder_style_users)==2, (
+            'User log listing failed')
+        assert not app.responder_style_matches_list.winfo_manager(), (
+            'Search unexpectedly opened the dropdown on refresh')
+        app.responder_style_search_var.set('GeNe')
+        app._responder_filter_style_users()
+        assert app._responder_style_matches==['MaraGene'], (
+            'Partial case-insensitive username search failed')
+        assert app.responder_style_matches_list.winfo_manager()=='pack', (
+            'Search result dropdown did not open')
+        app.responder_style_matches_list.selection_set(0)
+        original_save=app.save
+        app.save=lambda:None
+        try:
+            app._responder_select_style_user()
+            assert app.responder.style_mode=='Chat-log style'
+            assert app.responder.persona=='MaraGene'
+            assert app.responder.style_examples()==['heyyy lol','wbuuu']
+            assert app.responder_personality_entry.cget('state')=='disabled'
+            assert not app.responder.auto_rotate, (
+                'Single-user style must not rotate unexpectedly')
+            assert not app.responder.enabled and not app.responder_send_var.get(), (
+                'Selecting a style must not start game messaging')
+            app._responder_use_custom_style()
+            assert app.responder.style_mode=='Custom personality'
+            assert app.responder_personality_entry.cget('state')=='normal'
+        finally:
+            app.save=original_save
     assert not app.responder.enabled and not app.responder_send_var.get(), (
         'Navigating UI controls should never enable chat or sending')
     assert app._ui_scroll_canvases.keys()>=PAGES, 'Scrollable page missing'
