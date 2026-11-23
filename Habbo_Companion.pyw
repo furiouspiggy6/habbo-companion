@@ -44,6 +44,7 @@ import importlib.util
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
+from persona_responder_ui import PersonaResponderMixin
 
 
 def validate_local_habbo_frame(frame):
@@ -355,6 +356,11 @@ DEFAULT = dict(
     account_profiles=[],
     account_active_id='',
     tcp_auto_connect=False,
+    responder_persona='Mario35',
+    responder_target='',
+    responder_rotation=True,
+    responder_capture=False,
+    responder_log_dir='',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
 
@@ -4740,7 +4746,7 @@ def install_managed_gearth(selected_executable, notify):
 
 
 
-class ChatOverlayApp:
+class ChatOverlayApp(PersonaResponderMixin):
     def __init__(self,root):
         self.root=root;self.root.title('Habbo Companion')
         self.root.geometry('1120x820')
@@ -4749,6 +4755,9 @@ class ChatOverlayApp:
         self.root.configure(bg=COMPANION_UI['background'])
         self.tracker=WinTracker()
         self.config=load_config()
+        self._responder_app_dir=APP_DIR
+        self._responder_palette=COMPANION_UI
+        self._responder_setup()
         self._account_profiles=normalize_habbo_accounts(
             self.config.get('account_profiles',[]))
         self.config['account_profiles']=self._account_profiles
@@ -5264,6 +5273,7 @@ class ChatOverlayApp:
             'accounts':('Accounts','Independent profiles, sign-in and browser sessions'),
             'tcp':('Direct TCP','Official game-server connections and live diagnostics'),
             'chat':('View Chat','Original Habbo bubbles and overlay settings'),
+            'responder':('AI Responder','Room-aware writing style and target controls'),
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
             'fuzz':('Protocol Lab','Passive G-Earth AIR reader and local boofuzz tests'),
             'manip':('Packet Manipulator','Advanced packet rules and manual actions'),
@@ -5294,7 +5304,8 @@ class ChatOverlayApp:
             ('overview','Overview'),
             ('accounts','Accounts'),
             ('tcp','Direct TCP'),
-            ('chat','View Chat')))
+            ('chat','View Chat'),
+            ('responder','AI Responder')))
         self._ui_add_nav('TOOLS',(
             ('packet','Packet Viewer'),
             ('fuzz','Protocol Lab'),
@@ -5341,6 +5352,8 @@ class ChatOverlayApp:
             self._ui_pages['packet'],'packet'))
         self._make_fuzz_panel(self._ui_scroll_area(
             self._ui_pages['fuzz'],'fuzz'))
+        self._make_responder_panel(self._ui_scroll_area(
+            self._ui_pages['responder'],'responder'))
         self._make_accounts_panel(self._ui_scroll_area(
             self._ui_pages['accounts'],'accounts'))
         self._make_direct_classic_panel(self._ui_scroll_area(
@@ -9433,10 +9446,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         except (ValueError,TypeError,AttributeError):
                             pass
                     if not (self.packet_active or self.manipulation_enabled or
-                            self.config.get('whispers_right',True) or direction=='Incoming'):
+                            self.config.get('whispers_right',True) or direction=='Incoming'
+                            or (self.responder.enabled and self._responder_chat_template is None)):
                         return
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    if (direction=='Outgoing' and self.responder.enabled
+                        and self._responder_chat_template is None
+                        and detail.lstrip().lower().startswith('{out:chat}')):
+                        try:
+                            observed=str(msg.packet.g_expression(ext))
+                            if chat_expression_from_template(observed,'example') is not None:
+                                self._packet_put(('responder_chat_template',observed))
+                        except Exception:
+                            pass
                     if direction=='Outgoing' and self._coffee_furniture_capture_pending:
                         captured=outgoing_furniture_id_from_packet(
                             ext,Direction.TO_SERVER,msg.packet)
@@ -9698,6 +9721,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='packet_connect_error':
                 self.packet_connection_status.set('Packet tools failed: '+item[1])
                 continue
+            if item[0]=='responder_chat_template':
+                self._responder_chat_template=item[1]
+                self._responder_log('Outgoing Chat format learned from Habbo.')
+                continue
             if item[0]=='whisper_hint':
                 _,occurred,body=item
                 # The packet and AIR feed may arrive in either order.
@@ -9838,6 +9865,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
+                    self._responder_chat_template=None
+                    self._responder_generation+=1
+                    self.responder.running=False
+                    self.responder.reset_room()
                     self._coffee_furniture_capture_pending=False
                     self._own_account_id=None
                     self._own_name=''
@@ -10143,6 +10174,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if self.config.get('visible_only',True) and not within:return
             room=item.get('room')
             if room is not None and self.room_id is not None and room!=self.room_id:
+                self._responder_generation+=1
+                self.responder.running=False
+                self.responder.reset_room()
                 self.clear_msgs()
                 self._room_users.clear()
                 self._room_chat_names.clear()
@@ -10189,6 +10223,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                          style_id,chat_type,forced_color,image_path,
                                          chat_type_explicit))
             self._trim_history()
+            self.responder.observe(name,body,own_name=self._own_name,
+                                   chat_type=chat_type)
             if image_path:
                 self.native_image_count+=1
                 if self.native_image_count==1:
@@ -10354,6 +10390,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         try:
             self._hotkeys()
             self._poll_feed()
+            self._responder_tick()
             self._apply_wheel()
             # Avoid holding decoded PNG images for all historical messages.
             # Older images remain on disk only while their message is retained.
@@ -10436,6 +10473,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.root.after(120,self.tick)
 
     def close(self):
+        self._responder_generation+=1
+        self.responder.enabled=False
         # Tickets never outlive the Companion process.
         self._tcp_disconnect_all()
         self._direct_ticket_queue.clear()
