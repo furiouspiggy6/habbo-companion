@@ -366,12 +366,16 @@ def profile_fingerprint(account_id):
 
 class HabboTcpSession:
     """A per-profile game socket, with independently maintained cipher state."""
-    def __init__(self, account_id, status=None, packet=None):
+    def __init__(self, account_id, status=None, packet=None, content=None):
         if not isinstance(account_id, str) or not re.fullmatch("[0-9a-f]{12}", account_id):
             raise ValueError("Invalid account profile")
         self.account_id = account_id
         self.on_status = status or (lambda msg: None)
         self.on_packet = packet or (lambda packet_id, size: None)
+        # Optional content listener receives frame body in memory. The caller
+        # must filter named packet IDs before decoding or displaying anything.
+        self.on_content = content
+        self.release = None
         self.sock = None
         self.tx = None
         self.rx = None
@@ -432,6 +436,21 @@ class HabboTcpSession:
                 data = self.tx.apply(data)
             sock.sendall(data)
             self._send_bytes += len(data)
+
+    def send_game_action(self, packet_id, payload):
+        """Send one mapped user action only after authenticating the game socket.
+
+        This is an authenticated transport primitive, not a general-purpose
+        public packet injector. The Companion UI supplies only whitelisted
+        action schemas whose headers match the current AIR release.
+        """
+        if type(packet_id) is not int or not 1 <= packet_id <= 65535:
+            raise HabboTcpError("Invalid mapped packet ID")
+        if not isinstance(payload, bytes) or len(payload) > 8192:
+            raise HabboTcpError("Invalid game action payload")
+        if not self.authenticated or self.stop.is_set() or self.sock is None:
+            raise HabboTcpError("Direct TCP game session is not authenticated")
+        self._send(packet_id, payload)
 
     def _await_packet(self, wanted, limit=15):
         stage = {
@@ -494,6 +513,7 @@ class HabboTcpSession:
                 self.on_status("WIN63 release not verified by public config; using 2026-11-04 AIR build (not live-verified)")
         elif not _RELEASE.fullmatch(release):
             raise ValueError("Invalid Habbo client release version")
+        self.release = release
         self.stop.clear()
         started = time.monotonic()
         try:
@@ -567,6 +587,12 @@ class HabboTcpSession:
                 elif packet_id == TCP_IN["disconnect"]:
                     raise HabboTcpError("Game server disconnected this account")
                 self.on_packet(packet_id, len(body))
+                if self.on_content is not None:
+                    try:
+                        # Decode only mapped, bounded chat messages downstream.
+                        self.on_content(packet_id, body)
+                    except (ValueError, TypeError, UnicodeError, AttributeError):
+                        pass
         except (OSError, HabboTcpError, ValueError):
             if not self.stop.is_set():
                 self.on_status("Game connection lost")
@@ -585,6 +611,7 @@ class HabboTcpSession:
                 pass
             sock.close()
         self.tx = self.rx = None
+        self.release = None
         # No carryover data/cipher state may survive a disconnected account.
         self._recv_pending.clear()
         self._frame_size = None
