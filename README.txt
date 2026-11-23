@@ -1,3 +1,5 @@
+v1.1.95: Added a permanent Coffee House (room 69118545) quick-join button to Clientless Bot, with the last entered Room ID saved across restarts. Saved named AIR packet headers now persist too. No automatic join or new authentication workflow.
+
 v1.1.94: Fixed Clientless Bot Say packet to send the third AIR chat tracking integer (-1). Shout and Whisper packets unchanged. Local send accepted still does not confirm server display.
 
 Habbo Companion v1.1.93 — Clientless Bot controls

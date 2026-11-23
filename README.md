@@ -1,5 +1,27 @@
 # Habbo Companion
 
+## v1.1.95 — Saved Coffee House room shortcut
+
+**Clientless Bot → Saved Room** now always shows **Coffee House**
+(room **69118545**) with a one-click **Join Coffee House** button.
+Clicking it selects the existing **Join room** action, fills room ID
+69118545, and sends the same validated manual Direct TCP room-entry
+requests as the ordinary **Send one action** button. No room is entered
+automatically when Companion starts; the bot must already be authenticated.
+
+The editable **Room ID** field is initialized to Coffee House on new installs.
+If you manually join a different room, that last valid numerical room ID is
+saved into Companion's settings and restored on restart. Using another ID
+does not remove the permanent Coffee House shortcut. URLs are not accepted
+as room IDs; enter the numeric ID only.
+
+The settings loader now also preserves **saved clientless G-Earth packet
+mappings** across restarts (it previously filtered out that setting).
+Mappings remain tied to the configured WIN63 build; don't reuse them for
+a different AIR release. No login credentials or live SSO tickets are
+stored with rooms or mappings. A locally accepted join still does not
+independently confirm server room entry.
+
 ## v1.1.94 — Fix clientless Say chat packet shape
 
 **Clientless Bot → Say** now includes the third ChatMessageComposer field:

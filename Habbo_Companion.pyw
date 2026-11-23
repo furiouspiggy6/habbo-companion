@@ -590,6 +590,9 @@ DEFAULT = dict(
     account_profiles=[],
     account_active_id='',
     tcp_auto_connect=False,
+    # Persistent clientless favorites and read-only AIR packet header mappings.
+    clientless_last_room_id='69118545',
+    clientless_header_map=None,
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -4607,6 +4610,26 @@ def apply_manipulation_rule(message,direction,packet_text,rules,extension):
         return ('Replace',index+1)
     return None
 
+CLIENTLESS_COFFEE_HOUSE_ROOM_ID = 69118545
+
+
+def clientless_saved_room_value(value):
+    """Return a persisted, valid numeric room ID, or the Coffee House default.
+
+    Never persist a full URL, arbitrary text or a negative/overflowing ID.
+    This setting contains no session credentials.
+    """
+    if type(value) is int:
+        number=value
+    elif isinstance(value,str) and re.fullmatch(r'[0-9]{1,10}',value.strip()):
+        number=int(value.strip())
+    else:
+        number=0
+    if not 1<=number<=2147483647:
+        number=CLIENTLESS_COFFEE_HOUSE_ROOM_ID
+    return str(number)
+
+
 def load_config():
     try:
         saved = json.loads(CONFIG_PATH.read_text(encoding='utf-8'))
@@ -5247,7 +5270,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_action_var=tk.StringVar(value='Say')
         self.bot_message_var=tk.StringVar(value='')
         self.bot_recipient_var=tk.StringVar(value='')
-        self.bot_room_var=tk.StringVar(value='')
+        self.bot_room_var=tk.StringVar(value=clientless_saved_room_value(
+            self.config.get('clientless_last_room_id')))
         self.bot_x_var=tk.StringVar(value='0')
         self.bot_y_var=tk.StringVar(value='0')
         self.bot_id_var=tk.StringVar(value='1')
@@ -6132,6 +6156,20 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         ttk.Button(frame,text='Capture action mappings from G-Earth',
                    command=self._bot_capture_mapping).pack(anchor='w',pady=(0,10))
+        ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
+            anchor='w',pady=(0,5))
+        favorite=ttk.Frame(frame,style='Panel.TFrame')
+        favorite.pack(fill='x',pady=(0,4))
+        ttk.Label(favorite,text='Coffee House  ·  Room 69118545',
+                  style='Panel.TLabel').pack(side='left',padx=(0,15))
+        self.bot_coffee_house_button=ttk.Button(
+            favorite,text='Join Coffee House',
+            command=self._bot_join_coffee_house)
+        self.bot_coffee_house_button.pack(side='left')
+        ttk.Label(frame,text='Always available, even after restarting. '
+                  'The editable Room ID below remembers the last room you '
+                  'requested; the Coffee House shortcut never auto-joins.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6176,6 +6214,12 @@ class ChatOverlayApp(PersonaResponderMixin):
         selected=self.bot_account_var.get()
         return next((a for a in self._account_profiles
                      if a['label']+' ['+a['id'][:6]+']'==selected),None)
+
+    def _bot_join_coffee_house(self):
+        """Explicit one-click favorite; never sends automatically on startup."""
+        self.bot_action_var.set('Join room')
+        self.bot_room_var.set(str(CLIENTLESS_COFFEE_HOUSE_ROOM_ID))
+        self._bot_send_action()
 
     def _bot_connect_selected(self):
         account=self._bot_selected_profile()
@@ -6253,6 +6297,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         except (ValueError,TypeError,AttributeError) as exc:
             self.bot_status_var.set('Action not ready: '+str(exc)[:160])
             return
+        # Remember the last VALID room ID, including manually entered IDs.
+        # Coffee House itself remains a fixed, named favorite regardless.
+        if action=='Join room':
+            self.config['clientless_last_room_id']=str(args['room'])
+            self.save()
         self._bot_last_action_at[ident]=now
         self._bot_action_inflight.add(ident)
         self.bot_status_var.set('Sending '+action+' via authenticated Direct TCP '

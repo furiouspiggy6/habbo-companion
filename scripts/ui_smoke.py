@@ -41,7 +41,21 @@ try:
     assert app.bot_account_picker.winfo_exists(), 'Clientless Bot account list missing'
     assert app.bot_action_picker.winfo_exists(), 'Clientless Bot action list missing'
     assert app.bot_chat_log.winfo_exists(), 'Clientless chat display missing'
+    assert app.bot_coffee_house_button.winfo_exists(), 'Coffee House shortcut missing'
     assert app._bot_action_inflight==set(), 'Clientless actions must start idle'
+    assert app.bot_room_var.get()==scope['clientless_saved_room_value'](
+        app.config.get('clientless_last_room_id')), 'Saved room ID not restored'
+    # The saved favorite does not trigger network actions on startup.
+    favorite_events=[]
+    original_action=app._bot_send_action
+    app._bot_send_action=lambda:favorite_events.append((
+        app.bot_action_var.get(),app.bot_room_var.get()))
+    app.bot_room_var.set('999')
+    app.bot_action_var.set('Say')
+    app._bot_join_coffee_house()
+    assert favorite_events==[('Join room','69118545')], (
+        'Coffee House favorite did not choose its fixed room ID')
+    app._bot_send_action=original_action
     assert app.packet_tree.winfo_exists(), 'Packet Viewer failed to build'
     assert app.outfit_listbox.winfo_exists(), 'Outfit Cycler UI failed to build'
     assert not app._outfit_running, 'Outfit Cycler must start OFF'
