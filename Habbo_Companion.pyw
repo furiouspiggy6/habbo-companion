@@ -5075,6 +5075,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.packet_queue=queue.Queue(maxsize=1200)
         self.packet_data=[]
         self.packet_active=False
+        self.packet_auto_capture_var=tk.BooleanVar(
+            value=bool(self.config.get('packet_auto_capture',True)))
         self.packet_started=False
         self.packet_extension=None
         # Passive G-Earth metadata: no raw payloads, tickets, or chat text stored.
@@ -5097,7 +5099,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'a local-only test (127.0.0.1:30000).')
         self.fuzz_connected_server_var=tk.StringVar(value='Connected game server: none detected. Boofuzz traffic stays on your PC.')
         self._packet_auto_retry_after=0.0
-        self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
+        self.packet_connection_status=tk.StringVar(
+            value='Packet viewer waiting for a G-Earth/Habbo connection; no packets received yet.')
         self.packet_rules=[]
         for rule in self.config.get('packet_rules',[]):
             try:self.packet_rules.append(validate_manipulation_rule(rule))
@@ -5226,7 +5229,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.gearth_host_var=tk.StringVar(value=str(self.config.get('gearth_host','game-us.habbo.com')))
         self.gearth_game_port_var=tk.StringVar(value=str(self.config.get('gearth_game_port',30000)))
         self.gearth_path_display=tk.StringVar(value='Managed engine: '+str(managed_gearth_executable() or '(initial setup pending)'))
-        self.packet_status=tk.StringVar(value=('Starting G-Earth in background. Packet Viewer stays blank until Habbo connects.' if self.config.get('gearth_auto_arm') else 'G-Earth auto-start is OFF. Packet Viewer stays blank until Habbo connects.'))
+        self.packet_status=tk.StringVar(value=(
+            'Preparing G-Earth. Packet capture will start automatically when Habbo connects.'
+            if self.config.get('gearth_auto_arm') else
+            'G-Earth auto-start is OFF. Start the engine and connect Habbo to view live packets.'))
         self.update_status=tk.StringVar(value='Ready to install a verified update ZIP.')
         self.update_manifest_var=tk.StringVar(value=str(self.config.get('update_manifest_url','')))
         self._online_update_busy=False
@@ -7443,7 +7449,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Button(diag,text='Open engine without connecting',
                    command=self._open_managed_safe).pack(side='left')
         ttk.Label(holder,textvariable=self.packet_status,style='Panel.TLabel',
-                  wraplength=630).pack(anchor='w',fill='x',pady=(0,8))
+                  wraplength=630).pack(anchor='w',fill='x',pady=(0,6))
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=630).pack(
+                      anchor='w',fill='x',pady=(0,7))
+        ttk.Checkbutton(holder,
+                        text='Automatically capture packets when Habbo connects',
+                        variable=self.packet_auto_capture_var,
+                        command=self._save_packet_auto_capture).pack(
+                            anchor='w',pady=(0,9))
         opts=ttk.Frame(holder,style='Panel.TFrame')
         self._packet_search_row=opts
         opts.pack(fill='x',pady=(0,7))
@@ -9318,7 +9332,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.root.after(2500,self._engine_heartbeat)
 
     def _maybe_auto_connect_packet_tools(self):
-        """Attach the local G-Python extension without activating Packet Viewer.
+        """Attach G-Python and automatically capture when the user allows it.
 
         Before Habbo launches, connecting to G-Earth's local extension port
         cannot interrupt an in-progress AIR loading screen. If Habbo is already
@@ -9336,7 +9350,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 'G-Earth online; waiting for Habbo room readiness. '
                 'The Coffee Pass Loop Start button can connect directly.')
             return
-        self._connect_gearth(capture=False)
+        self._connect_gearth(capture=self.packet_auto_capture_var.get())
 
     def _start_gearth_direct(self,select_if_missing=True):
         if os.name!='nt':
@@ -9801,9 +9815,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             ext.on_event('init',lambda:event('G-Earth extension connected.'))
             def connected():
                 self._habbo_session_connected=True
+                # Other tools may have attached without logging before Habbo
+                # connected. Arm the viewer for each new game connection.
+                if self.config.get('packet_auto_capture',True):
+                    self.packet_active=True
                 self._packet_put(('session_connection',True))
                 self._packet_put(('room_users_reset',))
-                event('Habbo AIR connected; capturing packets in Habbo Companion.')
+                event('Habbo AIR connected; packet viewer LIVE.' if self.packet_active
+                      else 'Habbo AIR connected; packet viewer paused.')
             ext.on_event('connection_start',connected)
             def disconnected():
                 self._habbo_session_connected=False
@@ -10282,8 +10301,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='session_connection':
                 self._fuzz_refresh_connected_server()
                 self.packet_connection_status.set(
-                    'Packet tools READY — Habbo and G-Earth connected.' if item[1]
-                    else 'Packet tools attached; waiting for Habbo room connection.')
+                    ('Packet Viewer LIVE — G-Earth and Habbo connected.'
+                     if self.packet_active else
+                     'G-Earth and Habbo connected; packet capture paused.')
+                    if item[1] else
+                    'G-Earth packet tools attached; waiting for Habbo traffic.')
                 if item[1]:
                     # New AIR connection; never reuse a prior Chat packet ID.
                     self._responder_chat_template=None
@@ -10342,6 +10364,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         full=next((d for t,dirn,d in reversed(self.packet_data)
                    if t==values[0] and dirn==values[1] and d.startswith(values[2])),values[2])
         self.packet_details.insert('1.0',full)
+
+    def _save_packet_auto_capture(self):
+        enabled=bool(self.packet_auto_capture_var.get())
+        self.config['packet_auto_capture']=enabled
+        self.save()
+        if self.packet_started and self._habbo_session_connected:
+            self.packet_active=enabled
+            self.packet_status.set(
+                'Packet viewer LIVE — incoming and outgoing packets.'
+                if enabled else 'Packet viewer paused; auto-capture disabled.')
+        elif enabled:
+            self.packet_status.set(
+                'Auto-capture enabled. Waiting for G-Earth and an active Habbo session.')
+        else:
+            self.packet_status.set(
+                'Auto-capture disabled. Use Connect packet tools (manual) to capture.')
 
     def _toggle_capture(self):
         if not self.packet_started:
