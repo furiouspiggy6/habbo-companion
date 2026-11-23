@@ -174,8 +174,8 @@ class DanceControllerTests(unittest.TestCase):
         a=fake_app()
         a._start_dance_cycle()
         gen=a._dance_generation
-        pending=a._dance_after_id
         a._dance_tick(gen)
+        pending=a._dance_after_id
         a._stop_dance_and_cycle()
         self.assertFalse(a._dance_running)
         self.assertIn(pending,a.root.cancelled)
