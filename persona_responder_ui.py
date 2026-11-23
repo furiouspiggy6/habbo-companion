@@ -296,142 +296,102 @@ class PersonaResponderMixin:
         self._responder_refresh_room_users()
         self._responder_update_logging_status()
 
-    def _responder_toggle_advanced(self):
-        self._responder_advanced_open=not self._responder_advanced_open
-        if self._responder_advanced_open:
-            self._responder_advanced_frame.pack(fill='x')
-            self._responder_advanced_button.configure(text='Advanced options ▾')
-        else:
-            self._responder_advanced_frame.pack_forget()
-            self._responder_advanced_button.configure(text='Advanced options ▸')
-
     @staticmethod
     def _responder_reply_speed_label(seconds):
         interval=clamp_reply_interval(seconds)
-        if interval>=60:
-            mins,rem=divmod(interval,60)
-            readable=(f'{mins} min' if not rem else f'{mins} min {rem} sec')
-        else:
-            readable=f'{interval} sec'
-        return '1 reply at most every '+readable
+        return ('Immediately (no added cooldown)' if interval==0
+                else f'Minimum {interval} sec between replies')
 
     def _responder_reply_speed_changed(self,value):
-        """Apply slider only to a custom personality, not copied personas."""
-        if self.responder_style_mode_var.get()=='Chat-log style':
-            self.responder_reply_interval_text.set(
-                'Persona mode: automatic 30s anti-spam gap')
-            return
+        """Enable instant to 30-second pacing equally for all personas."""
         seconds=clamp_reply_interval(value)
         self.responder.reply_cooldown_seconds=seconds
         self.responder_reply_interval_text.set(
             self._responder_reply_speed_label(seconds))
 
     def _responder_commit_reply_speed(self,event=None):
-        if self.responder_style_mode_var.get()=='Chat-log style':
-            return
         seconds=clamp_reply_interval(self.responder_reply_interval_var.get())
         self.responder_reply_interval_var.set(seconds)
         self._responder_reply_speed_changed(seconds)
         self.config['responder_reply_interval']=seconds
         self.save()
 
-    def _responder_update_target_controls(self):
-        if self.responder_target_mode_var.get()=='Selected users':
-            self._responder_targets_frame.pack(fill='x',pady=(0,3))
-            self._responder_refresh_room_users(show=False)
-        else:
-            self._responder_hide_target_matches()
-            self._responder_targets_frame.pack_forget()
-
-    def _responder_refresh_room_users(self,show=False):
-        """Use the current G-Earth room roster plus this room's AIR speakers.
-
-        Do not mix in saved historical logs; a profile search and a live
-        reply-target search are intentionally different sources.
-        """
+    def _responder_refresh_room_users(self):
+        """Show current room roster; never offer stale historical chat usernames."""
         found={}
         own=str(getattr(self,'_own_name','') or '').casefold()
         for user in getattr(self,'_room_users',{}).values():
-            if not isinstance(user,(tuple,list)) or not user:
-                continue
-            name=str(user[0]).strip()
+            if isinstance(user,(tuple,list)) and user:
+                name=str(user[0]).strip()
+                if name and name.casefold()!=own:
+                    found[name.casefold()]=name
+        for name,_stamp in getattr(self,'_responder_room_speakers',{}).values():
             if name and name.casefold()!=own:
-                found[name.casefold()]=name
-        for name,_when in getattr(self,'_responder_room_speakers',{}).values():
-            if name.casefold()!=own:
                 found.setdefault(name.casefold(),name)
-        self._responder_room_names=sorted(found.values(),key=str.casefold)
-        self._responder_filter_target_users(show=show)
-        n=len(self._responder_room_names)
-        self.responder_room_status_var.set(
-            f'{n} player(s) detected in the current room. '
-            'Type part of a name and click a suggestion to add it.'
-            if n else
-            'No room players detected yet. Join a room with G-Earth connected, '
-            'then click Refresh room.')
+        names=sorted(found.values(),key=str.casefold)
+        self._responder_room_names=names
+        self._responder_render_target_checklist()
 
-    def _responder_filter_target_users(self,event=None,show=True):
-        if event is not None and event.keysym in (
-            'Up','Down','Return','Escape','Tab','Left','Right'):
-            return
-        query=self.responder_target_search_var.get()
-        names=matching_style_usernames(self._responder_room_names,query,limit=80)
-        self._responder_target_matches=names
-        box=self.responder_target_matches_list
-        box.delete(0,'end')
-        for name in names:
-            box.insert('end',name)
-        if names and show and self.responder_target_mode_var.get()=='Selected users':
-            box.configure(height=min(6,len(names)))
-            if not box.winfo_manager():
-                # Pack before the selected-name label, preserving layout order
-                # even after repeatedly hiding and reopening the dropdown.
-                label=next(
-                    (w for w in self._responder_targets_frame.pack_slaves()
-                     if isinstance(w,ttk.Label) and
-                     str(w.cget('text'))=='Reply only to these users'),None)
-                if label is not None:
-                    box.pack(fill='x',pady=(0,5),before=label)
-                else:
-                    box.pack(fill='x',pady=(0,5))
+    def _responder_render_target_checklist(self):
+        """Draw actual checkboxes in a compact grid (not an editable name list)."""
+        for widget in self._responder_target_checks_frame.winfo_children():
+            widget.destroy()
+        self._responder_target_checkboxes={}
+        all_selected=self.responder_everyone_var.get()
+        selected=selected_usernames(self.responder_target_var.get())
+        query=self.responder_target_search_var.get().strip().casefold()
+        filtered=matching_style_usernames(self._responder_room_names,query,limit=80)
+        for index,name in enumerate(filtered):
+            var=tk.BooleanVar(
+                value=all_selected or name.casefold() in selected)
+            checkbox=ttk.Checkbutton(
+                self._responder_target_checks_frame,text=name,variable=var,
+                command=self._responder_target_selection_changed)
+            checkbox.grid(row=index//3,column=index%3,sticky='w',
+                          padx=(0,13),pady=(0,5))
+            self._responder_target_checkboxes[name.casefold()]=(name,var)
+        # Keep a selected user checked when the filter hides them: their
+        # selection lives in responder_target_var, not the rendered widgets.
+        found=len(self._responder_room_names)
+        matched=len(filtered)
+        if found:
+            self.responder_room_status_var.set(
+                f'{found} players detected. '+
+                (f'Showing {matched} matches. ' if query else '')+
+                'Tick individuals, or tick Everyone to include all.')
         else:
-            self._responder_hide_target_matches()
+            self.responder_room_status_var.set(
+                'No room players detected yet. Connect Habbo AIR and '
+                'G-Earth, then select Refresh room.')
 
-    def _responder_hide_target_matches(self):
-        self.responder_target_matches_list.pack_forget()
-
-    def _responder_focus_target_matches(self,event=None):
-        if self._responder_target_matches:
-            box=self.responder_target_matches_list
-            box.focus_set()
-            box.selection_set(0)
-            box.activate(0)
-        return 'break'
-
-    def _responder_choose_target_user(self,event=None):
-        selected=self.responder_target_matches_list.curselection()
-        if not selected:
-            return
-        chosen=self.responder_target_matches_list.get(selected[0])
-        self.responder_target_matches_list.selection_clear(0,'end')
-        if chosen not in self._responder_room_names:
-            return
-        picked=[n.strip() for n in
-                self.responder_target_var.get().split(',') if n.strip()]
-        if chosen.casefold() not in {n.casefold() for n in picked}:
-            picked.append(chosen)
-        self.responder_target_var.set(', '.join(picked))
-        self.responder_target_search_var.set('')
-        self._responder_hide_target_matches()
-        # Apply immediately, so the responder targets only selected users;
-        # the outgoing G-Earth Chat template and sending switch stay intact.
+    def _responder_target_selection_changed(self):
+        # Reconcile only VISIBLE checkboxes into the remembered selection.
+        selected=selected_usernames(self.responder_target_var.get())
+        for key,(_name,var) in self._responder_target_checkboxes.items():
+            if var.get():
+                selected.add(key)
+            else:
+                selected.discard(key)
+        if self.responder_everyone_var.get():
+            self.responder_everyone_var.set(False)
+        self.responder_target_mode_var.set('Selected users')
+        display={name.casefold():name for name in self._responder_room_names}
+        self.responder_target_var.set(
+            ', '.join(display.get(key,key) for key in
+                      sorted(selected,key=str.casefold)))
         self._responder_apply()
-        self._responder_log('Reply targets updated: '+self.responder_target_var.get())
 
-    def _responder_clear_target_users(self):
-        self.responder_target_var.set('')
-        self.responder_target_search_var.set('')
-        self._responder_hide_target_matches()
+    def _responder_toggle_everyone(self):
+        all_checked=self.responder_everyone_var.get()
+        if all_checked:
+            self.responder_target_mode_var.set('Everyone')
+            self.responder_target_var.set(
+                ', '.join(self._responder_room_names))
+        else:
+            # Unchecking Everyone starts a fresh explicit subset.
+            self.responder_target_mode_var.set('Selected users')
+            self.responder_target_var.set('')
+        self._responder_render_target_checklist()
         self._responder_apply()
 
     def _responder_mode_display(self):
