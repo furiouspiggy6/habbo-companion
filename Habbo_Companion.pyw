@@ -6283,6 +6283,233 @@ class ChatOverlayApp(PersonaResponderMixin):
                                      if enabled else
                                      'disabled: advanced G-Earth tools remain available.'))
 
+    def _bot_load_walk_preset(self):
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        stored=self.config.get('clientless_walk_presets',{})
+        values=stored.get(room,[]) if isinstance(stored,dict) else []
+        valid=[]
+        try:
+            if isinstance(values,list) and values:
+                valid=clientless_walk_positions(
+                    ','.join(map(str,values[0])),
+                    ';'.join(','.join(map(str,p)) for p in values[1:]))
+        except (TypeError,ValueError,IndexError):
+            pass
+        self.bot_walk_primary_var.set(
+            ','.join(map(str,valid[0])) if valid else '')
+        self.bot_walk_backups_var.set(
+            ';'.join(','.join(map(str,p)) for p in valid[1:]))
+        self.bot_walk_status_var.set(
+            ('Loaded '+str(len(valid))+' saved tile(s) for room '+room+'.'
+             if valid else 'No automatic walking positions saved for room '+room+'.'))
+
+    def _bot_save_walk_preset(self):
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        # Never associate a preset with an invalid/unintended room ID.
+        if str(self.bot_room_var.get()).strip()!=room:
+            self.bot_walk_status_var.set('Enter a valid numeric Room ID first.')
+            self.bot_auto_walk_var.set(False)
+            return
+        try:
+            positions=clientless_walk_positions(
+                self.bot_walk_primary_var.get(),self.bot_walk_backups_var.get())
+        except (ClientlessBotError,ValueError,TypeError) as exc:
+            self.bot_walk_status_var.set('Cannot save: '+str(exc)[:145])
+            self.bot_auto_walk_var.set(False)
+            return
+        if self.bot_auto_walk_var.get() and not positions:
+            self.bot_walk_status_var.set(
+                'Save a primary X,Y destination before enabling auto-walk.')
+            self.bot_auto_walk_var.set(False)
+            return
+        saved=self.config.get('clientless_walk_presets')
+        saved=dict(saved) if isinstance(saved,dict) else {}
+        if positions:
+            saved[room]=[list(p) for p in positions]
+        else:
+            saved.pop(room,None)
+        self.config['clientless_walk_presets']=saved
+        self.config['clientless_auto_walk']=bool(self.bot_auto_walk_var.get())
+        self.save()
+        self.bot_walk_status_var.set(
+            'Room '+room+': '+str(len(positions))+' destination(s) saved. '+
+            ('Automatic walking ON.' if self.bot_auto_walk_var.get()
+             else 'Automatic walking OFF.'))
+
+    def _bot_arm_walk(self,ident,generation,session,room):
+        """Arm only a saved, user-enabled route for the requested room."""
+        self._bot_walk_plans.pop(ident,None)
+        self._bot_user_roster.pop(ident,None)
+        if not self.bot_auto_walk_var.get():
+            return
+        stored=self.config.get('clientless_walk_presets',{})
+        raw=stored.get(str(room)) if isinstance(stored,dict) else None
+        if not isinstance(raw,list) or not raw:
+            self.bot_walk_status_var.set(
+                'Room '+str(room)+': no saved destinations; no auto-walk.')
+            return
+        try:
+            positions=clientless_walk_positions(
+                ','.join(map(str,raw[0])),
+                ';'.join(','.join(map(str,p)) for p in raw[1:]))
+            # Fail closed for an unknown release or invalid walk header.
+            encode_clientless_action(self._bot_headers,session.release,'Walk',
+                                     x=positions[0][0],y=positions[0][1])
+        except (ClientlessBotError,ValueError,TypeError,IndexError) as exc:
+            self.bot_walk_status_var.set('Cannot arm auto-walk: '+str(exc)[:155])
+            return
+        self._bot_walk_plans[ident]={
+            'generation':generation,'room':room,'points':positions,
+            'phase':'waiting_room','deadline':time.monotonic()+18,
+            'attempt':-1,'room_index':None,'position':None,
+            'requested':None,'movement_seen':False,
+        }
+        self.bot_walk_status_var.set(
+            'Room '+str(room)+': waiting for server room-entry confirmation.')
+        self.root.after(800,lambda uid=ident,gen=generation:
+                        self._bot_walk_tick(uid,gen))
+
+    def _bot_walk_maybe_start(self,ident,generation):
+        plan=self._bot_walk_plans.get(ident)
+        if not plan or plan['generation']!=generation:
+            return
+        if plan['phase']!='waiting_avatar':
+            return
+        uid=self._bot_self_ids.get(ident)
+        roster=self._bot_user_roster.get(ident,{})
+        unit=roster.get(uid)
+        if unit is None:
+            return
+        room_index,x,y=unit
+        plan['room_index']=room_index
+        plan['position']=(x,y)
+        self._bot_walk_next(ident,generation,'Avatar identified')
+
+    def _bot_receive_walk_observation(self,ident,generation,observation):
+        kind,value=observation
+        if kind=='identity':
+            self._bot_self_ids[ident]=value
+        elif kind=='users':
+            self._bot_user_roster[ident]=value
+        plan=self._bot_walk_plans.get(ident)
+        if plan is None or plan['generation']!=generation:
+            return
+        if kind=='ready' and value==plan['room']:
+            plan['phase']='waiting_avatar'
+            plan['deadline']=time.monotonic()+15
+            self.bot_walk_status_var.set(
+                'Room entry confirmed; identifying your avatar before walking.')
+        if kind in ('ready','identity','users'):
+            self._bot_walk_maybe_start(ident,generation)
+            return
+        if kind=='status' and plan['room_index'] is not None:
+            for index,x,y,movement in value:
+                if index!=plan['room_index']:
+                    continue
+                plan['position']=(x,y)
+                if plan['phase']=='walking' and plan['requested']==(x,y):
+                    self.bot_walk_status_var.set(
+                        'Arrived at '+str(x)+','+str(y)+' (server position confirmed).')
+                    self._bot_walk_plans.pop(ident,None)
+                    return
+                if plan['phase']=='walking' and movement==plan['requested']:
+                    plan['movement_seen']=True
+                break
+
+    def _bot_walk_next(self,ident,generation,reason):
+        plan=self._bot_walk_plans.get(ident)
+        if not plan or plan['generation']!=generation:
+            return
+        attempt=plan['attempt']+1
+        if attempt>=len(plan['points']):
+            self.bot_walk_status_var.set(
+                'Stopped: no saved destination was confirmed reached. '
+                'Check that the room is loaded and the tiles are accessible.')
+            self._bot_walk_plans.pop(ident,None)
+            return
+        target=plan['points'][attempt]
+        if plan['position']==target:
+            self.bot_walk_status_var.set(
+                'Already at '+str(target[0])+','+str(target[1])+
+                ' (initial room position confirmed).')
+            self._bot_walk_plans.pop(ident,None)
+            return
+        plan['attempt']=attempt
+        plan['requested']=target
+        plan['movement_seen']=False
+        plan['phase']='queued'
+        plan['deadline']=time.monotonic()+5
+        self.bot_walk_status_var.set(
+            ('Primary' if attempt==0 else 'Backup '+str(attempt))+
+            ' tile '+str(target[0])+','+str(target[1])+
+            ' queued ('+reason+').')
+        self._bot_walk_send(ident,generation)
+
+    def _bot_walk_send(self,ident,generation):
+        plan=self._bot_walk_plans.get(ident)
+        if not plan or plan['generation']!=generation or plan['phase']!='queued':
+            return
+        session=self._tcp_sessions.get(ident)
+        if (not session or not session.authenticated or session.stop.is_set()
+            or self._tcp_generation.get(ident,0)!=generation):
+            self.bot_walk_status_var.set('Auto-walk stopped: Direct TCP disconnected.')
+            self._bot_walk_plans.pop(ident,None)
+            return
+        if ident in self._bot_action_inflight:
+            return  # _bot_walk_tick retries after the current action finishes.
+        x,y=plan['requested']
+        try:
+            packets=encode_clientless_action(
+                self._bot_headers,session.release,'Walk',x=x,y=y)
+        except (ClientlessBotError,ValueError,TypeError) as exc:
+            self.bot_walk_status_var.set('Auto-walk unavailable: '+str(exc)[:150])
+            self._bot_walk_plans.pop(ident,None)
+            return
+        self._bot_action_inflight.add(ident)
+        self._bot_last_action_at[ident]=time.monotonic()
+        plan['phase']='walking'
+        plan['deadline']=time.monotonic()+14
+        self.bot_walk_status_var.set(
+            ('Primary' if plan['attempt']==0 else 'Backup '+str(plan['attempt']))+
+            ': walking to '+str(x)+','+str(y)+'; waiting for server position.')
+        threading.Thread(
+            target=self._bot_action_worker,
+            args=(ident,generation,session,'Auto Walk',packets),
+            daemon=True,name='companion-auto-walk-'+ident).start()
+
+    def _bot_walk_tick(self,ident,generation):
+        plan=self._bot_walk_plans.get(ident)
+        if not plan or plan['generation']!=generation:
+            return
+        session=self._tcp_sessions.get(ident)
+        if (self._tcp_generation.get(ident,0)!=generation
+            or not session or not session.authenticated or session.stop.is_set()):
+            self.bot_walk_status_var.set('Auto-walk stopped: connection changed.')
+            self._bot_walk_plans.pop(ident,None)
+            return
+        now=time.monotonic()
+        if plan['phase']=='queued':
+            if now>plan['deadline']:
+                self._bot_walk_next(ident,generation,'Send queue timed out')
+            else:
+                self._bot_walk_send(ident,generation)
+        elif now>=plan['deadline']:
+            if plan['phase']=='walking':
+                # Timeout means no confirmed arrival; try the next saved tile.
+                self._bot_walk_next(ident,generation,
+                                    'Destination not confirmed within 14 seconds')
+            elif plan['phase']=='waiting_room':
+                self.bot_walk_status_var.set(
+                    'Auto-walk skipped: the game did not confirm room entry.')
+                self._bot_walk_plans.pop(ident,None)
+            elif plan['phase']=='waiting_avatar':
+                self.bot_walk_status_var.set(
+                    'Auto-walk skipped: your avatar could not be identified.')
+                self._bot_walk_plans.pop(ident,None)
+        if ident in self._bot_walk_plans:
+            self.root.after(800,lambda uid=ident,gen=generation:
+                            self._bot_walk_tick(uid,gen))
+
     def _bot_run_from_accounts(self):
         account=self._account_selected()
         if account is not None:
