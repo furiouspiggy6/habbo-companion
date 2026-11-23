@@ -76,6 +76,7 @@ class PersonaResponderMixin:
             value='Using your custom personality.')
         self._responder_style_users=[]
         self._responder_style_matches=[]
+        self._responder_style_sources={}
         self.responder_personality_text=self.responder.personality
         self.responder_tone_var=tk.StringVar(value=self.responder.tone)
         self.responder_humour_var=tk.StringVar(value=str(self.responder.humour))
@@ -400,41 +401,24 @@ class PersonaResponderMixin:
                 self.responder.style_mode)
 
     def _responder_update_style_controls(self):
-        mode=self.responder_style_mode_var.get()
-        copying=(mode=='Chat-log style')
-        self.responder_personality_entry.configure(
-            state='disabled' if copying else 'normal')
-        # A recreated persona must not inherit generic personality, tone,
-        # humour, Chatty/Natural, or the custom Reply Speed slider.
-        for combo in (self.responder_tone_combo,self.responder_humour_combo,
-                      self.responder_responsiveness_combo):
-            combo.configure(state='disabled' if copying else 'readonly')
+        copying=self.responder_style_mode_var.get()=='Chat-log style'
         if copying:
-            self.responder_reply_interval_scale.state(['disabled'])
-            self.responder_rotation_check.state(['disabled'])
-            self.responder_reply_interval_text.set(
-                'Persona mode: automatic 30s anti-spam gap')
-            self.responder_rotation_var.set(False)
-        else:
-            self.responder_reply_interval_scale.state(['!disabled'])
-            self.responder_rotation_check.state(['!disabled'])
-            self.responder_reply_interval_text.set(
-                self._responder_reply_speed_label(
-                    self.responder.reply_cooldown_seconds))
-        if copying:
+            self._responder_custom_frame.pack_forget()
             reference=self.responder.persona_reference()
-            count=(reference or {}).get(
-                'evidence_messages_in_recent_log_window',0)
-            caution=(' Limited evidence—more messages give a better simulation.'
-                     if count<60 else
-                     ' Based on observed chat behaviour, not their actual identity.')
+            count=(reference or {}).get('evidence_messages_in_recent_log_window',0)
+            note=(' Limited evidence—more messages will give better results.'
+                  if count<60 else ' Based on observed public chat.')
             self.responder_style_status_var.set(
                 f"Simulating {self.responder.persona}'s conversational persona "
-                f"from {count} public messages."+caution)
+                f"from {count} saved messages."+note)
         else:
+            self.responder_personality_entry.configure(state='normal')
+            if not self._responder_custom_frame.winfo_manager():
+                self._responder_custom_frame.pack(
+                    fill='x',before=self._responder_speed_area,pady=(0,6))
             self.responder_style_status_var.set(
-                'Using your custom personality. Select a logged player '
-                'to simulate their conversation habits and reactions.')
+                'Custom personality: edit your own description below, or '
+                'search for a saved player to recreate their persona.')
 
     def _responder_style_directory(self):
         path=Path(self.responder_log_dir_var.get().strip() or
@@ -444,34 +428,33 @@ class PersonaResponderMixin:
         return path
 
     def _responder_refresh_style_users(self):
-        """Find matching per-user .txt files without loading whole chat logs."""
-        folder=self._responder_style_directory()
-        names=list_style_usernames(folder)
-        if not names and folder==self._responder_default_logs:
-            # Fresh installs: find common legacy or Companion log locations.
-            candidates=(
-                Path(__file__).resolve().parent/'chat_logs'/'users',
-                self._responder_app_dir/'chat_logs'/'users',
-                self._responder_app_dir/'persona_logs'/'users',
-            )
-            for candidate in candidates:
-                if candidate==folder:
-                    continue
-                names=list_style_usernames(candidate)
-                if names:
-                    folder=candidate
-                    break
-        self.responder_log_dir_var.set(str(folder))
-        self._responder_style_users=names
+        """Find logged users automatically; no folder selection needed."""
+        archive=self._responder_app_dir/'persona_logs'/'users'
+        candidates=(
+            archive,
+            self._responder_style_directory(),
+            Path(__file__).resolve().parent/'chat_logs'/'users',
+            self._responder_app_dir/'chat_logs'/'users',
+            self._responder_default_logs,
+        )
+        seen=set()
+        sources={}
+        for folder in candidates:
+            folder=Path(folder).expanduser()
+            if folder in seen:
+                continue
+            seen.add(folder)
+            for name in list_style_usernames(folder):
+                sources.setdefault(name.casefold(),(name,folder))
+        self._responder_style_sources={
+            key:folder for key,(_name,folder) in sources.items()}
+        self._responder_style_users=sorted(
+            (name for name,_folder in sources.values()),key=str.casefold)
         self._responder_filter_style_users(show=False)
-        if not names:
+        if not self._responder_style_users:
             self.responder_style_status_var.set(
-                'No user logs found in '+str(folder)+
-                '. Click Choose log folder and select chat_logs/users.')
-        elif self.responder_style_mode_var.get()=='Custom personality':
-            self.responder_style_status_var.set(
-                f'{len(names)} usernames found. Search to simulate a chat persona, '
-                'or keep your custom personality.')
+                'No recorded users yet. Keep Habbo AIR running and public '
+                'room chat will be saved automatically.')
         else:
             self._responder_update_style_controls()
 
@@ -513,7 +496,8 @@ class PersonaResponderMixin:
         self.responder_style_matches_list.selection_clear(0,'end')
         if name not in self._responder_style_users:
             return
-        directory=self._responder_style_directory()
+        directory=self._responder_style_sources.get(
+            name.casefold(),self._responder_style_directory())
         profile=PersonaResponder(directory)
         profile.persona=name
         reference=profile.persona_reference()
@@ -523,6 +507,7 @@ class PersonaResponderMixin:
                 'No usable messages found for '+name+'. Select another user.')
             return
         self.responder_style_search_var.set(name)
+        self.responder_log_dir_var.set(str(directory))
         self.responder_persona_var.set(name)
         self.responder_style_mode_var.set('Chat-log style')
         # Selecting a specific user must not rotate away to someone else.
