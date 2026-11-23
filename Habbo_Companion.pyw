@@ -6719,6 +6719,146 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.root.after(800,lambda uid=ident,gen=generation:
                             self._bot_walk_tick(uid,gen))
 
+    def _bot_multi_refresh(self):
+        """Keep multi-select rows in sync without losing highlighted profiles."""
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return
+        try:
+            if not tree.winfo_exists():
+                return
+            highlighted=set(tree.selection())
+            for key in tree.get_children(''):
+                tree.delete(key)
+            for account in self._account_profiles:
+                ident=account['id']
+                session=self._tcp_sessions.get(ident)
+                if (session is not None and session.authenticated
+                    and not session.stop.is_set()):
+                    connection=('Connected · G-Earth' if ident in
+                                self._bot_gearth_bridges else 'Connected · Direct TCP')
+                elif ident in self._tcp_inflight:
+                    connection='Connecting…'
+                else:
+                    state=str(self._tcp_states.get(ident,'Disconnected'))
+                    connection=state[:58]
+                room=self._bot_run_room_targets.get(ident,'—')
+                tree.insert('', 'end',iid=ident,text=account['label'],
+                            values=(connection,room))
+            keep=tuple(a['id'] for a in self._account_profiles
+                       if a['id'] in highlighted)
+            if keep:
+                tree.selection_set(keep)
+        except (tk.TclError,ValueError):
+            pass
+
+    def _bot_multi_tick(self,generation):
+        if generation!=self._bot_multi_ui_generation:
+            return
+        tree=getattr(self,'bot_multi_tree',None)
+        try:
+            if tree is None or not tree.winfo_exists():
+                return
+            self._bot_multi_refresh()
+            self.root.after(2500,lambda generation=generation:
+                            self._bot_multi_tick(generation))
+        except (tk.TclError,RuntimeError):
+            pass
+
+    def _bot_multi_selected(self):
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return ()
+        try:
+            selected=set(tree.selection())
+        except tk.TclError:
+            return ()
+        return tuple(a for a in self._account_profiles
+                     if a['id'] in selected)
+
+    def _bot_multi_select_all(self):
+        self._bot_multi_refresh()
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return
+        tree.selection_set(tuple(a['id'] for a in self._account_profiles))
+        self.bot_multi_status_var.set(
+            str(len(self._account_profiles))+' profiles highlighted. '
+            'Click Run highlighted to connect; nothing starts automatically.')
+
+    def _bot_multi_run_selected(self):
+        """Explicit user action; one independently authenticated socket per id."""
+        chosen=self._bot_multi_selected()
+        if not chosen:
+            self.bot_multi_status_var.set(
+                'Highlight one or more saved profiles first (Ctrl/Shift).')
+            return
+        try:
+            room=int(str(self.bot_room_var.get()).strip())
+            if not 1<=room<=2147483647:
+                raise ValueError()
+        except (TypeError,ValueError):
+            self.bot_multi_status_var.set(
+                'Enter a valid numeric Room ID (1–2147483647) before launching.')
+            return
+        if self.bot_gearth_var.get() and len(chosen)>1:
+            self.bot_multi_status_var.set(
+                'G-Earth ON supports ONE intercepted session only. '
+                'Disconnect the intercepted account and turn G-Earth OFF '
+                'before starting multiple clientless accounts over Direct TCP.')
+            return
+        if not self.bot_gearth_var.get() and self._bot_gearth_bridges:
+            self.bot_multi_status_var.set(
+                'An intercepted G-Earth account is still active. Disconnect '
+                'that account first, then run the highlighted Direct TCP profiles.')
+            return
+        self._bot_multi_start_generation+=1
+        generation=self._bot_multi_start_generation
+        count=len(chosen)
+        self.bot_multi_status_var.set(
+            'Starting '+str(count)+' saved profile(s) for room '+str(room)+
+            ' using '+('G-Earth' if self.bot_gearth_var.get() else 'Direct TCP')+
+            '. Each account has its own login, game socket and actions.')
+        for i,account in enumerate(chosen):
+            # Stagger the independent browser login workers to avoid opening
+            # many isolated Chromium sessions in the same millisecond.
+            self.root.after(
+                1200*i,lambda uid=account['id'],gen=generation,target=room:
+                self._bot_multi_run_one(uid,gen,target))
+
+    def _bot_multi_run_one(self,ident,generation,room):
+        if generation!=self._bot_multi_start_generation:
+            return  # stop highlighted invalidates queued starts.
+        account=next((a for a in self._account_profiles
+                      if a['id']==ident),None)
+        if account is None:
+            return
+        session=self._tcp_sessions.get(ident)
+        if (ident in self._tcp_inflight or
+            (session is not None and session.authenticated
+             and not session.stop.is_set())):
+            # Existing sessions keep their room, auto-walk and AFK state.
+            self._bot_multi_refresh()
+            return
+        self._bot_run_account(account,room_override=room)
+        self._bot_multi_refresh()
+
+    def _bot_multi_disconnect_selected(self):
+        chosen=self._bot_multi_selected()
+        if not chosen:
+            self.bot_multi_status_var.set(
+                'Highlight one or more profiles to disconnect.')
+            return
+        # Stop any queued starts first, then only disconnect highlighted IDs.
+        self._bot_multi_start_generation+=1
+        for account in chosen:
+            self._tcp_disconnect_one(account['id'])
+        self._tcp_render()
+        self._bot_multi_refresh()
+        self.bot_multi_status_var.set(
+            'Disconnected '+str(len(chosen))+' selected profile(s); '
+            'other accounts remain running.')
+
     def _bot_run_from_accounts(self):
         account=self._account_selected()
         if account is not None:
