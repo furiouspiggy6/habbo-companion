@@ -44,6 +44,7 @@ import importlib.util
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font
+from persona_responder import chat_expression_from_template
 from persona_responder_ui import PersonaResponderMixin
 
 
