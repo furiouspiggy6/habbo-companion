@@ -15,7 +15,7 @@ sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
-PAGES={'overview','accounts','tcp','chat','responder','packet','fuzz','manip',
+PAGES={'overview','accounts','tcp','chat','responder','packet','outfits','fuzz','manip',
        'classic','headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
@@ -39,6 +39,9 @@ try:
     assert app.account_table.winfo_exists(), 'Accounts list failed to build'
     assert app.tcp_table.winfo_exists(), 'Direct TCP list failed to build'
     assert app.packet_tree.winfo_exists(), 'Packet Viewer failed to build'
+    assert app.outfit_listbox.winfo_exists(), 'Outfit Cycler UI failed to build'
+    assert not app._outfit_running, 'Outfit Cycler must start OFF'
+    assert app.outfit_delay_var.get()=='0.3', 'Incorrect default outfit interval'
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.arcturus_header_var.get()=='', (
         'Arcturus header must be supplied by the emulator owner, never guessed')
@@ -242,6 +245,6 @@ try:
     app._ui_refresh_dashboard()
     assert app._ui_dashboard_vars['accounts'].get().isdigit()
     assert root.winfo_width()>=940, 'Workspace width collapsed'
-    print('Modern-dark Tkinter workspace and all eleven navigation pages: PASS')
+    print('Modern-dark Tkinter workspace and all twelve navigation pages: PASS')
 finally:
     root.destroy()
