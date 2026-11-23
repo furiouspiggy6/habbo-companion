@@ -18,8 +18,56 @@ import sys
 import time
 import uuid
 import zipfile
+from urllib.parse import urlsplit
 
 APP_ID = 'habbo-companion'
+TRUSTED_RELEASE_ROOT = (
+    'https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/'
+)
+
+
+def validate_official_release_url(url, kind, version=None):
+    """Accept only this repository's HTTPS feed and versioned update ZIP.
+
+    HTTPS + SHA-256 alone do not identify the publisher. Pinning paths
+    prevents a saved malicious manifest or remote ZIP URL from redirecting
+    Companion to a different publisher. Does not replace digital signatures.
+    Manual local update ZIPs still require user confirmation.
+    """
+    if kind not in ('manifest', 'package'):
+        raise ValueError('Invalid release URL type')
+    if not isinstance(url, str) or not url or len(url)>400:
+        raise ValueError('Invalid update source')
+    try:
+        parts=urlsplit(url)
+        port=parts.port
+    except (TypeError,ValueError) as exc:
+        raise ValueError('Invalid update source') from exc
+    if (parts.scheme!='https' or parts.hostname!='raw.githubusercontent.com'
+            or parts.username is not None or parts.password is not None
+            or port not in (None,443) or parts.query or parts.fragment):
+        raise ValueError('Automatic updates must use the official Habbo Companion GitHub feed')
+    if kind=='manifest':
+        expected=TRUSTED_RELEASE_ROOT+'latest.json'
+        if url!=expected:
+            raise ValueError('Use the official Habbo Companion update manifest')
+    else:
+        if version is None:
+            # Standalone ZIP validation is useful at the download boundary.
+            found=re.fullmatch(
+                r'Habbo_Companion_Update_v(\d{1,4}\.\d{1,4}\.\d{1,4})\.zip',
+                url[len(TRUSTED_RELEASE_ROOT):] if
+                url.startswith(TRUSTED_RELEASE_ROOT) else '')
+            if not found:
+                raise ValueError('Unrecognized Habbo Companion update package URL')
+            version=found.group(1)
+        version_tuple(version)
+        expected=(TRUSTED_RELEASE_ROOT+
+                  f'Habbo_Companion_Update_v{version}.zip')
+        if url!=expected:
+            raise ValueError('Release package URL does not match the announced version')
+    return url
+
 MANIFEST = 'habbo-update.json'
 APP_FILES = frozenset({'Habbo_Companion.pyw', 'Habbo_Update_Helper.py', 'headless_transport.py', 'local_classic_launch.py', 'habbo_tcp.py', 'README.txt'})
 MAX_PACKAGE = 12 * 1024 * 1024

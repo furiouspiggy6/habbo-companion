@@ -1,3 +1,32 @@
+HABBO COMPANION v1.1.83 — SECURITY HARDENING FOR SHARING
+=========================================================
+
+The SAME application and SAME updates are used by you and your friends.
+No existing Habbo AIR, G-Earth, Direct TCP, AI Responder, or packet tools
+have been removed or disabled.
+
+SAFER SHARING
+- Packet Viewer export now asks if you want packet CONTENTS. Choose NO
+  (default) for a safe, payload-free metadata export. Choose YES only
+  for private diagnostics; raw packet data can contain account details.
+- Common sensitive token shapes are masked in private diagnostic exports
+  and Direct TCP log messages. A regex cannot detect every credential.
+- The automatic update source must be the official
+  furiouspiggy6/habbo-companion main/latest.json manifest and a matching
+  versioned ZIP at the same GitHub publisher. Other domains and redirects
+  are rejected. ZIP hashes are still checked, with normal confirmation and
+  rollback backup. Other local ZIPs require explicit manual confirmation.
+- Git ignores local settings, logs, browser profiles, private sessions,
+  packet captures and credentials to reduce accidental exposure.
+- Automatic security audits run for pull requests and BEFORE publishing
+  releases, rejecting likely committed secrets and private files.
+
+LIMITATIONS: No independent cryptographic release signing is enabled yet.
+A compromised GitHub publisher could still distribute malicious updates.
+Manual ZIP installation is at your own risk. These checks are an improvement
+rather than a guarantee or a full professional security audit.
+
+
 HABBO COMPANION v1.1.82 — TEMPORARY PERSONA INSTRUCTIONS
 ============================================================
 
