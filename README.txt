@@ -1,3 +1,13 @@
+v1.1.99: Clientless Bot G-Earth ON now routes post-login game packets
+through the actual local G-Earth Flash proxy's block/replace pipeline
+using a plaintext loopback relay (127.0.0.1/127.0.0.2:31451).
+SSO login, DH negotiation and RC4 keys remain in Companion.
+Close existing G-Earth windows and check bridge hostname first.
+Requires 127.0.0.2.nip.io to resolve to 127.0.0.2; if blocked,
+add "127.0.0.2 127.0.0.2.nip.io" to your Windows hosts file.
+OFF keeps original Direct TCP. ON does not bypass a disconnected
+bridge. Experimental; see README.md for setup and limitations.
+
 v1.1.98: Clientless Bot now has an optional pre-start G-Earth
 interception toggle. OFF (default) keeps the existing Direct TCP
 login, chat, room entry and automatic walking unchanged.
