@@ -6989,8 +6989,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         bridge_choice=getattr(self,'bot_gearth_var',None)
         if bridge_choice is not None and bridge_choice.get():
             self.tcp_status_var.set(
-                'Clientless G-Earth interception ON (preview): '
-                'automatic Direct TCP startup skipped; bridge unavailable.')
+                'G-Earth ON: choose a clientless profile to start the '
+                'dedicated gameplay relay before logging in.')
             return
         # Only existing saved sessions are requested; never start a browser,
         # prompt for credentials, or launch a game executable.
@@ -7111,6 +7111,14 @@ class ChatOverlayApp(PersonaResponderMixin):
             actual=ticket.secret
             self._packet_put(('tcp_state',ident,generation,
                               'Official SSO ticket parsed; starting game connection'))
+            bridge=self._bot_gearth_bridges.get(ident)
+            if bridge is not None:
+                self._packet_put(('tcp_state',ident,generation,
+                                  'Waiting for G-Earth local gameplay proxy '
+                                  'before authenticating Habbo'))
+                bridge.connect(TCP_FALLBACK_RELEASE,timeout=35)
+                if self._tcp_generation.get(ident,0)!=generation:
+                    raise GearthBridgeError('Profile changed during G-Earth setup')
             session=HabboTcpSession(
                 ident,
                 status=lambda msg:self._packet_put(
@@ -7118,15 +7126,22 @@ class ChatOverlayApp(PersonaResponderMixin):
                 packet=lambda packet_id,size:self._packet_put(
                     ('tcp_packet',ident,generation,packet_id,size)),
                 content=lambda packet_id,body:self._bot_observe_packet(
-                    ident,generation,session,packet_id,body))
+                    ident,generation,session,packet_id,body),
+                gameplay_bridge=bridge)
+            if bridge is not None:
+                bridge.attach(session)
             session.connect(actual)
             self._packet_put(('tcp_connected',ident,generation,session))
         except (OSError,ValueError,RuntimeError,HabboTcpError,TimeoutError) as exc:
             if session:
                 session.close()
-            # Never put HTTP responses, cookies, or SSO tokens in UI diagnostics.
-            detail=(str(exc)[:130] if isinstance(exc,(HabboTcpError,ValueError))
-                    else type(exc).__name__)
+            bridge=self._bot_gearth_bridges.get(ident)
+            if bridge is not None:
+                bridge.close()
+            # Never put HTTP responses, cookies, SSO tokens or keys in diagnostics.
+            detail=(str(exc)[:180] if isinstance(
+                exc,(HabboTcpError,ValueError,GearthBridgeError))
+                else type(exc).__name__)
             self._packet_put(('tcp_failed',ident,generation,detail))
 
     def _tcp_connect_selected(self):
@@ -7146,6 +7161,8 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_disconnect_one(self,ident):
         self._bot_pending_room.pop(ident,None)
+        bridge=self._bot_gearth_bridges.pop(ident,None)
+        if bridge is not None:bridge.close()
         self._bot_walk_plans.pop(ident,None)
         self._bot_self_ids.pop(ident,None)
         self._bot_user_roster.pop(ident,None)
@@ -11349,7 +11366,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self.save()
         return host,port
 
-    def _launch_gearth(self,auto_connect=False,select_if_missing=True):
+    def _launch_gearth(self,auto_connect=False,select_if_missing=True,
+                       target_override=None):
         """Run only G-Earth elevated; never elevate the whole chat companion.
 
         G-Earth's own ConnectionController supports --connect flash (AIR).
@@ -11375,9 +11393,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         try:
             path=path.resolve()
             if auto_connect:
-                target=self._gearth_connection_target()
-                if target is None:return False
-                host,game_port=target
+                if target_override is not None:
+                    if target_override != (DEFAULT_BRIDGE_HOST,DEFAULT_BRIDGE_PORT):
+                        raise ValueError('Invalid local G-Earth bridge target')
+                    host,game_port=target_override
+                else:
+                    target=self._gearth_connection_target()
+                    if target is None:return False
+                    host,game_port=target
                 connection_args=['--connect','flash','--host',host,'--port',str(game_port)]
             else:
                 connection_args=[]
@@ -11734,6 +11757,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._classic_probe_running=False
                 self.tcp_status_var.set(item[1])
                 self._tcp_log_event('classic',item[1])
+                continue
+            if item[0]=='bot_gearth_status':
+                _,ident,message=item
+                if ident in self._bot_gearth_bridges:
+                    self.bot_gearth_status_var.set(message)
                 continue
             if item[0]=='bot_action_result':
                 _,ident,generation,action,count,error=item
