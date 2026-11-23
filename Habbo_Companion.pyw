@@ -59,6 +59,123 @@ def validate_local_habbo_frame(frame):
     return text_length==declared-4
 
 
+
+HABBO_MAX_FRAME = 8192
+
+
+def encode_vl64(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not -(1 << 31) <= value < (1 << 31):
+        raise ValueError('VL64 requires a signed 32-bit integer.')
+    magnitude = abs(value)
+    tail = []
+    rest = magnitude >> 2
+    while rest:
+        tail.append(rest & 0x3f)
+        rest >>= 6
+    first = (0x04 if value < 0 else 0) | (len(tail) << 3) | (magnitude & 3)
+    result = bytearray([first])
+    result.extend(reversed(tail))
+    result[-1] |= 0x40
+    return bytes(result)
+
+
+def decode_vl64(data, offset=0):
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise ValueError('VL64 input must be bytes.')
+    raw = bytes(data)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < len(raw):
+        raise ValueError('VL64 offset is out of range.')
+    first = raw[offset]
+    count = ((first >> 3) & 7) + 1
+    end = offset + count
+    if count > 6 or end > len(raw):
+        raise ValueError('Incomplete or oversized VL64 value.')
+    if count == 1:
+        if not first & 0x40:
+            raise ValueError('Unterminated VL64 value.')
+    elif first & 0x40:
+        raise ValueError('VL64 terminator in first byte.')
+    tail = raw[offset + 1:end]
+    if tail:
+        if any(byte & 0xc0 for byte in tail[:-1]):
+            raise ValueError('Invalid VL64 tail.')
+        if not tail[-1] & 0x40 or tail[-1] & 0x80:
+            raise ValueError('Unterminated VL64 tail.')
+    high = 0
+    for byte in tail:
+        high = (high << 6) | (byte & 0x3f)
+    magnitude = (high << 2) | (first & 3)
+    value = -magnitude if first & 4 else magnitude
+    if not -(1 << 31) <= value < (1 << 31):
+        raise ValueError('VL64 value out of range.')
+    if encode_vl64(value) != raw[offset:end]:
+        raise ValueError('Non-canonical VL64 encoding.')
+    return value, end
+
+
+def encode_b64(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('B64 requires an integer.')
+    magnitude = abs(value)
+    digits = []
+    while magnitude:
+        digits.append(magnitude & 0x3f)
+        magnitude >>= 6
+    if not digits:
+        digits = [0]
+    digits.reverse()
+    out = bytearray(b'@' if value < 0 else b'')
+    for index, digit in enumerate(digits):
+        out.append(digit | (0x40 if index == len(digits) - 1 else 0))
+    return bytes(out)
+
+
+def decode_b64(data, offset=0):
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise ValueError('B64 input must be bytes.')
+    raw = bytes(data)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < len(raw):
+        raise ValueError('B64 offset is out of range.')
+    start = offset
+    negative = raw[offset] == 0x40 and offset + 1 < len(raw)
+    if negative:
+        offset += 1
+    value = 0
+    while offset < len(raw):
+        digit = raw[offset]
+        if digit & 0x80:
+            raise ValueError('Invalid B64 digit.')
+        value = (value << 6) | (digit & 0x3f)
+        offset += 1
+        if digit & 0x40:
+            result = -value if negative else value
+            if encode_b64(result) != raw[start:offset]:
+                raise ValueError('Non-canonical B64 encoding.')
+            return result, offset
+    raise ValueError('Unterminated B64 value.')
+
+
+def validate_habbo_framing_frame(frame):
+    """The local mock's known VL64-then-B64 body; no handler registry."""
+    if not isinstance(frame, (bytes, bytearray, memoryview)) or len(frame) < 6:
+        return False
+    raw = bytes(frame)
+    declared = int.from_bytes(raw[:4], 'big')
+    # Literal bound keeps this function standalone under AST extraction.
+    if declared < 2 or declared > 8192 or declared != len(raw) - 4:
+        return False
+    try:
+        _, offset = decode_vl64(raw, 6)
+        _, offset = decode_b64(raw, offset)
+    except ValueError:
+        return False
+    return offset == len(raw)
+
+
+def validate_habbo_header(header):
+    return isinstance(header, int) and not isinstance(header, bool) and 0 <= header <= 0xffff
+
+
 def validate_owned_lab_ip(value):
     """Select an IPv4 address assigned to this PC, not a remote fuzz target.
 
