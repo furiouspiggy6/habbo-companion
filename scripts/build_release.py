@@ -29,6 +29,13 @@ DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
     "                                  launch_local_classic)\n"
 )
+PERSONA_IMPORT = "from persona_responder import chat_expression_from_template\n"
+PERSONA_UI_IMPORT = "from persona_responder_ui import PersonaResponderMixin\n"
+PERSONA_UI_ENGINE_IMPORT = (
+    "from persona_responder import (\n"
+    "    PersonaResponder, chat_expression_from_template, generate_persona_reply,\n"
+    ")\n"
+)
 APP_ANCHOR = "\nAPP_NAME = 'Habbo View Chat'\n"
 
 
@@ -36,33 +43,46 @@ def bundled_application(root=ROOT):
     """Generate a single-file application using our own local module sources."""
     root = Path(root)
     app = (root / APP_FILES[0]).read_text(encoding="utf-8")
-    if app.count(HEADLESS_IMPORT) != 1 or app.count(DIRECT_IMPORT) != 1 or app.count(TCP_IMPORT) != 1:
+    if (app.count(HEADLESS_IMPORT) != 1 or app.count(DIRECT_IMPORT) != 1
+        or app.count(TCP_IMPORT) != 1 or app.count(PERSONA_IMPORT) != 1
+        or app.count(PERSONA_UI_IMPORT) != 1):
         raise ValueError("Companion module imports changed; update bundle anchors")
     if app.count(APP_ANCHOR) != 1:
         raise ValueError("Companion app constant anchor changed")
 
     modules = []
-    for filename in ("headless_transport.py", "local_classic_launch.py", "habbo_tcp.py"):
+    for filename in ("headless_transport.py", "local_classic_launch.py", "habbo_tcp.py",
+                     "persona_responder.py", "persona_responder_ui.py"):
         source = (root / filename).read_text(encoding="utf-8")
         marker = "from __future__ import annotations\n"
         if source.count(marker) != 1:
             raise ValueError("Unexpected module header: " + filename)
         source = source.replace(marker, "", 1)
+        if filename == "persona_responder_ui.py":
+            if source.count(PERSONA_UI_ENGINE_IMPORT) != 1:
+                raise ValueError("Responder UI engine import changed")
+            source = source.replace(PERSONA_UI_ENGINE_IMPORT, "", 1)
         modules.append("# Bundled source: " + filename + "\n" + source.strip() + "\n")
 
     app = app.replace(HEADLESS_IMPORT, "", 1)
     app = app.replace(DIRECT_IMPORT, "", 1)
     app = app.replace(TCP_IMPORT, "", 1)
+    app = app.replace(PERSONA_IMPORT, "", 1)
+    app = app.replace(PERSONA_UI_IMPORT, "", 1)
     embedded = (
         "\n# Bundled local modules for compatibility with old updaters.\n"
         + modules[0]
         + "\nHEADLESS_TEST_MAX_ACCOUNTS = MAX_ACCOUNTS\n"
         + modules[1]
         + "\n" + modules[2]
+        + "\n" + modules[3]
+        + "\n" + modules[4]
     )
     app = app.replace(APP_ANCHOR, "\n" + embedded + APP_ANCHOR, 1)
     compile(app, str(root / APP_FILES[0]), "exec")
-    if "from headless_transport import" in app or "from local_classic_launch import" in app or "from habbo_tcp import" in app:
+    if any(text in app for text in ("from headless_transport import",
+            "from local_classic_launch import", "from habbo_tcp import",
+            "from persona_responder import", "from persona_responder_ui import")):
         raise ValueError("Unbundled application dependency remains")
     return app.encode("utf-8")
 
