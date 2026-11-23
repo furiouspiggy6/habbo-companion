@@ -1,5 +1,37 @@
 # Habbo Companion
 
+## v1.1.78 — Continuous public room-chat logging (independent of AI)
+
+Companion now **automatically saves new public Habbo AIR room messages in the
+background**, even when **Enable AI responder** is OFF, **Send replies** is
+OFF, the AI Responder page is not open, or the Companion window is minimized.
+
+- Logs are appended to separate files by username at
+  `%APPDATA%\\HabboViewChat\\persona_logs\\users\\<username>.txt`.
+  Each line retains the existing format:
+  `[2026-11-23 13:26:00] Cheesecake: original message text`.
+  Existing per-user files are appended to, not overwritten.
+- Public messages from **all room speakers**, including your own account and
+  those outside the View Chat display's visible-only filter, are archived.
+  Whisper/private messages are excluded.
+- The archived messages remain useful in the AI Responder's partial-username
+  search: click **Refresh** to discover new user files and select a style.
+- Public chat logging is **ON by default**, and the main AI Responder page
+  shows the number of saved messages for the running session. A switch under
+  **Advanced options** can disable it independently of the AI.
+- Selecting a different folder to copy a historic writing style does **not**
+  change the live archive destination.
+
+**Important scope:** "Background" means Companion's normal polling loop
+continues while the window is minimized or other tabs are open. Recording
+requires **Companion to remain running** and **a live Habbo AIR chat feed to
+be available**. It does not run after closing Companion, while Habbo is
+disconnected, or during computer sleep/offline periods; no Windows service
+or autostart task is installed.
+
+The working G-Earth packet-sending logic has not been modified.
+No additional browser/capture.py integration is required for this logger.
+
 ## v1.1.77 — Search saved chat-log users and copy their writing styles
 
 The AI Responder's **Try a reply (preview only)** section has been removed.
