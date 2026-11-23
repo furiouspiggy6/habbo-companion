@@ -211,11 +211,11 @@ try:
             assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
                 'Changing style sample folder must not move the background archive')
             assert app.responder.style_examples()==['heyyy lol','wbuuu']
-            assert app.responder_tone_combo.cget('state')=='disabled', (
+            assert 'disabled' in app.responder_tone_combo.state(), (
                 'Custom tone must be disabled for selected persona')
-            assert app.responder_humour_combo.cget('state')=='disabled', (
+            assert 'disabled' in app.responder_humour_combo.state(), (
                 'Custom humour must be disabled for selected persona')
-            assert app.responder_responsiveness_combo.cget('state')=='disabled', (
+            assert 'disabled' in app.responder_responsiveness_combo.state(), (
                 'Natural/Chatty must be disabled for selected persona')
             assert 'disabled' in app.responder_reply_interval_scale.state(), (
                 'Custom reply speed must be disabled for selected persona')
@@ -259,9 +259,9 @@ try:
                 'Clearing directives must reclaim vertical space')
             app._responder_use_custom_style()
             assert app.responder.style_mode=='Custom personality'
-            assert app.responder_tone_combo.cget('state')=='readonly'
-            assert app.responder_humour_combo.cget('state')=='readonly'
-            assert app.responder_responsiveness_combo.cget('state')=='readonly'
+            assert 'disabled' not in app.responder_tone_combo.state()
+            assert 'disabled' not in app.responder_humour_combo.state()
+            assert 'disabled' not in app.responder_responsiveness_combo.state()
             assert 'disabled' not in app.responder_reply_interval_scale.state()
             assert app.responder.save_history, (
                 'Custom personality must not disable background logging')
