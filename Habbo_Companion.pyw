@@ -10508,7 +10508,6 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         coords=outgoing_face_tile_from_packet(
                             ext,Direction.TO_SERVER,msg.packet)
                         if coords is not None:
-                            self._face_capture_pending=False
                             self._packet_put(('face_tile_captured',*coords))
                     if direction=='Outgoing' and self._face_tile is not None:
                         if outgoing_is_named(
