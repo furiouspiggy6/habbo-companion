@@ -10369,11 +10369,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         enabled=bool(self.packet_auto_capture_var.get())
         self.config['packet_auto_capture']=enabled
         self.save()
-        if self.packet_started and self._habbo_session_connected:
+        if self.packet_started:
             self.packet_active=enabled
-            self.packet_status.set(
-                'Packet viewer LIVE — incoming and outgoing packets.'
-                if enabled else 'Packet viewer paused; auto-capture disabled.')
+            if self._habbo_session_connected:
+                self.packet_status.set(
+                    'Packet viewer LIVE — incoming and outgoing packets.'
+                    if enabled else 'Packet viewer paused; auto-capture disabled.')
+                self.packet_connection_status.set(
+                    'Packet Viewer LIVE — G-Earth and Habbo connected.'
+                    if enabled else
+                    'G-Earth and Habbo connected; packet capture paused.')
+            else:
+                self.packet_status.set(
+                    'Auto-capture enabled; waiting for Habbo traffic.' if enabled
+                    else 'Auto-capture disabled; viewer paused.')
         elif enabled:
             self.packet_status.set(
                 'Auto-capture enabled. Waiting for G-Earth and an active Habbo session.')
@@ -10387,6 +10396,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             return
         self.packet_active=not self.packet_active
         self.packet_status.set('Packet viewer capturing.' if self.packet_active else 'Packet viewer paused.')
+        if self._habbo_session_connected:
+            self.packet_connection_status.set(
+                'Packet Viewer LIVE — G-Earth and Habbo connected.'
+                if self.packet_active else
+                'G-Earth and Habbo connected; packet capture paused.')
 
     def _clear_packets(self):
         self.packet_data.clear()
