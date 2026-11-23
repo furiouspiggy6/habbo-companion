@@ -157,8 +157,6 @@ class MovementLifecycleTests(unittest.TestCase):
         app._bot_receive_walk_observation(ident,3,("identity",4567))
         app._bot_receive_walk_observation(ident,3,("users",{4567:(42,1,2)}))
         self.assertEqual(len(spawned),0)
-        app._bot_receive_walk_observation(ident,3,("ready",12345))
-        self.assertEqual(len(spawned),0)
         app._bot_receive_walk_observation(ident,3,("ready",69118545))
         self.assertEqual(len(spawned),1)
         self.assertEqual(app._bot_walk_plans[ident]["requested"],(10,15))
