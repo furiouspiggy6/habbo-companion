@@ -9888,6 +9888,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.packet_connection_status.set(
                     'Packet tools READY — Habbo and G-Earth connected.' if item[1]
                     else 'Packet tools attached; waiting for Habbo room connection.')
+                if item[1]:
+                    # New AIR connection; never reuse a prior Chat packet ID.
+                    self._responder_chat_template=None
+                    self._responder_outgoing_seen=False
                 if not item[1]:
                     self._responder_chat_template=None
                     self._responder_outgoing_seen=False
