@@ -595,6 +595,8 @@ DEFAULT = dict(
     clientless_last_room_id='69118545',
     clientless_header_map=None,
     clientless_standalone=True,
+    # Pre-start choice; ON will fail closed until a true G-Earth MITM exists.
+    clientless_gearth_intercept=False,
     clientless_auto_walk=False,
     clientless_walk_presets={},
     responder_persona='Mario35',
@@ -5283,6 +5285,13 @@ class ChatOverlayApp(PersonaResponderMixin):
             value='Automatic walking is OFF until you save positions and enable it.')
         self.bot_standalone_var=tk.BooleanVar(
             value=bool(self.config.get('clientless_standalone',True)))
+        self.bot_gearth_var=tk.BooleanVar(
+            value=bool(self.config.get('clientless_gearth_intercept',False)))
+        self.bot_gearth_status_var=tk.StringVar(value=(
+            'G-Earth OFF: normal Direct TCP will be used.'
+            if not self.bot_gearth_var.get() else
+            'G-Earth ON (preview): interception bridge not implemented; '
+            'clientless start is disabled to prevent bypass.'))
         self.bot_account_var=tk.StringVar(value='')
         self.bot_action_var=tk.StringVar(value='Say')
         self.bot_message_var=tk.StringVar(value='')
@@ -6155,6 +6164,25 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'Based on the open-source Habbo-Bot packet structures, '
                   'not its outdated 2025 header IDs.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,12))
+        ttk.Label(frame,text='PRE-START: G-EARTH INTERCEPTION',
+                  style='Section.TLabel').pack(anchor='w',pady=(2,5))
+        ttk.Checkbutton(
+            frame,text='Use G-Earth interception when starting Clientless Bot',
+            variable=self.bot_gearth_var,
+            command=self._bot_gearth_changed,
+            style='Panel.TCheckbutton').pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='OFF: existing Direct TCP bot works normally. '
+                  'ON: preview only; start is blocked until a verified G-Earth '
+                  'packet interception bridge is available. G-Python extension '
+                  'port 9092 is NOT the game proxy. No hidden direct fallback.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        probe=ttk.Frame(frame,style='Panel.TFrame')
+        probe.pack(fill='x',pady=(0,6))
+        ttk.Button(probe,text='Check G-Earth extension port',
+                   command=self._bot_gearth_probe).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_gearth_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(
+            anchor='w',pady=(0,12))
         ttk.Label(frame,text='Connected account',style='Panel.TLabel').pack(anchor='w')
         self.bot_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_account_var,state='readonly',width=42)
@@ -6273,6 +6301,50 @@ class ChatOverlayApp(PersonaResponderMixin):
         selected=self.bot_account_var.get()
         return next((a for a in self._account_profiles
                      if a['label']+' ['+a['id'][:6]+']'==selected),None)
+
+    def _bot_gearth_changed(self):
+        """Store the pre-start routing choice; never switch active TCP sockets."""
+        selected=self._bot_selected_profile()
+        if selected is not None:
+            ident=selected['id']
+            session=self._tcp_sessions.get(ident)
+            if (ident in self._tcp_inflight or
+                (session is not None and session.authenticated
+                 and not session.stop.is_set())):
+                self.bot_gearth_var.set(bool(
+                    self.config.get('clientless_gearth_intercept',False)))
+                self.bot_gearth_status_var.set(
+                    'Disconnect the selected profile before changing '
+                    'its connection mode. This session remains Direct TCP.')
+                return
+        enabled=bool(self.bot_gearth_var.get())
+        self.config['clientless_gearth_intercept']=enabled
+        self.save()
+        self.bot_gearth_status_var.set(
+            'G-Earth ON (preview): the intercept/modify bridge is NOT '
+            'implemented. Clientless start will be blocked; disable this '
+            'option to run Direct TCP.' if enabled else
+            'G-Earth OFF: normal Direct TCP is selected. '
+            'No G-Earth launch or interception will occur.')
+
+    def _bot_gearth_probe(self):
+        """Read-only local extension port check, never proxy verification."""
+        try:
+            port=int(self.gearth_port_var.get())
+            if not 1<=port<=65535:
+                raise ValueError()
+        except (ValueError,TypeError):
+            self.bot_gearth_status_var.set(
+                'Invalid local G-Earth extension port; check Packet Tools.')
+            return
+        ready=self._gearth_extension_port_responds(port)
+        self.bot_gearth_status_var.set(
+            ('G-Earth local extension port '+str(port)+' is reachable. '
+             'This does NOT mean clientless traffic is intercepted; '
+             'the game proxy bridge is still missing.' if ready else
+             'No G-Earth extension listener detected on 127.0.0.1:'+
+             str(port)+'. Open G-Earth and check its Extensions port. '
+             'This check will not start the bot.'))
 
     def _bot_standalone_changed(self):
         enabled=bool(self.bot_standalone_var.get())
@@ -6539,6 +6611,16 @@ class ChatOverlayApp(PersonaResponderMixin):
         ident=account['id']
         if not any(p['id']==ident for p in self._account_profiles):
             self.bot_status_var.set('This account profile has been removed.')
+            return
+        if self.bot_gearth_var.get():
+            # Not a working G-Earth bridge: do not silently bypass the
+            # requested interception and log into the game by direct TCP.
+            message=(
+                'G-Earth interception is ON (preview), but no verified '
+                'clientless-to-G-Earth MITM bridge exists yet. Bot NOT started. '
+                'Turn G-Earth OFF above to use Direct TCP.')
+            self.bot_gearth_status_var.set(message)
+            self.bot_status_var.set(message)
             return
         room=int(clientless_saved_room_value(self.bot_room_var.get()))
         self.bot_room_var.set(str(room))
