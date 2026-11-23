@@ -1,5 +1,44 @@
 # Habbo Companion
 
+## v1.1.93 — Clientless Bot controls based on Habbo-Bot (experimental)
+
+A **Clientless Bot** page extends the per-account **Direct TCP** connections
+with manually initiated actions based on protocol structures in
+[devlyresh/Habbo-Bot](https://github.com/devlyresh/Habbo-Bot):
+**Join room**, **Leave room**, **Walk**, **Face tile**, **Say**, **Shout**,
+**Whisper**, **Dance (0–4)**, **Sign (0–14)**, **Posture (0–1)**.
+Incoming mapped Chat, Shout and Whisper packets can appear in a
+text-only panel identified by room index. No game client is required
+*after* a working Direct TCP game-server connection has authenticated.
+
+**First-use setup:** (1) Choose an account and authenticate it under
+**Direct TCP** using Companion's existing official Habbo SSO workflow and
+Windows Credential Manager. (2) Connect a matching AIR client through
+G-Earth and use **Clientless Bot → Capture action mappings from G-Earth**
+to learn named outgoing and incoming headers. (3) Select the same account
+in Clientless Bot, choose a single action, and click **Send one action**.
+The action packet goes over that account's existing authenticated TCP socket,
+not through G-Earth. Named mappings can be reused for the same WIN63 release
+but different releases, missing names or ambiguous mappings fail closed.
+Only public packet names and numeric IDs are saved; no login credentials.
+
+Unlike the reference project's January 2026 sample, Companion does not
+copy its older static packet IDs, store cookies in Python source, send through
+untrusted proxies, automate bulk bot accounts, bypass membership restrictions,
+or execute purchase/reward commands. Its actions use a whitelist and a
+400 ms manual-send throttle. There are no automated or repeated bot actions.
+G-Earth local send acceptance does not establish whether the Habbo server
+applied the action. The original bubble chat overlay still uses the patched
+AIR JSONL feed; the clientless view displays text only.
+
+**Limitations:** The feature cannot repair an unauthenticated Direct TCP
+handshake. Habbo protocol IDs are version-dependent; a G-Earth mapping
+cannot independently prove that its AIR build matches your socket build.
+Confirm the release before sending. This implementation uses independently
+written, constrained code based on protocol structures in the Apache-2.0
+devlyresh/Habbo-Bot source at commit
+760e0ed355ff9a63c9382becb8d0f9b6529c5311.
+
 ## v1.1.92 — Dance Controller (four moves and auto-cycle)
 
 Habbo Companion now includes a **Dance Controller** page in the sidebar,
