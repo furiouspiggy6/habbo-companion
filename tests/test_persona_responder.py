@@ -12,6 +12,7 @@ from persona_responder import (
     selected_usernames, DEFAULT_PERSONALITY, generate_persona_reply,
     list_style_usernames, matching_style_usernames,
     clamp_reply_interval, DEFAULT_REPLY_INTERVAL_SECONDS,
+    parse_temporary_instruction, personality_fields,
 )
 
 class PersonaResponderTests(unittest.TestCase):
@@ -148,6 +149,99 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIsNone(self.bot.pop_ready(now=13.0))
         self.bot.observe("Alice","public",now=14.0)
         self.assertEqual(self.bot.pop_ready(now=15.0)["target"],"Alice")
+
+    def test_copied_persona_does_not_inherit_generic_personality_settings(self):
+        # Old custom choices can remain stored for switching back, but must
+        # never enter a recreated persona's model payload or model instructions.
+        self.bot.personality='Helpful cheerful Habbo assistant'
+        self.bot.tone='Friendly'
+        self.bot.humour=5
+        self.bot.responsiveness='Chatty'
+        self.bot.style_mode='Chat-log style'
+        self.bot.persona='Mario35'
+        self.bot.reply_cooldown_seconds=5
+        fields=self.bot._personality_payload()
+        self.assertNotIn('personality',fields)
+        self.assertNotIn('tone',fields)
+        self.assertNotIn('humour',fields)
+        self.assertNotIn('responsiveness',fields)
+        self.assertEqual(fields['persona'],'Mario35')
+        self.assertEqual(fields['style_mode'],'Chat-log style')
+        self.assertIn('persona_reference',fields)
+        self.bot.style_mode='Custom personality'
+        fields=self.bot._personality_payload()
+        self.assertEqual(fields['tone'],'Friendly')
+        self.assertEqual(fields['humour'],5)
+        self.assertEqual(fields['responsiveness'],'Chatty')
+        self.assertEqual(fields['personality'],'Helpful cheerful Habbo assistant')
+
+    def test_parse_temporary_chat_instructions_and_expiry(self):
+        rule=parse_temporary_instruction('be mean to Marc for 10mins',now=100)
+        self.assertEqual(rule['kind'],'tease')
+        self.assertIn('Marc',rule['instruction'])
+        self.assertIn('banter',rule['instruction'])
+        self.assertEqual(rule['expires_at'],700)
+        afk=parse_temporary_instruction('pretend to go afk for 2 mins',now=100)
+        self.assertEqual(afk['kind'],'afk')
+        self.assertEqual(afk['expires_at'],220)
+        slow=parse_temporary_instruction('type slow',now=100)
+        self.assertEqual(slow['kind'],'slow')
+        self.assertIsNone(slow['expires_at'])
+        custom=parse_temporary_instruction('talk about coffee for 3mins',now=100)
+        self.assertEqual(custom['kind'],'custom')
+        self.assertEqual(custom['instruction'],'talk about coffee')
+        self.assertEqual(custom['expires_at'],280)
+        with self.assertRaises(ValueError):
+            parse_temporary_instruction('')
+        with self.assertRaises(ValueError):
+            parse_temporary_instruction('go afk for 0 min')
+        with self.assertRaises(ValueError):
+            parse_temporary_instruction('go afk for 10 hours')
+
+    def test_instructions_overlay_persona_and_expire_or_remove(self):
+        self.bot.persona='Mario35'
+        self.bot.style_mode='Chat-log style'
+        self.bot.personality='A super-friendly assistant'
+        self.bot.add_temporary_instruction('be mean to Marc for 10mins',now=100)
+        slow=self.bot.add_temporary_instruction('type slow',now=100)
+        self.assertEqual(self.bot.temporary_send_delay(now=120),10)
+        self.assertEqual(len(self.bot.active_temporary_instructions(now=120)),2)
+        self.assertEqual(len(self.bot._temporary_prompt_instructions(now=120)),1)
+        payload=self.bot.test_payload('Alice','hello')
+        self.assertNotIn('personality',payload)
+        self.assertIn('temporary_instructions',payload)
+        self.bot.remove_temporary_instruction(slow['id'])
+        self.assertEqual(self.bot.temporary_send_delay(now=120),0)
+        self.assertEqual(len(self.bot.active_temporary_instructions(now=701)),0)
+        self.assertEqual(self.bot._temporary_prompt_instructions(now=701),[])
+
+    def test_afk_blocks_generation_including_pending_chat_until_expiry(self):
+        self.bot.enabled=True
+        self.bot.observe('Alice','hey you there?',now=100)
+        self.bot.add_temporary_instruction('pretend to go afk for 2 mins',
+                                           now=100.1)
+        self.assertTrue(self.bot.is_temporarily_afk(now=101))
+        self.assertFalse(self.bot.pending)
+        self.bot.observe('Alice','chat while afk',now=110)
+        self.assertIsNone(self.bot.pop_ready(now=111))
+        self.assertIsNone(self.bot.pop_ready(now=219))
+        self.assertFalse(self.bot.is_temporarily_afk(now=221))
+        self.bot.observe('Alice','welcome back',now=221)
+        self.assertIsNotNone(self.bot.pop_ready(now=222))
+        self.assertEqual(self.bot._temporary_prompt_instructions(now=222),[])
+
+    def test_persona_mode_keeps_anti_spam_interval_when_slider_is_fast(self):
+        self.bot.enabled=True
+        self.bot.style_mode='Chat-log style'
+        self.bot.reply_cooldown_seconds=5
+        self.bot.observe('Alice','hey',now=10)
+        self.assertIsNotNone(self.bot.pop_ready(now=11))
+        self.bot.running=False
+        self.bot.remember_reply('hi',now=11)
+        self.bot.observe('Alice','you there',now=20)
+        self.assertIsNone(self.bot.pop_ready(now=21))
+        self.bot.observe('Alice','you there now',now=40)
+        self.assertIsNotNone(self.bot.pop_ready(now=41))
 
     def test_slider_interval_limits_and_rounding(self):
         self.assertEqual(DEFAULT_REPLY_INTERVAL_SECONDS,30)
