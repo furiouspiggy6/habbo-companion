@@ -6180,7 +6180,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'its packet interception/modification path. Authentication '
                   'and cipher keys stay in Companion. Close any existing '
                   'G-Earth window before running ON. This uses local game '
-                  'proxy port 31451, not extension port 9092.',
+                  'proxy port 31451, not extension port 9092. G-Earth beta-29 listens ''on 127.0.0.2 and Companion relays upstream on 127.0.0.3.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         probe=ttk.Frame(frame,style='Panel.TFrame')
         probe.pack(fill='x',pady=(0,6))
@@ -6341,7 +6341,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         try:
             verify_bridge_alias(DEFAULT_BRIDGE_HOST)
             self.bot_gearth_status_var.set(
-                'Bridge hostname resolves locally to 127.0.0.2. '
+                'Bridge hostname resolves locally to 127.0.0.3. '
                 'Ready to start G-Earth and its game packet relay; '
                 'no Habbo account has been connected by this check.')
         except GearthBridgeError as exc:
