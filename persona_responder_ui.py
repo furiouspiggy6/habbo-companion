@@ -15,6 +15,7 @@ from tkinter import ttk, filedialog
 from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
     list_style_usernames, matching_style_usernames, clamp_reply_interval,
+    selected_usernames,
 )
 
 
