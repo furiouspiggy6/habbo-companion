@@ -1,3 +1,24 @@
+HABBO COMPANION v1.1.76 — SIMPLIFIED AI RESPONDER
+==================================================
+
+The AI Responder now uses ONE page (no multiple configuration tabs):
+- Enable AI responder.
+- Send replies in Habbo (G-Earth): remains OFF on launch.
+- Edit its personality in a single text box.
+- Reply to Everyone, Selected users, or First active speaker.
+  The username input appears only when Selected users is chosen.
+- Save changes or Stop.
+- Test reply (preview only): enter a pretend message; NEVER sends into Habbo.
+- Recent activity: live drafts, send results and errors.
+
+Click ADVANCED OPTIONS to reveal the less-used settings: reply frequency,
+tone, humour, model, old chat-log style and local capture, test speaker,
+manual sending, and G-Earth diagnostics.
+
+Existing saved preferences remain compatible. The working G-Earth packet
+capture and AI sending logic are unchanged from v1.1.75.
+
+
 HABBO COMPANION v1.1.75 — OUTGOING AI CHAT CAPTURE FIX
 =======================================================
 
