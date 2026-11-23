@@ -25,6 +25,9 @@ class PersonaResponderMixin:
         chosen=str(self.config.get('responder_log_dir','')).strip()
         self._responder_default_logs=default_logs
         self.responder=PersonaResponder(chosen or default_logs)
+        # Always save fresh messages in Companion's own per-user archive,
+        # even if the user browses a different historical style source.
+        self.responder.archive_dir=self._responder_app_dir/'persona_logs'/'users'
         self.responder.persona=str(self.config.get('responder_persona','Mario35'))
         self.responder.auto_rotate=bool(self.config.get('responder_rotation',False))
         # Independent, default-on background archive: older versions kept
@@ -417,8 +420,8 @@ class PersonaResponderMixin:
             self.responder_log_saving_var.set(
                 'Public chat auto-save: ON — '+
                 str(self.responder.logged_messages)+
-                ' saved this session. Works even with AI OFF while Habbo AIR and '
-                'Companion are running.')
+                ' saved this session to persona_logs/users. Works even with '
+                'AI OFF while Habbo AIR and Companion are running.')
 
     def _responder_browse(self):
         folder=filedialog.askdirectory(
