@@ -1,0 +1,48 @@
+# Local credentials and identity/session data
+.env
+.env.*
+!.env.example
+settings.json
+**/settings.json
+*.pem
+*.p12
+*.pfx
+*.key
+*.secrets.json
+*cookie*.json
+*session*.json
+*token*.json
+
+# Per-user Habbo chat and private browser profiles
+chat_logs/
+persona_logs/
+account_browser_profiles/
+browser_profiles/
+**/chat_logs/
+**/persona_logs/
+**/account_browser_profiles/
+**/browser_profiles/
+
+# Runtime logs, packet captures and local protocol labs
+*.log
+*.pcap
+*.pcapng
+*.sqlite
+*.sqlite3
+*.db
+fuzz_lab/
+Backups/
+Downloads/
+packet_exports/
+debug_exports/
+
+# Python and IDE
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.vscode/
+.idea/
+
+# Note: release update ZIPs are deliberately tracked by publish.yml.
