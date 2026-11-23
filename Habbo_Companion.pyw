@@ -285,6 +285,66 @@ def run_remote_boofuzz(host,port,secret,seed_id=896,cases=20,output_dir=None):
 
 
 APP_NAME = 'Habbo View Chat'
+
+
+class _NoUpdateRedirect(urllib.request.HTTPRedirectHandler):
+    """Do not follow a release-feed redirect to an unexpected publisher."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ValueError('Automatic update redirects are blocked for safety.')
+
+
+def _open_official_update(req, timeout):
+    """Network code still honours user proxy settings, but never redirects."""
+    return urllib.request.build_opener(_NoUpdateRedirect()).open(
+        req, timeout=timeout)
+
+
+def redact_sensitive_diagnostic(value):
+    """Best-effort protection for readable diagnostic messages.
+
+    Raw packet contents are excluded from *default* exports separately,
+    because regexes cannot guarantee detection of every session credential.
+    """
+    text = str(value or '')
+    if re.search(
+        r'(?i)\b(?:SSOTicket|LoginWithTicket|AuthenticationTicket)\b',text):
+        return '[authentication packet omitted]'
+    text = re.sub(
+        r'\b(?:sk-[A-Za-z0-9_-]{15,}|gh[pousr]_[A-Za-z0-9_-]{15,}'
+        r'|github_pat_[A-Za-z0-9_-]{15,})',
+        '[REDACTED credential]',text)
+    text = re.sub(
+        r'(?i)\bBearer\s+[A-Za-z0-9._~+/\-=]{8,}',
+        'Bearer [REDACTED]',text)
+    text = re.sub(
+        r'\bHABBO-[A-Za-z0-9._~+/\-=]{10,}',
+        '[REDACTED session ticket]',text)
+    text = re.sub(
+        r'\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{6,}'
+        r'(?:\.[A-Za-z0-9_-]{6,})?',
+        '[REDACTED token]',text)
+    text = re.sub(
+        r'(?i)((?:"|\b)(?:access[_-]?token|refresh[_-]?token|'
+        r'sso[_-]?ticket|ssoticket|session[_-]?id|cookie|password|passwd|'
+        r'authorization|api[_-]?key|secret)(?:"|\b)\s*[:=]\s*)'
+        r'(?:"[^"]{1,500}"|\'[^\']{1,500}\'|[^\s,;&}]{1,500})',
+        lambda match:match.group(1)+'[REDACTED]',text)
+    return text
+
+
+def packet_export_record(timestamp,direction,detail,include_contents=False):
+    """Default export cannot contain packet contents, even unknown secrets."""
+    time_part = str(timestamp) if re.fullmatch(
+        r'\d{2}:\d{2}:\d{2}',str(timestamp)) else '[time]'
+    direction_part=direction if direction in ('Incoming','Outgoing') else 'Unknown'
+    if include_contents:
+        return (time_part+f' [{direction_part}] '+
+                redact_sensitive_diagnostic(detail)+'\n')
+    named=re.search(r'\{(?:in|out):([A-Za-z_][A-Za-z0-9_]{0,63})\}',
+                    str(detail))
+    label=('type '+named.group(1)) if named else 'type unknown'
+    return f'{time_part} [{direction_part}] [{label}; payload omitted]\n'
+
 APP_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'HabboViewChat'
 CONFIG_PATH = APP_DIR / 'settings.json'
 FEED_NAME = 'habbo_view_chat.jsonl'
@@ -5591,12 +5651,13 @@ class ChatOverlayApp(PersonaResponderMixin):
                               'Classic WebSocket: unexpected probe failure'))
 
     def _tcp_log_event(self, ident, message):
-        """Safe diagnostic log: never pass secrets, cookies or raw packets."""
+        """Safe diagnostic log: redact token-shaped exception messages."""
         if not self.tcp_log.winfo_exists():
             return
         self.tcp_log.configure(state='normal')
         self.tcp_log.insert('end',
-            time.strftime('%H:%M:%S')+' ['+ident[:6]+'] '+message+'\n')
+            time.strftime('%H:%M:%S')+' ['+ident[:6]+'] '+
+            redact_sensitive_diagnostic(message)+'\n')
         if int(self.tcp_log.index('end-1c').split('.')[0])>90:
             self.tcp_log.delete('1.0','30.0')
         self.tcp_log.see('end')
@@ -6946,9 +7007,15 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _save_update_source(self):
         source=self.update_manifest_var.get().strip()
-        if source and not source.startswith('https://'):
-            messagebox.showerror('Update source','Enter an HTTPS URL, or leave it blank.')
-            return
+        if source:
+            try:
+                self._update_module().validate_official_release_url(
+                    source,'manifest')
+            except (ValueError,FileNotFoundError) as exc:
+                messagebox.showerror('Update source',
+                    str(exc)+'\n\nFor other sources, use Install update ZIP '
+                    'and explicitly confirm the publisher.')
+                return
         self.config['update_manifest_url']=source
         self.save()
         self.update_status.set('Update source saved.' if source else 'Online updates disabled; local update ZIPs still work.')
@@ -7033,22 +7100,25 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.update_status.set('Checking for updates…')
         def worker():
             try:
-                p=urllib.parse.urlsplit(url)
-                query=(p.query+'&' if p.query else '')+'check='+uuid.uuid4().hex
-                fresh_url=urllib.parse.urlunsplit((p.scheme,p.netloc,p.path,query,p.fragment))
+                helper=self._update_module()
+                helper.validate_official_release_url(url,'manifest')
+                # Cache-busting is only applied after validating the exact
+                # canonical publisher/path; redirects are not allowed.
+                fresh_url=url+'?check='+uuid.uuid4().hex
                 req=urllib.request.Request(fresh_url,headers={'User-Agent':'HabboCompanionUpdater/1.2','Cache-Control':'no-cache','Pragma':'no-cache'})
-                with urllib.request.urlopen(req,timeout=12) as response:
-                    if response.geturl().split(':',1)[0]!='https':
-                        raise ValueError('Update manifest redirected away from HTTPS')
+                with _open_official_update(req,timeout=12) as response:
+                    if response.geturl()!=fresh_url:
+                        raise ValueError('Update source changed unexpectedly')
                     raw=response.read(65_537)
                     if len(raw)>65_536:raise ValueError('Manifest is too large')
                 info=json.loads(raw.decode('utf-8'))
                 if info.get('app_id')!='habbo-companion':raise ValueError('Not a Habbo Companion update manifest')
                 version=str(info['version']);package_url=str(info['package_url'])
                 checksum=str(info['sha256']).lower()
-                if not package_url.startswith('https://'):raise ValueError('Update package must use HTTPS')
-                if not re.fullmatch(r'[a-f0-9]{64}',checksum):raise ValueError('Invalid package checksum')
-                helper=self._update_module()
+                helper.validate_official_release_url(
+                    package_url,'package',version=version)
+                if not re.fullmatch(r'[a-f0-9]{64}',checksum):
+                    raise ValueError('Invalid package checksum')
                 if not helper.is_newer(version,self.current_app_version):
                     self.root.after(0,lambda v=version:self._finish_online_update(f'No newer update. Installed: {self.current_app_version}; feed: {v}.'))
                     return
@@ -7076,13 +7146,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.update_status.set('Downloading update package…')
         def worker():
             try:
+                self._update_module().validate_official_release_url(
+                    url,'package')
                 folder=Path(os.environ.get('LOCALAPPDATA',str(Path.home()))) / 'HabboCompanion' / 'Downloads'
                 folder.mkdir(parents=True,exist_ok=True)
                 dest=folder/'latest_habbo_companion_update.zip'
                 req=urllib.request.Request(url,headers={'User-Agent':'HabboCompanionUpdater/1.0'})
-                with urllib.request.urlopen(req,timeout=25) as response:
-                    if response.geturl().split(':',1)[0]!='https':
-                        raise ValueError('Update download redirected away from HTTPS')
+                with _open_official_update(req,timeout=25) as response:
+                    if response.geturl()!=url:
+                        raise ValueError('Update download source changed unexpectedly')
                     digest=hashlib.sha256();size=0
                     with dest.open('wb') as f:
                         while True:
@@ -9966,14 +10038,33 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         if not self.packet_data:
             self.packet_status.set('No packets captured yet.')
             return
-        path=filedialog.asksaveasfilename(title='Export packet log (may include private game data)',
+        # Default NO is metadata-only, never chat text, tickets or raw data.
+        # Advanced users can explicitly opt into a content export for their
+        # own offline debugging, but should not share that version.
+        raw=messagebox.askyesno(
+            'Packet export privacy',
+            'Include packet CONTENTS? Those can contain chat, session tokens '
+            'and private game data.\n\n'
+            'Choose No for the recommended safe metadata-only export. '
+            'Only choose Yes for private troubleshooting; do not share it.',
+            default='no')
+        path=filedialog.asksaveasfilename(
+            title=('Export PRIVATE packet details' if raw else
+                   'Export SAFE packet metadata'),
             defaultextension='.txt',filetypes=[('Text file','*.txt')])
         if path:
             try:
                 with open(path,'w',encoding='utf-8') as fh:
-                    for t,d,s in self.packet_data:fh.write(f'{t} [{d}] {s}\n')
-                self.packet_status.set('Packet log saved locally. Review its contents before sharing.')
-            except OSError as exc:self.packet_status.set('Export failed: '+str(exc)[:130])
+                    for t,d,detail in self.packet_data:
+                        fh.write(packet_export_record(
+                            t,d,detail,include_contents=raw))
+                self.packet_status.set(
+                    'Private packet details saved. Do NOT share this export.'
+                    if raw else
+                    'Safe packet metadata saved without message payloads.')
+            except OSError as exc:
+                self.packet_status.set(
+                    'Export failed: '+redact_sensitive_diagnostic(str(exc))[:130])
 
     def _chat_line_toggle(self,parent):
         """Persistent, instant ON/OFF layout control; never changes font_size."""
