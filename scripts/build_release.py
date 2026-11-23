@@ -29,11 +29,13 @@ DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
     "                                  launch_local_classic)\n"
 )
-PERSONA_IMPORT = "from persona_responder import chat_expression_from_template\n"
+PERSONA_IMPORT = ("from persona_responder import (chat_expression_from_template,\n"
+                  "                               verified_outgoing_chat_frame)\n")
 PERSONA_UI_IMPORT = "from persona_responder_ui import PersonaResponderMixin\n"
 PERSONA_UI_ENGINE_IMPORT = (
     "from persona_responder import (\n"
     "    PersonaResponder, chat_expression_from_template, generate_persona_reply,\n"
+    "    replacement_chat_frame,\n"
     ")\n"
 )
 APP_ANCHOR = "\nAPP_NAME = 'Habbo View Chat'\n"
