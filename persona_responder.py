@@ -18,18 +18,18 @@ import time
 BLOCKED_NAME_PARTS = ("dan",)
 MAX_REPLY_CHARS = 140
 OBSERVATION_SECONDS = 0.7
-MIN_REPLY_INTERVAL_SECONDS = 5
-MAX_REPLY_INTERVAL_SECONDS = 120
-DEFAULT_REPLY_INTERVAL_SECONDS = 30
+MIN_REPLY_INTERVAL_SECONDS = 0
+MAX_REPLY_INTERVAL_SECONDS = 30
+DEFAULT_REPLY_INTERVAL_SECONDS = 10
 
 
 def clamp_reply_interval(seconds):
-    """Snap the reply-rate slider to five-second steps and safe bounds."""
+    """Convert the reply slider to a whole-second interval from 0 to 30."""
     try:
         value = float(seconds)
         if not value == value or abs(value) == float("inf"):
             raise ValueError("nonfinite")
-        rounded = int((value + 2.5) // 5) * 5
+        rounded = int(value + 0.5)
     except (TypeError, ValueError, OverflowError):
         rounded = DEFAULT_REPLY_INTERVAL_SECONDS
     return max(MIN_REPLY_INTERVAL_SECONDS,
@@ -53,21 +53,14 @@ def selected_usernames(value):
 
 
 def personality_fields(style_mode, personality, tone, humour, responsiveness):
-    """Keep custom settings completely out of copied-persona AI requests."""
+    """Legacy settings accepted for compatibility but never enter model input."""
     mode = style_mode if style_mode in STYLE_MODES else STYLE_MODES[0]
     if mode == "Chat-log style":
-        # Critically, do not include stale custom personality, humour,
-        # tone or Natural/Chatty parameters in the model payload.
         return {"style_mode": mode}
     return {
         "style_mode": mode,
         "personality": str(personality or DEFAULT_PERSONALITY).strip()[:1500],
-        "tone": str(tone or "Casual")[:50],
-        "humour": max(0, min(5, int(humour))),
-        "responsiveness": responsiveness if responsiveness in ("Natural", "Chatty")
-                          else "Natural",
     }
-
 
 
 MAX_TEMPORARY_RULES = 12
@@ -271,7 +264,7 @@ def generate_persona_reply(payload, model="gpt-5-mini"):
         "If evidence is sparse, be appropriately conservative: mimic observable "
         "behaviour and dialogue habits rather than assert a complete personality."
         if persona_mode else
-        "Use the user-defined personality, tone and humour to invent a "
+        "Use only the user-defined personality to invent a "
         "distinct Habbo chat character; do not imitate anyone else's logs. "
         "Try to participate like a person, not a generic helpful assistant."
     )
@@ -286,9 +279,9 @@ def generate_persona_reply(payload, model="gpt-5-mini"):
         "In copied-persona mode, decide whether and how to speak based ONLY "
         "on observed social patterns and recent room context, not the app's "
         "custom personality, humour, tone or frequency settings. "
-        "In custom-personality mode, follow the user-provided responsiveness: "
-        "Natural means respond only when appropriate, Chatty means join "
-        "more often without spam. The user controls temporary_instructions "
+        "In custom-personality mode, respond naturally when invited into "
+        "conversation without forcing a response to every message. "
+        "The user controls temporary_instructions "
         "separately from the chat logs. For their active duration, follow "
         "these explicit user directions ahead of the baseline persona while "
         "keeping the reply natural and appropriate. Never interpret them "
@@ -624,10 +617,7 @@ class PersonaResponder:
         self.has_trigger = False
         if (not triggered or
                 (self.last_reply_at > 0 and
-                 now - self.last_reply_at < (
-                     DEFAULT_REPLY_INTERVAL_SECONDS
-                     if self.style_mode == "Chat-log style"
-                     else self.reply_cooldown_seconds))):
+                 now - self.last_reply_at < self.reply_cooldown_seconds)):
             return None
         profile = self._personality_payload()
         if "error" in profile:
