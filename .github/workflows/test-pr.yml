@@ -10,6 +10,9 @@ on:
       - 'persona_responder.py'
       - 'persona_responder_ui.py'
       - 'Habbo_Update_Helper.py'
+      - 'scripts/build_release.py'
+      - 'scripts/security_audit.py'
+      - '.gitignore'
       - 'tests/**'
       - 'scripts/playwright_smoke.py'
       - '.github/workflows/test-pr.yml'
@@ -21,6 +24,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Reject committed private data and literal credentials
+        run: python scripts/security_audit.py
       - name: Check source syntax
         run: python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py local_classic_launch.py habbo_tcp.py persona_responder.py persona_responder_ui.py
       - name: Install boofuzz for local-only integration test
