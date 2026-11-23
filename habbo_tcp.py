@@ -366,7 +366,8 @@ def profile_fingerprint(account_id):
 
 class HabboTcpSession:
     """A per-profile game socket, with independently maintained cipher state."""
-    def __init__(self, account_id, status=None, packet=None, content=None):
+    def __init__(self, account_id, status=None, packet=None, content=None,
+                 gameplay_bridge=None):
         if not isinstance(account_id, str) or not re.fullmatch("[0-9a-f]{12}", account_id):
             raise ValueError("Invalid account profile")
         self.account_id = account_id
@@ -375,6 +376,9 @@ class HabboTcpSession:
         # Optional content listener receives frame body in memory. The caller
         # must filter named packet IDs before decoding or displaying anything.
         self.on_content = content
+        # None is the original Direct TCP transport. A ready bridge intercepts
+        # *post-authentication* gameplay only, never secrets or DH negotiation.
+        self.gameplay_bridge=gameplay_bridge
         self.release = None
         self.sock = None
         self.tx = None
@@ -426,7 +430,12 @@ class HabboTcpSession:
             body = self.rx.apply(body)
         return struct.unpack_from(">H", body, 0)[0], body[2:]
 
-    def _send(self, packet_id, body=b"", plaintext=False):
+    def _send(self, packet_id, body=b"", plaintext=False, via_gearth=False):
+        if self.authenticated and self.gameplay_bridge is not None and not via_gearth:
+            # All gameplay packets take the G-Earth modifier path. If the
+            # bridge disconnects, NEVER fail open to the direct game socket.
+            self.gameplay_bridge.send_outgoing(packet_id,body)
+            return
         data = _frame(packet_id, body)
         with self.lock:
             sock = self.sock
@@ -561,7 +570,10 @@ class HabboTcpSession:
             self._send(TCP_OUT["sso"], _string(ticket) + struct.pack(">i", min(elapsed, 2147483647)))
             self._await_packet(TCP_IN["auth_ok"], 18)
             self.authenticated = True
-            self.on_status("Authenticated with Habbo.com via direct TCP")
+            self.on_status(
+                "Authenticated with Habbo.com; G-Earth plaintext gameplay "
+                "interception active" if self.gameplay_bridge is not None
+                else "Authenticated with Habbo.com via direct TCP")
             self._send(TCP_OUT["info"])
             self.sock.settimeout(3)
             self.thread = threading.Thread(target=self._receive_forever, daemon=True,
@@ -586,14 +598,17 @@ class HabboTcpSession:
                     self._send(TCP_OUT["pong"])
                 elif packet_id == TCP_IN["disconnect"]:
                     raise HabboTcpError("Game server disconnected this account")
-                self.on_packet(packet_id, len(body))
-                if self.on_content is not None:
-                    try:
-                        # Decode only mapped, bounded chat messages downstream.
-                        self.on_content(packet_id, body)
-                    except (ValueError, TypeError, UnicodeError, AttributeError):
-                        pass
-        except (OSError, HabboTcpError, ValueError):
+                if self.gameplay_bridge is not None:
+                    self.gameplay_bridge.send_incoming(packet_id,body)
+                else:
+                    self.on_packet(packet_id, len(body))
+                    if self.on_content is not None:
+                        try:
+                            # Decode only mapped, bounded chat messages downstream.
+                            self.on_content(packet_id, body)
+                        except (ValueError, TypeError, UnicodeError, AttributeError):
+                            pass
+        except (OSError, HabboTcpError, ValueError, RuntimeError):
             if not self.stop.is_set():
                 self.on_status("Game connection lost")
         finally:
@@ -611,6 +626,8 @@ class HabboTcpSession:
                 pass
             sock.close()
         self.tx = self.rx = None
+        if self.gameplay_bridge is not None:
+            self.gameplay_bridge.close()
         self.release = None
         # No carryover data/cipher state may survive a disconnected account.
         self._recv_pending.clear()

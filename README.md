@@ -1,5 +1,92 @@
 # Habbo Companion
 
+## v1.1.99 — G-Earth clientless gameplay interception (experimental)
+
+This replaces the v1.1.98 no-op ON preview with an actual **local Flash
+packet interception relay**. Unlike a normal AIR connection, the clientless
+account authenticates and negotiates game encryption in Companion itself.
+**Only post-authentication gameplay frames** are mirrored through a synthetic
+local unencrypted G-Earth Flash session, so the packet viewer and
+block/replace/extension pipeline can operate without scanning HabboAIR's
+memory for an RC4 table. No SSO tickets, passwords, website cookies,
+Diffie-Hellman keys or encrypted game handshake bytes enter G-Earth.
+The server still sees a single, properly authenticated Companion socket.
+
+### Setup on Windows
+
+1. In **Packet Tools**, set the working G-Earth beta EXE/JAR path.
+2. Close all G-Earth windows before using this mode (the game proxy listens
+   for one client and must be started with Companion's dedicated hostname).
+3. In **Clientless Bot**, turn **Use G-Earth interception when starting
+   Clientless Bot** ON, and click **Check bridge hostname**.
+4. Its local relay hostname `127.0.0.2.nip.io` must resolve to
+   **127.0.0.2**. The automatic DNS service may be unavailable or blocked by
+   DNS-rebinding protection. If so, add a single entry to the Windows
+   hosts file using an elevated text editor and retry the check:
+
+   ```
+   127.0.0.2 127.0.0.2.nip.io
+   ```
+
+   Windows hosts file: `C:\Windows\System32\drivers\etc\hosts`.
+   Add only this line; do not remove existing entries. G-Earth temporarily
+   adds its own earlier redirect while connecting and cleans it on disconnect.
+   You may need to flush the OS DNS cache when changing it.
+5. Select **Run selected profile** or select a saved profile. Companion
+   reserves the loopback-only upstream `127.0.0.2:31451`, launches G-Earth
+   with **Flash** auto-connect, and waits for G-Earth's proxy at
+   `127.0.0.1:31451`. If either side is unavailable, it **does not log
+   into Habbo**. The separate extension port (usually `9092`) is *not*
+   this clientless game's traffic proxy.
+6. Once the TCP account is authenticated, open G-Earth's packet viewer.
+   The session's post-login packets should appear there. Test a harmless
+   `Say` or `Walk` packet; blocking/replacing it in G-Earth should alter
+   what reaches the game server. Then test an incoming packet (e.g. room
+   chat) to verify the reverse direction. This is the first release of this
+   transport and must be validated on your installed G-Earth beta.
+
+### Architecture and behavior
+
+```
+                  G-Earth local Flash modification pipeline
+Companion plaintext action -> 127.0.0.1:31451 -> 127.0.0.2:31451
+                                                   |
+                                                   v
+                                    Companion encrypts and sends to Habbo
+                                                   |
+Habbo -> Companion decrypts -> 127.0.0.2:31451 -> 127.0.0.1:31451
+                                                    |
+                                                    v
+                                    Companion receives modified incoming
+```
+
+G-Earth's source-pinned Flash proxy normally listens on a local
+`127.0.0.1:port` and opens an upstream socket to the hostname that was
+resolved **before** rewriting the hosts file. Choosing `127.0.0.2` for
+the upstream lets the relay occupy the same numeric port without conflicting
+with G-Earth's listener. For background, see
+[G-Realm/G-Earth NormalFlashProxyProvider](https://github.com/G-Realm/G-Earth/blob/master/G-Earth/src/main/java/gearth/protocol/connection/proxy/flash/NormalFlashProxyProvider.java).
+
+The bridge uses a synthetic non-secret first AIR greeting so G-Earth
+recognizes the local traffic stream. It does **not** relay login and
+key-exchange packets. The adapter imposes a 64 KiB local frame cap,
+permits only source-pinned familiar user action/ping/info packet headers
+as outgoing traffic, and disallows unauthenticated sends. Arbitrary
+G-Earth packet injection outside those approved outgoing names is
+rejected. If the proxy or either local socket disconnects, the game
+session is closed instead of reverting to unmodified Direct TCP.
+Only **one** clientless G-Earth relay can run at a time; Direct TCP OFF
+mode still supports the existing one-click accounts.
+
+**Limitations:** The source tests exercise real local TCP frames against
+a fake G-Earth-compatible filter, not an actual Windows G-Earth release or
+live Habbo server. G-Earth can display packet names only where its
+current AIR mappings are available. Actual official Habbo AIR protocol
+mapping and live game acceptance are separate compatibility requirements.
+The optional host alias requires one-time local DNS/hosts configuration
+where DNS blocks loopback aliases. This is an experimental user-owned
+client traffic inspection tool, not an arbitrary server packet fuzzer.
+
 ## v1.1.98 — Optional G-Earth pre-start interception setting (stage 1)
 
 Open **Clientless Bot** and choose **Use G-Earth interception when starting
