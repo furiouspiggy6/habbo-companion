@@ -4071,6 +4071,19 @@ def outfit_update_expression(gender,figure):
             '}{s:'+json.dumps(pair[1])+'}')
 
 
+def initial_outfit_delay_ms(settings):
+    """Migrate v1.1.89's seconds to milliseconds without changing speed."""
+    if 'outfit_delay_ms' in settings:
+        return str(settings['outfit_delay_ms'])
+    try:
+        seconds=float(settings.get('outfit_delay','0.3'))
+    except (TypeError,ValueError):
+        seconds=0.3
+    if not math.isfinite(seconds) or seconds<0:
+        seconds=0.3
+    return f'{seconds*1000:g}'
+
+
 def sanitize_outfit_presets(raw):
     """Persist only harmless validated figure/gender pairs, max 8."""
     result=[]
@@ -5280,7 +5293,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.outfit_status_var=tk.StringVar(
             value='Capture at least two looks from the Habbo Looks editor.')
         self.outfit_delay_var=tk.StringVar(
-            value=str(self.config.get('outfit_delay','0.3')))
+            value=initial_outfit_delay_ms(self.config))
         self._outfit_capture_pending=False
         self._outfit_capture_generation=0
         self._outfit_running=False
@@ -5288,7 +5301,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._outfit_after_id=None
         self._outfit_index=0
         self._outfit_sent=0
-        self._outfit_interval=0.3
+        self._outfit_interval_ms=300.0
         self._coffee_queue_after_id=None
         self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
@@ -8004,10 +8017,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._remove_outfit).pack(side='left')
         speed=ttk.Frame(holder,style='Panel.TFrame')
         speed.pack(fill='x',pady=(0,12))
-        ttk.Label(speed,text='Seconds per outfit',style='Panel.TLabel').pack(side='left')
+        ttk.Label(speed,text='Milliseconds per outfit',style='Panel.TLabel').pack(side='left')
         ttk.Entry(speed,textvariable=self.outfit_delay_var,width=9).pack(
             side='left',padx=(9,12))
-        ttk.Label(speed,text='0.1–10 seconds; default 0.3',
+        ttk.Label(speed,text='0 = fastest; decimals allowed (default 300 ms)',
                   style='Panel.TLabel').pack(side='left')
         buttons=ttk.Frame(holder,style='Panel.TFrame')
         buttons.pack(fill='x',pady=(0,10))
@@ -8116,25 +8129,26 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.outfit_status_var.set('Capture at least two different looks first.')
             return
         try:
-            interval=float(self.outfit_delay_var.get().strip())
-            if not math.isfinite(interval) or not 0.1<=interval<=10:
-                raise ValueError('Delay must be between 0.1 and 10 seconds.')
+            interval_ms=float(self.outfit_delay_var.get().strip())
+            if not math.isfinite(interval_ms) or interval_ms<0:
+                raise ValueError('Delay must be a non-negative number of milliseconds.')
             for outfit in self.outfit_presets:
                 outfit_update_expression(outfit['gender'],outfit['figure'])
         except (ValueError,KeyError,TypeError) as exc:
             self.outfit_status_var.set('Cannot start: '+str(exc)[:125])
             return
-        self.config['outfit_delay']=str(interval)
+        self.config['outfit_delay_ms']=str(interval_ms)
         self.save()
         self._outfit_capture_pending=False
         self._outfit_generation+=1
         self._outfit_running=True
-        self._outfit_interval=interval
+        self._outfit_interval_ms=interval_ms
         self._outfit_index=0
         self._outfit_sent=0
         self.outfit_status_var.set(
-            f'Cycling {len(self.outfit_presets)} saved looks every {interval:g}s. '
-            'Local sends only; server application is not independently confirmed.')
+            f'Cycling {len(self.outfit_presets)} saved looks every {interval_ms:g} ms. '
+            '0 ms means no requested pause between callbacks. '
+            'Actual scheduling and server application are unverified.')
         self._outfit_after_id=self.root.after(
             0,lambda gen=self._outfit_generation:self._outfit_tick(gen))
 
@@ -8171,7 +8185,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'Server rate limits/accepted changes are unknown.')
         if self._outfit_running and generation==self._outfit_generation:
             self._outfit_after_id=self.root.after(
-                max(100,round(self._outfit_interval*1000)),
+                round(self._outfit_interval_ms),
                 lambda gen=generation:self._outfit_tick(gen))
 
     def _stop_outfit_cycle(self,reason=None):

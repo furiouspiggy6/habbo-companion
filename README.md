@@ -1,5 +1,25 @@
 # Habbo Companion
 
+## v1.1.90 — Outfit Cycler speed in milliseconds, no artificial minimum
+
+**Outfit Cycler → Milliseconds per outfit** replaces seconds.
+The default is **300 ms** (the previous 0.3-second default).
+Enter **0** to queue the next action immediately via the Tk event loop,
+or enter any **non-negative fractional number of milliseconds**, such as
+`0.1`, `0.01`, or `0.0001`. There is no app-imposed minimum interval,
+including the previous 100 ms delay. A positive value below 0.5 ms
+rounds to a 0 ms scheduling request because Tk's timers take integer
+milliseconds.
+
+The application migrates previously saved `outfit_delay` values from
+**seconds** to **milliseconds** without silently changing their effective
+pace. New choices are saved as `outfit_delay_ms`.
+
+**Important:** A 0 ms scheduled delay is not proof of zero time between
+actual sends; packet conversion, Windows event-loop scheduling, G-Earth,
+network latency and Habbo's server-side rate limits still constrain the
+speed of visible outfit changes. STOP and disconnect handling are retained.
+
 ## v1.1.89 — Rapid Outfit Cycler (manually captured looks)
 
 A new **Outfit Cycler** page lets you capture up to eight different looks
