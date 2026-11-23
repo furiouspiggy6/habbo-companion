@@ -9462,12 +9462,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         return
                     try:detail=str(msg.packet.g_string(ext))
                     except Exception:detail='[Packet could not be formatted]'
+                    # g_string() is a raw/legacy byte rendering. The previous
+                    # gate incorrectly looked for {out:Chat} in that string,
+                    # so it could never learn the outgoing Chat packet.
+                    # G-Earth's *expression* contains the named Chat header.
                     if (direction=='Outgoing' and self.responder.enabled
-                        and self._responder_chat_template is None
-                        and detail.lstrip().lower().startswith('{out:chat}')):
+                        and self._responder_chat_template is None):
+                        if not self._responder_outgoing_seen:
+                            self._responder_outgoing_seen=True
+                            self._packet_put(('responder_outgoing_seen',))
                         try:
-                            observed=str(msg.packet.g_expression(ext))
-                            if chat_expression_from_template(observed,'example') is not None:
+                            observed=msg.packet.g_expression(ext)
+                            # Only learn an explicitly named outgoing Chat
+                            # with a string field. No guessing packet IDs.
+                            if (isinstance(observed,str) and
+                                chat_expression_from_template(observed,'probe') is not None):
                                 self._packet_put(('responder_chat_template',observed))
                         except Exception:
                             pass
@@ -9732,6 +9741,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='packet_connect_error':
                 self.packet_connection_status.set('Packet tools failed: '+item[1])
                 continue
+            if item[0]=='responder_outgoing_seen':
+                self._responder_log(
+                    'G-Earth observed outgoing traffic; looking for a named Chat packet.')
+                continue
             if item[0]=='responder_chat_template':
                 self._responder_chat_template=item[1]
                 self._responder_log('Outgoing Chat format learned from Habbo.')
@@ -9877,6 +9890,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     else 'Packet tools attached; waiting for Habbo room connection.')
                 if not item[1]:
                     self._responder_chat_template=None
+                    self._responder_outgoing_seen=False
                     self._responder_generation+=1
                     self.responder.running=False
                     self.responder.reset_room()
