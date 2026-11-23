@@ -3,6 +3,8 @@ from pathlib import Path
 import ast
 import unittest.mock
 import tempfile
+import runpy
+import time
 import unittest
 from persona_responder import (
     PersonaResponder, chat_expression_from_template,
@@ -20,6 +22,79 @@ class PersonaResponderTests(unittest.TestCase):
             "[12:01] Mario35: hey there\n[12:02] Mario35: what you up to\n",
             encoding="utf-8"
         )
+
+    def test_public_logging_enabled_even_when_ai_off_and_custom_mode(self):
+        self.assertFalse(self.bot.enabled)
+        self.assertTrue(self.bot.save_history)
+        self.assertEqual(self.bot.style_mode,'Custom personality')
+        self.assertTrue(self.bot.record_public_message(
+            'popbrocks','hello ppl',now=1700000000))
+        self.assertTrue(self.bot.record_public_message(
+            'visitor-6w-3-8','wbu?',now=1700000001))
+        self.assertTrue(self.bot.record_public_message(
+            'popbrocks','lol yep',now=1700000002))
+        folder=Path(self.temp.name)
+        lines=(folder/'popbrocks.txt').read_text(
+            encoding='utf-8').splitlines()
+        self.assertEqual(len(lines),2)
+        self.assertTrue(lines[0].endswith('] popbrocks: hello ppl'))
+        self.assertTrue(lines[1].endswith('] popbrocks: lol yep'))
+        self.assertTrue((folder/'visitor-6w-3-8.txt').is_file())
+        self.assertEqual(self.bot.logged_messages,3)
+        self.assertFalse(self.bot.running)
+
+    def test_chat_logging_keeps_owners_public_chat_and_ignores_whispers(self):
+        folder=Path(self.temp.name)
+        self.assertTrue(self.bot.record_public_message(
+            'dan_alt100','this is my own chat',chat_type=0))
+        self.assertFalse(self.bot.record_public_message(
+            'popbrocks','secret whisper',chat_type=1))
+        self.assertFalse(self.bot.record_public_message(
+            'popbrocks','also private',chat_type=12))
+        self.assertTrue((folder/'dan_alt100.txt').is_file())
+        self.assertFalse((folder/'popbrocks.txt').exists())
+        self.bot.observe('popbrocks','public reply',own_name='dan_alt100',now=12)
+        self.assertFalse((folder/'popbrocks.txt').exists(),
+                         'AI observation must not write duplicate log entries')
+        self.bot.save_history=False
+        self.assertFalse(self.bot.record_public_message(
+            'popbrocks','disabled logging',chat_type=0))
+        self.assertFalse((folder/'popbrocks.txt').exists())
+
+    def test_background_archives_offscreen_public_chat_before_visual_filter(self):
+        scope=runpy.run_path(
+            str(Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'),
+            run_name='habbo_companion_test')
+        App=scope['ChatOverlayApp']
+        class Fake:
+            config={'visible_only':True}
+            whisper_hints=[]
+            def __init__(self,bot):
+                self.responder=bot
+                self.updates=0
+            def _responder_update_logging_status(self):
+                self.updates+=1
+        dummy=Fake(self.bot)
+        App.handle_message(dummy,{
+            'name':'Cheesecake','text':'off screen room chat','chatType':0,
+            'x':-40,'y':-40,'sw':800,'sh':600,
+        })
+        self.assertTrue((Path(self.temp.name)/'Cheesecake.txt').is_file(),
+                        'Visibility filter must not suppress background logging')
+        self.assertEqual(dummy.updates,1)
+        App.handle_message(dummy,{
+            'name':'MaraGene','text':'private whisper','chatType':1,
+            'x':-40,'y':-40,'sw':800,'sh':600,
+        })
+        self.assertFalse((Path(self.temp.name)/'MaraGene.txt').exists())
+        # The G-Earth whisper hint fallback also protects unlabeled whispers.
+        dummy.whisper_hints=[(time.time(),'fallback whisper')]
+        App.handle_message(dummy,{
+            'name':'MaraGene','text':'fallback whisper',
+            'x':-40,'y':-40,'sw':800,'sh':600,
+        })
+        self.assertFalse((Path(self.temp.name)/'MaraGene.txt').exists())
+        self.assertEqual(dummy.updates,3)
 
     def test_disabled_by_default(self):
         self.bot.observe("someone", "hi", now=5.0)
