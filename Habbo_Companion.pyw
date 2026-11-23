@@ -4132,6 +4132,37 @@ def outgoing_is_named(extension,direction,packet,name):
         return False
 
 
+DANCE_STYLE_NAMES={
+    0:'Stop dancing',
+    1:'Hab-Hop (everyone)',
+    2:'Pogo Mogo (Habbo Club)',
+    3:'Duck Funk (Habbo Club)',
+    4:'The Rollie (Habbo Club)',
+}
+
+
+def dance_packet_expression(style_id):
+    """Named AIR Dance action; 0 is stop, 1–4 are standard Habbo dances.
+
+    This is not a request to bypass HC access checks; the server decides
+    whether the account can use the selected dance.
+    """
+    if type(style_id) is not int or style_id not in DANCE_STYLE_NAMES:
+        raise ValueError('Dance style must be a Habbo dance ID from 0 to 4.')
+    return f'{{out:Dance}}{{i:{style_id}}}'
+
+
+def dance_cycle_sequence(enabled):
+    """Take checked dance IDs in deterministic order; reject invalid IDs."""
+    try:
+        selected=tuple(i for i in (1,2,3,4) if enabled.get(i,False))
+    except (AttributeError,TypeError):
+        raise ValueError('Choose at least two dance styles.')
+    if len(selected)<2:
+        raise ValueError('Choose at least two dance styles for cycling.')
+    return selected
+
+
 def initial_outfit_delay_ms(settings):
     """Migrate v1.1.89's seconds to milliseconds without changing speed."""
     if 'outfit_delay_ms' in settings:
@@ -5381,6 +5412,30 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._face_step=0
         self._face_sent=0
         self._face_interval_ms=350
+        # Dance Controller uses only named Dance(0..4) commands,
+        # never fakes Habbo Club access or assumes server confirmation.
+        self.dance_status_var=tk.StringVar(
+            value='Choose a dance style, then press Dance. Habbo Club '
+                  'may be required for Pogo Mogo, Duck Funk and The Rollie.')
+        self.dance_style_var=tk.StringVar(
+            value=str(self.config.get('dance_selected','Hab-Hop (everyone)')))
+        if self.dance_style_var.get() not in DANCE_STYLE_NAMES.values():
+            self.dance_style_var.set(DANCE_STYLE_NAMES[1])
+        self.dance_delay_var=tk.StringVar(
+            value=str(self.config.get('dance_delay_ms','3000')))
+        selected=self.config.get('dance_cycle_selected',[1,2,3,4])
+        if not isinstance(selected,(list,tuple)):
+            selected=[1,2,3,4]
+        self.dance_enabled_vars={
+            i:tk.BooleanVar(value=i in selected) for i in (1,2,3,4)}
+        self._dance_running=False
+        self._dance_generation=0
+        self._dance_after_id=None
+        self._dance_sequence=()
+        self._dance_step=0
+        self._dance_sent=0
+        self._dance_interval_ms=3000
+        self._dance_last_sent_id=None
         self._coffee_queue_after_id=None
         self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
@@ -5735,6 +5790,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
             'outfits':('Outfit Cycler','Capture looks and rotate through them'),
             'face':('Face Rotator','Spin 360° in place without walking'),
+            'dance':('Dance Controller','Choose and cycle through Habbo dance moves'),
             'fuzz':('Protocol Lab','Passive G-Earth AIR reader and local boofuzz tests'),
             'manip':('Packet Manipulator','Advanced packet rules and manual actions'),
             'classic':('Direct Classic','Launch the installed Habbo client'),
@@ -5770,6 +5826,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('packet','Packet Viewer'),
             ('outfits','Outfit Cycler'),
             ('face','Face Rotator'),
+            ('dance','Dance Controller'),
             ('fuzz','Protocol Lab'),
             ('manip','Packet Manipulator'),
             ('classic','Direct Classic'),
@@ -5816,6 +5873,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['outfits'],'outfits'))
         self._make_face_panel(self._ui_scroll_area(
             self._ui_pages['face'],'face'))
+        self._make_dance_panel(self._ui_scroll_area(
+            self._ui_pages['dance'],'dance'))
         self._make_fuzz_panel(self._ui_scroll_area(
             self._ui_pages['fuzz'],'fuzz'))
         self._make_responder_panel(self._ui_scroll_area(
@@ -8478,6 +8537,187 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._face_tile=None
         self.face_status_var.set(reason+' Capture your standing tile again.')
 
+    def _make_dance_panel(self,parent):
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='DANCE CONTROLLER',
+                 font=('Segoe UI Semibold',18),
+                 fg=COMPANION_UI['text'],bg=COMPANION_UI['background']).pack(anchor='w')
+        ttk.Label(holder,text='Play a single Habbo dance or automatically '
+                  'switch between the moves you choose. Uses the live '
+                  'named Dance packet, with no numeric header guessing.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(5,12))
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(holder,text='PLAY A DANCE',
+                  style='Section.TLabel').pack(anchor='w',pady=(0,8))
+        picker=ttk.Frame(holder,style='Panel.TFrame')
+        picker.pack(fill='x',pady=(0,11))
+        self.dance_style_picker=ttk.Combobox(
+            picker,textvariable=self.dance_style_var,width=27,
+            values=tuple(DANCE_STYLE_NAMES[i] for i in (1,2,3,4)),
+            state='readonly')
+        self.dance_style_picker.pack(side='left',padx=(0,12))
+        ttk.Button(picker,text='Dance',style='Primary.TButton',
+                   command=self._play_selected_dance).pack(side='left')
+        ttk.Label(holder,text='Hab-Hop is available to everyone. '
+                  'Pogo Mogo, Duck Funk and The Rollie normally require '
+                  'Habbo Club; the server decides which moves you can use.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,17))
+        ttk.Label(holder,text='AUTO-CYCLE DANCES',
+                  style='Section.TLabel').pack(anchor='w',pady=(0,8))
+        for style_id in (1,2,3,4):
+            ttk.Checkbutton(holder,text=DANCE_STYLE_NAMES[style_id],
+                            variable=self.dance_enabled_vars[style_id]).pack(
+                                anchor='w',pady=(0,5))
+        period=ttk.Frame(holder,style='Panel.TFrame')
+        period.pack(fill='x',pady=(12,14))
+        ttk.Label(period,text='Milliseconds per dance',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Entry(period,textvariable=self.dance_delay_var,width=9).pack(
+            side='left',padx=(9,12))
+        ttk.Label(period,text='1000–60000 ms (default 3000)',
+                  style='Panel.TLabel').pack(side='left')
+        actions=ttk.Frame(holder,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(0,13))
+        ttk.Button(actions,text='Start cycling',
+                   style='Primary.TButton',
+                   command=self._start_dance_cycle).pack(side='left',padx=(0,10))
+        ttk.Button(actions,text='STOP DANCING',
+                   command=self._stop_dance_and_cycle).pack(side='left')
+        ttk.Label(holder,textvariable=self.dance_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
+        ttk.Label(holder,text='Cycle only sends locally accepted Dance '
+                  'requests. It stops on room change, disconnect or send '
+                  'failure. Actual dance changes may be delayed or ignored '
+                  'by Habbo; this tool never guarantees server acceptance.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w')
+
+    def _send_dance_action(self,style_id):
+        """One named Dance packet; G-Earth and Habbo handle live validation."""
+        expression=dance_packet_expression(style_id)
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            raise RuntimeError('Connect Habbo through G-Earth before dancing.')
+        ext=self.packet_extension
+        packet=ext.string_to_packet(expression)
+        if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+            raise ValueError('No valid named Dance packet in current G-Earth mappings.')
+        if ext.send_to_server(packet) is False:
+            raise RuntimeError('G-Earth rejected the Dance request.')
+        self._dance_sent+=1
+        self._dance_last_sent_id=style_id
+        if self.packet_active:
+            self._packet_put((
+                'dance_local',datetime.now().strftime('%H:%M:%S'),
+                'Outgoing',f'[Dance Controller] Dance {style_id} — '
+                f'{DANCE_STYLE_NAMES[style_id]} | local G-Earth send accepted; '
+                'server application and HC access unverified'))
+
+    def _play_selected_dance(self):
+        if self._dance_running:
+            self._stop_dance_cycle('Dance cycling stopped; playing selection.')
+        try:
+            label=self.dance_style_var.get()
+            style_id=next((i for i in (1,2,3,4)
+                           if DANCE_STYLE_NAMES[i]==label),None)
+            if style_id is None:
+                raise ValueError('Choose one of the four supported dances.')
+            self._send_dance_action(style_id)
+        except (ValueError,RuntimeError,AttributeError) as exc:
+            self.dance_status_var.set('Could not dance: '+str(exc)[:140])
+            return
+        self.config['dance_selected']=label
+        self.save()
+        self.dance_status_var.set(
+            f'{DANCE_STYLE_NAMES[style_id]} requested. '
+            'Local G-Earth send accepted; server application unverified.')
+
+    def _start_dance_cycle(self):
+        if self._dance_running:
+            self.dance_status_var.set('Already cycling; press STOP DANCING.')
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.dance_status_var.set('Connect Habbo through G-Earth first.')
+            return
+        try:
+            delay=int(self.dance_delay_var.get().strip())
+            if not 1000<=delay<=60000:
+                raise ValueError('Enter 1000–60000 milliseconds per dance.')
+            sequence=dance_cycle_sequence({
+                i:self.dance_enabled_vars[i].get() for i in (1,2,3,4)})
+            for style_id in sequence:
+                dance_packet_expression(style_id)
+        except (ValueError,TypeError,KeyError,AttributeError) as exc:
+            self.dance_status_var.set('Cannot cycle: '+str(exc)[:140])
+            return
+        self.config['dance_delay_ms']=str(delay)
+        self.config['dance_cycle_selected']=list(sequence)
+        self.save()
+        self._dance_generation+=1
+        self._dance_running=True
+        self._dance_sequence=sequence
+        self._dance_step=0
+        self._dance_interval_ms=delay
+        self._dance_sent=0
+        self.dance_status_var.set(
+            f'Cycling {len(sequence)} dances every {delay} ms. '
+            'No dance changes have been server-confirmed.')
+        self._dance_after_id=self.root.after(
+            0,lambda gen=self._dance_generation:self._dance_tick(gen))
+
+    def _dance_tick(self,generation):
+        self._dance_after_id=None
+        if not self._dance_running or generation!=self._dance_generation:
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self._stop_dance_cycle('Habbo or G-Earth disconnected; cycling stopped.')
+            return
+        style_id=self._dance_sequence[self._dance_step%len(self._dance_sequence)]
+        try:
+            self._send_dance_action(style_id)
+        except (ValueError,RuntimeError,AttributeError) as exc:
+            self._stop_dance_cycle('Dance cycling stopped: '+str(exc)[:140])
+            return
+        self._dance_step+=1
+        self.dance_status_var.set(
+            f'Cycling — {DANCE_STYLE_NAMES[style_id]}; '
+            f'{self._dance_sent} local dance requests attempted, '
+            f'{self._dance_step//len(self._dance_sequence)} complete '
+            'rotations through selected moves. '
+            'Server response unverified.')
+        if self._dance_running and generation==self._dance_generation:
+            self._dance_after_id=self.root.after(
+                self._dance_interval_ms,
+                lambda gen=generation:self._dance_tick(gen))
+
+    def _stop_dance_cycle(self,reason=None):
+        """Cancel scheduled sends; do not send a packet on disconnect/close."""
+        self._dance_running=False
+        self._dance_generation+=1
+        after_id=self._dance_after_id
+        self._dance_after_id=None
+        if after_id is not None:
+            try:self.root.after_cancel(after_id)
+            except (tk.TclError,AttributeError):pass
+        if reason is None:
+            reason='Dance cycling stopped.'
+        self.dance_status_var.set(
+            f'{reason} {self._dance_sent} local dance requests attempted.')
+
+    def _stop_dance_and_cycle(self):
+        """Explicit button: stop the loop, then request actual dance type 0."""
+        self._stop_dance_cycle('Dance cycling stopped.')
+        try:
+            self._send_dance_action(0)
+        except (ValueError,RuntimeError,AttributeError) as exc:
+            self.dance_status_var.set(
+                'Cycling stopped locally; could not request dance stop: '+
+                str(exc)[:125])
+            return
+        self.dance_status_var.set(
+            'STOP Dance(0) sent via G-Earth. '
+            'Server confirmation unverified; no cycle remains scheduled.')
+
     def _make_coffee_loop_panel(self,parent):
         holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
         holder.pack(fill='both',expand=True)
@@ -10854,6 +11094,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self._coffee_target_room_index))
                 continue
             if item[0]=='room_users_reset':
+                self._stop_dance_cycle('Room changed; dance cycling stopped.')
                 self._face_position_invalidated('Room changed; rotation stopped.')
                 self._own_room_index=None
                 self._last_room_users_binary=None
@@ -10996,6 +11237,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
                     self._stop_outfit_cycle('Habbo disconnected; cycling stopped.')
+                    self._stop_dance_cycle('Habbo disconnected; dance cycling stopped.')
                     self._face_position_invalidated(
                         'Habbo disconnected; face rotation stopped.')
                 continue
@@ -11003,14 +11245,15 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.manipulator_status.set(item[1]);continue
             if item[0]=='manip_off':
                 self.manipulation_enable_var.set(False);continue
-            if item[0] not in ('packet','packet_local','outfit_local','face_local'):
+            if item[0] not in ('packet','packet_local','outfit_local','face_local','dance_local'):
                 continue
-            if item[0] in ('packet_local','outfit_local','face_local') and not self.packet_active:
+            if item[0] in ('packet_local','outfit_local','face_local','dance_local') and not self.packet_active:
                 continue  # Pause also pauses locally generated-request entries.
             _,timestamp,direction,detail=item
             source=({'packet':'G-Earth','packet_local':'Coffee Pass Loop',
                      'outfit_local':'Outfit Cycler',
-                     'face_local':'Face Rotator'}[item[0]])
+                     'face_local':'Face Rotator',
+                     'dance_local':'Dance Controller'}[item[0]])
             self.packet_data.append((timestamp,direction,detail))
             if len(self.packet_data)>500:self.packet_data.pop(0)
             needle=self.packet_filter_var.get().lower().strip()
@@ -11665,6 +11908,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self._stop_coffee_loop('Companion closed. Coffee loop stopped.')
         self._stop_outfit_cycle('Companion closed. Outfit cycling stopped.')
         self._stop_face_rotator('Companion closed. Face rotation stopped.')
+        self._stop_dance_cycle('Companion closed. Dance cycling stopped.')
         if self.wheel_hook and os.name=='nt':
             try:
                 u=self.tracker.user32
