@@ -1,5 +1,32 @@
 # Habbo Companion
 
+## v1.1.89 — Rapid Outfit Cycler (manually captured looks)
+
+A new **Outfit Cycler** page lets you capture up to eight different looks
+from your own Habbo AIR client's **Looks → Save** actions and automatically
+rotate them while connected through G-Earth.
+
+- Press **Capture next outfit change**, change clothes normally in Habbo,
+  and save/apply the look within 30 seconds. Repeat to capture two or more
+  unique outfits. Only live, named `UpdateFigureData` outgoing packets
+  with valid gender and figure tokens are accepted; no numeric header is
+  guessed and no unrelated packets are stored.
+- Set **Seconds per outfit** between **0.1 and 10** (default **0.3**).
+  Press **Start cycling** or **STOP**. The cycler starts only on an explicit
+  button click, never automatically on application or Habbo startup.
+  It stops after a failed send or game disconnect.
+- Validated gender/figure outfits and the configured interval persist in
+  Companion's local settings. The current session's dynamically mapped
+  named packet header is used for sending.
+- Packet Viewer identifies the locally injected look-change requests as
+  **Outfit Cycler**. Local G-Earth acceptance is **not** proof Habbo applied
+  every update; server rate limiting may apply. Summaries cannot be loaded
+  as arbitrary packet replay commands.
+
+Capturing requires a live G-Earth-backed Habbo session and a manual
+outfit save. Saved outfit parts may be rejected by Habbo if they are
+not available on the currently connected account.
+
 ## v1.1.86 — Local Arcturus emulator packet fuzzing in Protocol Lab
 
 The existing **Protocol Lab** now includes a separate **LOCAL ARCTURUS
