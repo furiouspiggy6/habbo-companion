@@ -160,6 +160,10 @@ class MovementLifecycleTests(unittest.TestCase):
         app._bot_receive_walk_observation(ident,3,("users",{4567:(42,1,2)}))
         self.assertEqual(len(spawned),0)
         app._bot_receive_walk_observation(ident,3,("ready",69118545))
+        # The new room must receive a fresh Users roster; one observed
+        # before RoomEnter could belong to the previous room.
+        self.assertEqual(len(spawned),0)
+        app._bot_receive_walk_observation(ident,3,("users",{4567:(42,1,2)}))
         self.assertEqual(len(spawned),1)
         self.assertEqual(app._bot_walk_plans[ident]["requested"],(10,15))
 
