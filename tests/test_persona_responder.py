@@ -84,6 +84,7 @@ class PersonaResponderTests(unittest.TestCase):
             whisper_hints=[]
             def __init__(self,bot):
                 self.responder=bot
+                self._responder_room_speakers={}
                 self.updates=0
             def _responder_update_logging_status(self):
                 self.updates+=1
@@ -95,6 +96,9 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertTrue((Path(self.temp.name)/'Cheesecake.txt').is_file(),
                         'Visibility filter must not suppress background logging')
         self.assertEqual(dummy.updates,1)
+        self.assertIn('cheesecake',dummy._responder_room_speakers)
+        self.assertEqual(dummy._responder_room_speakers['cheesecake'][0],
+                         'Cheesecake')
         App.handle_message(dummy,{
             'name':'MaraGene','text':'private whisper','chatType':1,
             'x':-40,'y':-40,'sw':800,'sh':600,
@@ -108,6 +112,8 @@ class PersonaResponderTests(unittest.TestCase):
         })
         self.assertFalse((Path(self.temp.name)/'MaraGene.txt').exists())
         self.assertEqual(dummy.updates,3)
+        self.assertNotIn('maragene',dummy._responder_room_speakers,
+                         'Private chat must not appear in room-target suggestions')
 
     def test_disabled_by_default(self):
         self.bot.observe("someone", "hi", now=5.0)
