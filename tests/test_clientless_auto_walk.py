@@ -75,7 +75,8 @@ def fake_app():
         _bot_last_action_at={},_tcp_sessions={account_id:session},
         _tcp_generation={account_id:3},root=Root(),
         _bot_action_worker=lambda *args:None,
-        save=lambda:None)
+        save=lambda:None,
+        _bot_selected_profile=lambda:None)
     bind(app)
     return app,account_id,session
 
