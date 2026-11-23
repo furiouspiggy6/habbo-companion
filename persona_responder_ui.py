@@ -117,7 +117,12 @@ class PersonaResponderMixin:
         self.responder_target_selector.pack(side='left')
         self.responder_target_selector.bind(
             '<<ComboboxSelected>>',lambda event:self._responder_update_target_controls())
-        self._responder_targets_frame=ttk.Frame(frame,style='Panel.TFrame')
+        # Permanent layout slot: switching Everyone / Selected users must not
+        # move the username input below the activity log.
+        self._responder_targets_area=ttk.Frame(frame,style='Panel.TFrame')
+        self._responder_targets_area.pack(fill='x')
+        self._responder_targets_frame=ttk.Frame(
+            self._responder_targets_area,style='Panel.TFrame')
         ttk.Label(self._responder_targets_frame,
                   text='Usernames (separate with commas)',style='Panel.TLabel').pack(
                       anchor='w',pady=(3,4))
