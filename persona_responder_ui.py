@@ -374,7 +374,7 @@ class PersonaResponderMixin:
         self._responder_update_style_controls()
         self._responder_apply()
         self.responder_style_status_var.set(
-            f"Using {name}'s writing style ({len(examples)} message examples)."
+            f"Using {name}'s writing style ({len(examples)} message examples).")
         self._responder_log(
             f'Style changed to {name} ({len(examples)} saved message examples).')
 
