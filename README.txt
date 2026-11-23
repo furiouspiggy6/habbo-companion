@@ -1,3 +1,28 @@
+HABBO COMPANION v1.1.86 — LOCAL ARCTURUS EMULATOR BOOFUZZ
+============================================================
+
+Open Protocol Lab and find LOCAL ARCTURUS EMULATOR, below the existing
+synthetic mock test. This is the SAME app and existing auto-updater.
+
+- Local-only target: 127.0.0.1:30000. No other IP/port can be entered.
+- Enter the real header ID from your Arcturus emulator (decimal or 0xHEX).
+- Set 1–50 cases and click Preview frame to inspect the packet WITHOUT
+  connecting or sending anything. The length covers header + body.
+- Click Run Arcturus local fuzz and explicitly confirm to start boofuzz.
+- The sample body is a VL64 32-bit integer and signed one-digit B64 field.
+  It does not infer a handler-specific message body or perform login.
+- Results are saved only under Companion's local fuzz_lab folder.
+- No G-Earth, live Habbo TCP account, SSO ticket or browser token is used.
+
+Run in the Python environment running Companion:
+    py -m pip install boofuzz==0.4.2
+
+The earlier sample requested boofuzz 0.4.3; the published PyPI release
+verified for this integration is 0.4.2, used in GitHub test workflows.
+Multidigit B64 and handler/authentication schemas remain TODOs until
+confirmed from emulator source. A rejected test frame proves nothing
+about vulnerability or server-side packet validation.
+
 HABBO COMPANION v1.1.85 — ROOM USER CHECKLIST CLEANUP
 ==========================================================
 
