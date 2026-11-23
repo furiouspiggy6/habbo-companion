@@ -9,15 +9,15 @@ from shutil import which
 def main():
     sock=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-    sock.bind(("127.0.0.2",0))
+    sock.bind(("127.0.0.3",0))
     port=sock.getsockname()[1]
     sock.listen(1)
-    print(f"Companion upstream bind 127.0.0.2:{port}=OK",flush=True)
+    print(f"Companion upstream bind 127.0.0.3:{port}=OK",flush=True)
     other=socket.socket(socket.AF_INET,socket.SOCK_STREAM)
     try:
-        other.bind(("127.0.0.1",port))
+        other.bind(("127.0.0.2",port))
         other.listen(1)
-        print(f"Parallel Python downstream bind 127.0.0.1:{port}=OK",flush=True)
+        print(f"Parallel Python downstream bind 127.0.0.2:{port}=OK",flush=True)
     except OSError as exc:
         print(f"Parallel Python downstream bind FAILED: {exc!r}",flush=True)
     finally:
@@ -30,8 +30,8 @@ def main():
 public class GearthPortProbe {
   public static void main(String[] args) throws Exception {
     int port=Integer.parseInt(args[0]);
-    try(ServerSocket server=new ServerSocket(port,10,InetAddress.getByName("127.0.0.1"))){
-      System.out.println("Parallel Java ServerSocket 127.0.0.1:"+port+"=OK");
+    try(ServerSocket server=new ServerSocket(port,10,InetAddress.getByName("127.0.0.2"))){
+      System.out.println("Parallel Java ServerSocket 127.0.0.2:"+port+"=OK");
     } catch (Exception e) {
       System.out.println("Parallel Java ServerSocket FAILED: "+e);
     }
