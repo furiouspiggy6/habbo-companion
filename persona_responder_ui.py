@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import queue
+import secrets
 import threading
 import time
 import tkinter as tk
@@ -14,6 +15,7 @@ from tkinter import ttk, filedialog
 
 from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
+    replacement_chat_frame,
 )
 
 
@@ -67,6 +69,10 @@ class PersonaResponderMixin:
         self._responder_results=queue.Queue()
         self._responder_generation=0
         self._responder_chat_template=None
+        self._responder_wire_template=None
+        self._responder_probe_token=None
+        self._responder_probe_started=0.0
+        self._responder_probe_phrase_var=tk.StringVar(value='')
         self._responder_outgoing_seen=False
         self._responder_last_draft=None
         self._responder_test_running=False
@@ -207,6 +213,15 @@ class PersonaResponderMixin:
         ttk.Button(actions,text='Send latest LIVE draft manually',
                    command=self._responder_send_latest).pack(side='left',padx=(0,7))
         ttk.Button(actions,text='Stop',command=self._responder_stop).pack(side='left')
+        probe_row=ttk.Frame(frame,style='Panel.TFrame')
+        probe_row.pack(fill='x',pady=(5,6))
+        ttk.Button(probe_row,text='Learn my outgoing Chat packet',
+                   command=self._responder_start_probe).pack(
+                       side='left',padx=(0,7))
+        ttk.Entry(probe_row,textvariable=self._responder_probe_phrase_var,
+                  state='readonly',width=24).pack(side='left',padx=(0,5))
+        ttk.Button(probe_row,text='Copy phrase',
+                   command=self._responder_copy_probe).pack(side='left')
         ttk.Button(frame,text='Check G-Earth chat capture',
                    command=self._responder_check_capture).pack(anchor='w',pady=(0,6))
         ttk.Label(frame,textvariable=self.responder_status_var,
@@ -217,10 +232,10 @@ class PersonaResponderMixin:
             font=('Consolas',9),bg=p['field'],fg=p['text'],
             insertbackground=p['text'],relief='flat')
         self.responder_log_text.pack(fill='both',expand=True,pady=(5,7))
-        ttk.Label(frame,text='To send live messages, connect Packet Viewer → G-Earth '
-                  'and type one public message manually in Habbo first. '
-                  'The bot learns that session’s outgoing Chat packet shape. '
-                  'No browser automation or mouse coordinates.',
+        ttk.Label(frame,text='To enable live sending, connect Packet Viewer → G-Earth. '
+                  'If named Chat detection fails, click Learn my outgoing Chat packet, '
+                  'copy the unique phrase and type it once into Habbo public chat. '
+                  'Only that exact outgoing packet is used for sending; no guessed IDs.',
                   style='Panel.TLabel',wraplength=650).pack(anchor='w')
 
     def _responder_update_style_controls(self):
@@ -325,13 +340,44 @@ class PersonaResponderMixin:
                          args=(payload,model,self._responder_generation,True),
                          daemon=True).start()
 
+    def _responder_start_probe(self):
+        """Require a fresh user-typed public chat phrase to identify the packet."""
+        if not self.packet_started or not self._habbo_session_connected:
+            result='Connect Habbo AIR through the G-Earth Packet Viewer first.'
+            self.responder_status_var.set(result)
+            self._responder_log(result)
+            return
+        self._responder_wire_template=None
+        self._responder_probe_token='hc-'+secrets.token_hex(6)
+        self._responder_probe_started=time.monotonic()
+        self._responder_probe_phrase_var.set(self._responder_probe_token)
+        result=('Copy the phrase and type it EXACTLY once in Habbo public chat '
+                'within 90 seconds. The AI will not send it automatically.')
+        self.responder_status_var.set(result)
+        self._responder_log('Chat-learning challenge ready. '+result)
+
+    def _responder_copy_probe(self):
+        phrase=self._responder_probe_token
+        if not phrase:
+            self.responder_status_var.set('Click Learn my outgoing Chat packet first.')
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(phrase)
+        self.responder_status_var.set('Copied test phrase. Paste and SEND it in Habbo public chat.')
+
     def _responder_check_capture(self):
         """Explain the live Chat capture status without sending any packets."""
         if not self.packet_started or not self._habbo_session_connected:
             result=('G-Earth game session is not connected. '
                     'Connect Habbo AIR through Packet Viewer first.')
+        elif self._responder_wire_template is not None:
+            result=('READY: an exact outgoing Chat packet was verified from '
+                    'the phrase you typed manually in Habbo.')
         elif self._responder_chat_template is not None:
-            result='READY: the outgoing Chat format was learned from G-Earth.'
+            result='READY: the outgoing named Chat expression was learned from G-Earth.'
+        elif self._responder_probe_token:
+            result=('Waiting for the exact challenge text to be sent manually in '
+                    'Habbo public chat. Copy the phrase and paste it into Habbo.')
         elif self._responder_outgoing_seen:
             result=('G-Earth is observing outgoing packets, but has not '
                     'identified a named public Chat packet. Send an ordinary '
@@ -353,6 +399,21 @@ class PersonaResponderMixin:
         if (not self.packet_started or not self._habbo_session_connected
             or self.packet_extension is None):
             return 'Not sent: connect Habbo through G-Earth first.'
+        # Prefer the exact verified wire packet. This works even when G-Earth
+        # does not know the symbolic name of the outgoing Chat header.
+        wire=replacement_chat_frame(self._responder_wire_template,reply)
+        if wire is not None:
+            try:
+                from g_python.hpacket import HPacket
+                signed_id=int.from_bytes(wire[4:6],'big',signed=True)
+                packet=HPacket(signed_id).append_bytes(wire[6:])
+                if packet.is_corrupted() or packet.is_incomplete_packet():
+                    raise ValueError('The verified Chat packet failed validation.')
+                if self.packet_extension.send_to_server(packet) is False:
+                    raise ValueError('G-Earth rejected the verified Chat packet.')
+                return 'Send requested using manually verified Chat packet format.'
+            except Exception as exc:
+                return 'Not sent: '+str(exc)[:160]
         expr=chat_expression_from_template(self._responder_chat_template,reply)
         if expr is None:
             if self._responder_outgoing_seen:
@@ -387,6 +448,13 @@ class PersonaResponderMixin:
             self._responder_results.put((generation,None,str(exc)[:200],test))
 
     def _responder_tick(self):
+        if (self._responder_probe_token and
+                time.monotonic()-self._responder_probe_started>90):
+            self._responder_probe_token=None
+            self._responder_probe_started=0.0
+            self._responder_probe_phrase_var.set('')
+            self._responder_log(
+                'Chat-learning phrase expired. Click Learn my outgoing Chat packet again.')
         for _ in range(6):
             try:
                 generation,reply,error,test=self._responder_results.get_nowait()
