@@ -1,3 +1,26 @@
+HABBO COMPANION v1.1.75 — OUTGOING AI CHAT CAPTURE FIX
+=======================================================
+
+FIXED: AI Responder could read live Habbo AIR chat and generate responses
+but failed to learn outgoing Chat packets because it checked the legacy
+G-Earth g_string output for a named {out:Chat} expression. The app now
+checks the parsed g_expression output and validates the named Chat field.
+It does not guess packet header IDs or use screen coordinates.
+
+HOW TO TEST
+1. Open Habbo AIR with G-Earth attached in Packet Viewer.
+2. Enable AI Responder, leaving Auto-send OFF during initial testing.
+3. Send one normal public message yourself through the Habbo game client.
+4. Check Recent Decisions: "Outgoing Chat format learned from Habbo."
+5. Click "Check G-Earth chat capture" if the message is not shown.
+6. After it is learned, optionally enable Auto-send through G-Earth.
+
+If G-Earth observes outgoing traffic but cannot name Chat, the app reports
+that separately rather than pretending an outgoing format was learned.
+No API/model or personality changes should be needed for this symptom.
+AI and auto-send remain opt-in, and no browser is needed.
+
+
 HABBO COMPANION v1.1.74 — CUSTOM AI PERSONALITY AND TARGETING
 ==============================================================
 
