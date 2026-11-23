@@ -334,8 +334,11 @@ class PersonaResponderMixin:
             if name and name.casefold()!=own:
                 found.setdefault(name.casefold(),name)
         names=sorted(found.values(),key=str.casefold)
+        previous=self._responder_room_names
         self._responder_room_names=names
-        self._responder_render_target_checklist()
+        if names!=previous or not self.responder_room_status_var.get().startswith(
+                (str(len(names))+' players detected.', 'No room players detected')):
+            self._responder_render_target_checklist()
 
     def _responder_render_target_checklist(self):
         """Draw actual checkboxes in a compact grid (not an editable name list)."""
@@ -799,6 +802,10 @@ class PersonaResponderMixin:
             self._responder_results.put((generation,None,str(exc)[:200],test))
 
     def _responder_tick(self):
+        now=time.monotonic()
+        if now-self._responder_last_room_refresh>=2.0:
+            self._responder_last_room_refresh=now
+            self._responder_refresh_room_users()
         self._responder_refresh_instructions()
         if self.responder.is_temporarily_afk() and self._responder_scheduled_send:
             self._responder_scheduled_send=None
