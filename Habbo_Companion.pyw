@@ -5279,6 +5279,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         # Pending one-click room entries are tied to the exact account generation.
         self._bot_pending_room={}
         self._bot_run_room_targets={}
+        # Account-level explicit Direct TCP permission for multi-select mode;
+        # never treat a global G-Earth ON setting as permission to bypass.
+        self._bot_multi_direct_ids=set()
         self._bot_multi_start_generation=0
         self._bot_multi_ui_generation=0
         self.bot_multi_status_var=tk.StringVar(
@@ -6221,11 +6224,12 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(frame,text='MULTI-ACCOUNT CLIENTLESS',
                   style='Section.TLabel').pack(anchor='w',pady=(6,5))
         ttk.Label(frame,text='Select multiple saved accounts using Ctrl/Shift '
-                  'or Select all. Run highlighted opens an independent '
-                  'session for each account and joins the Room ID below. '
-                  'Their auto-walk and anti-AFK run separately. '
-                  'G-Earth interception currently supports only one '
-                  'clientless session; turn G-Earth OFF for multi-account mode.',
+                  'or Select all. Run highlighted (Direct TCP) opens an '
+                  'independent session for each account and joins the Room ID '
+                  'below. Auto-walk and anti-AFK run separately. An existing '
+                  'G-Earth-intercepted account can stay connected, but only '
+                  'that account is intercepted; additional accounts use '
+                  'Direct TCP without G-Earth.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
         table=ttk.Treeview(
             frame,columns=('connection','room'),show='tree headings',
@@ -6242,7 +6246,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         multi_buttons.pack(fill='x',pady=(0,5))
         ttk.Button(multi_buttons,text='Select all',
                    command=self._bot_multi_select_all).pack(side='left',padx=(0,6))
-        ttk.Button(multi_buttons,text='Run highlighted',
+        ttk.Button(multi_buttons,text='Run highlighted (Direct TCP)',
                    command=self._bot_multi_run_selected,
                    style='Primary.TButton').pack(side='left',padx=(0,6))
         ttk.Button(multi_buttons,text='Disconnect highlighted',
@@ -6801,24 +6805,15 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_multi_status_var.set(
                 'Enter a valid numeric Room ID (1–2147483647) before launching.')
             return
-        if self.bot_gearth_var.get() and len(chosen)>1:
-            self.bot_multi_status_var.set(
-                'G-Earth ON supports ONE intercepted session only. '
-                'Disconnect the intercepted account and turn G-Earth OFF '
-                'before starting multiple clientless accounts over Direct TCP.')
-            return
-        if not self.bot_gearth_var.get() and self._bot_gearth_bridges:
-            self.bot_multi_status_var.set(
-                'An intercepted G-Earth account is still active. Disconnect '
-                'that account first, then run the highlighted Direct TCP profiles.')
-            return
+        # This button always means Direct TCP: it never requests a second
+        # G-Earth process or silently changes the intercepted profile.
         self._bot_multi_start_generation+=1
         generation=self._bot_multi_start_generation
         count=len(chosen)
         self.bot_multi_status_var.set(
             'Starting '+str(count)+' saved profile(s) for room '+str(room)+
-            ' using '+('G-Earth' if self.bot_gearth_var.get() else 'Direct TCP')+
-            '. Each account has its own login, game socket and actions.')
+            ' using Direct TCP for newly connected accounts. Existing '
+            'authenticated profiles (including G-Earth) stay unchanged.')
         for i,account in enumerate(chosen):
             # Stagger the independent browser login workers to avoid opening
             # many isolated Chromium sessions in the same millisecond.
@@ -6840,7 +6835,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             # Existing sessions keep their room, auto-walk and AFK state.
             self._bot_multi_refresh()
             return
-        self._bot_run_account(account,room_override=room)
+        self._bot_run_account(account,room_override=room,force_direct=True)
         self._bot_multi_refresh()
 
     def _bot_multi_disconnect_selected(self):
@@ -6972,7 +6967,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         self._bot_run_account(account)
 
-    def _bot_run_account(self,account,room_override=None):
+    def _bot_run_account(self,account,room_override=None,force_direct=False):
         """One click: user-selected profile, optional G-Earth gameplay MITM.
 
         Login and RC4 remain in Companion. With G-Earth ON, post-auth gameplay
@@ -6982,7 +6977,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not any(p['id']==ident for p in self._account_profiles):
             self.bot_status_var.set('This account profile has been removed.')
             return
-        if self.bot_gearth_var.get():
+        if force_direct:
+            # This is a separate, explicitly labelled multi-account action.
+            # The single-account G-Earth ON preference remains untouched.
+            self._bot_multi_direct_ids.add(ident)
+        elif self.bot_gearth_var.get():
             session=self._tcp_sessions.get(ident)
             if ident in self._tcp_inflight or (
                 session is not None and session.authenticated):
@@ -7019,6 +7018,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if ident not in self._tcp_inflight:
             bridge=self._bot_gearth_bridges.pop(ident,None)
             if bridge:bridge.close()
+            if force_direct:self._bot_multi_direct_ids.discard(ident)
             self.bot_status_var.set(
                 'Could not start game TCP for '+account['label']+': '+
                 self._tcp_states.get(ident,'no valid saved session.'))
@@ -7114,7 +7114,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                      else self._bot_selected_profile())
             ident=account['id'] if account is not None else ''
             bridge=self._bot_gearth_bridges.get(ident)
-            if bridge is None or not bridge.ready:
+            explicit_direct=ident in self._bot_multi_direct_ids
+            if not explicit_direct and (bridge is None or not bridge.ready):
                 self.bot_status_var.set(
                     'G-Earth interception ON, but the local packet relay '
                     'is not ready. Actions cannot bypass it.')
@@ -7506,6 +7507,7 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _tcp_disconnect_one(self,ident):
         self._bot_pending_room.pop(ident,None)
         self._bot_run_room_targets.pop(ident,None)
+        self._bot_multi_direct_ids.discard(ident)
         bridge=self._bot_gearth_bridges.pop(ident,None)
         if bridge is not None:bridge.close()
         self._bot_walk_plans.pop(ident,None)
