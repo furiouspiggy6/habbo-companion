@@ -1,5 +1,29 @@
 # Habbo Companion
 
+## v1.1.76 — Simpler AI Responder screen
+
+The AI Responder has been reorganised into **one straightforward page**
+instead of three configuration tabs:
+
+- **Enable AI responder** — listens to new room messages.
+- **Send replies in Habbo (G-Earth)** — independent switch, OFF at startup.
+- **Personality** — type how you want the bot to talk.
+- **Reply to** — Everyone, Selected users (comma-separated names), or
+  First active speaker. The usernames field only appears when needed.
+- **Save changes / Stop** — save any edits or stop immediately.
+- **Try a reply (preview only)** — type a test message and click **Test reply**;
+  no game message is sent even if automatic sending is checked.
+- **Recent activity** — shows the generated drafts, sends, and errors.
+
+All less-frequently-used settings are still accessible through the collapsed
+**Advanced options** section: reply frequency, model, tone, humour, optional
+historical chat-log styling and rotation, local chat capture, test username,
+manual send, and G-Earth capture diagnostics. Existing saved preferences
+continue to load. Neither live AI nor automatic sending is enabled at startup.
+
+**No changes were made to the working AIR/G-Earth live-chat or packet-sending
+logic** in this version. Update through Companion's existing Updater.
+
 ## v1.1.75 — Fix AI outgoing Chat capture
 
 Fixed an AI Responder send failure where live room messages were read and AI
