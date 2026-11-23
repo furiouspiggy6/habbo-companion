@@ -1,5 +1,40 @@
 # Habbo Companion
 
+## v1.1.97 — Automatic room walking with ordered fallback tiles
+
+In **Clientless Bot**, set the **Room ID** for the intended room (Coffee House
+69118545 by default), enter a **Primary X,Y** destination such as `10,15`
+and optionally up to **three Backup X,Y** destinations separated by
+semicolons (`11,15;12,15;13,15`). These coordinates are **examples only**;
+choose actual walkable tiles from your room. Check **Walk automatically after
+room entry**, click **Save positions**, and select/run your account.
+
+Presets are saved **by numeric room ID**, not mixed between rooms. Use
+**Load room positions** after switching the Room ID. Clear coordinates with
+the checkbox off and Save positions to remove a room preset. The setting
+is off by default; simply upgrading doesn't move any accounts.
+
+After a user-initiated room join, Companion waits for the matching
+server RoomEnter event and identifies the selected Habbo account through
+UserInfo and its numeric entry in the room Users roster. No guessed own
+avatar, no writes until those signals exist. It then attempts the primary
+Walk request and checks the server's room UnitStatus positional messages.
+It considers arrival proven only when the selected avatar's room index
+reports its X/Y exactly at the requested destination. If the destination
+is not confirmed within 14 seconds, it attempts each backup in order,
+then stops after the final attempt. Room-entry and identity waits are
+bounded (18s and 15s). Manual Walk cancels the automatic plan; disconnect,
+re-login, and selecting another account also cancel old plans.
+
+The read-only packet decoders are specific to the pinned
+`WIN63-202611041140-327405090` client mapping and are based on
+[Volt-Renderer](https://github.com/plus-emulator/Volt-Renderer/tree/c8f74ffdd9c3eeb27a532a705e09b665b76e67a1).
+Version changes and malformed telemetry stop auto-walk rather than
+guessing. No HabboAIR/G-Earth is required when the pinned mapping works.
+A TCP send or timer by itself does **not** establish server movement.
+For large rooms, a 14-second arrival window might be too short; configure
+reachable destinations and verify the behavior with a live test.
+
 ## v1.1.96 — One-click clientless profile launch (AIR-free)
 
 Open **Clientless Bot**, select a saved profile in the dropdown (the
