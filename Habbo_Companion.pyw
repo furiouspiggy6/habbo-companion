@@ -59,6 +59,123 @@ def validate_local_habbo_frame(frame):
     return text_length==declared-4
 
 
+
+HABBO_MAX_FRAME = 8192
+
+
+def encode_vl64(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not -(1 << 31) <= value < (1 << 31):
+        raise ValueError('VL64 requires a signed 32-bit integer.')
+    magnitude = abs(value)
+    tail = []
+    rest = magnitude >> 2
+    while rest:
+        tail.append(rest & 0x3f)
+        rest >>= 6
+    first = (0x04 if value < 0 else 0) | (len(tail) << 3) | (magnitude & 3)
+    result = bytearray([first])
+    result.extend(reversed(tail))
+    result[-1] |= 0x40
+    return bytes(result)
+
+
+def decode_vl64(data, offset=0):
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise ValueError('VL64 input must be bytes.')
+    raw = bytes(data)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < len(raw):
+        raise ValueError('VL64 offset is out of range.')
+    first = raw[offset]
+    count = ((first >> 3) & 7) + 1
+    end = offset + count
+    if count > 6 or end > len(raw):
+        raise ValueError('Incomplete or oversized VL64 value.')
+    if count == 1:
+        if not first & 0x40:
+            raise ValueError('Unterminated VL64 value.')
+    elif first & 0x40:
+        raise ValueError('VL64 terminator in first byte.')
+    tail = raw[offset + 1:end]
+    if tail:
+        if any(byte & 0xc0 for byte in tail[:-1]):
+            raise ValueError('Invalid VL64 tail.')
+        if not tail[-1] & 0x40 or tail[-1] & 0x80:
+            raise ValueError('Unterminated VL64 tail.')
+    high = 0
+    for byte in tail:
+        high = (high << 6) | (byte & 0x3f)
+    magnitude = (high << 2) | (first & 3)
+    value = -magnitude if first & 4 else magnitude
+    if not -(1 << 31) <= value < (1 << 31):
+        raise ValueError('VL64 value out of range.')
+    if encode_vl64(value) != raw[offset:end]:
+        raise ValueError('Non-canonical VL64 encoding.')
+    return value, end
+
+
+def encode_b64(value):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError('B64 requires an integer.')
+    magnitude = abs(value)
+    digits = []
+    while magnitude:
+        digits.append(magnitude & 0x3f)
+        magnitude >>= 6
+    if not digits:
+        digits = [0]
+    digits.reverse()
+    out = bytearray(b'@' if value < 0 else b'')
+    for index, digit in enumerate(digits):
+        out.append(digit | (0x40 if index == len(digits) - 1 else 0))
+    return bytes(out)
+
+
+def decode_b64(data, offset=0):
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise ValueError('B64 input must be bytes.')
+    raw = bytes(data)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset < len(raw):
+        raise ValueError('B64 offset is out of range.')
+    start = offset
+    negative = raw[offset] == 0x40 and offset + 1 < len(raw)
+    if negative:
+        offset += 1
+    value = 0
+    while offset < len(raw):
+        digit = raw[offset]
+        if digit & 0x80:
+            raise ValueError('Invalid B64 digit.')
+        value = (value << 6) | (digit & 0x3f)
+        offset += 1
+        if digit & 0x40:
+            result = -value if negative else value
+            if encode_b64(result) != raw[start:offset]:
+                raise ValueError('Non-canonical B64 encoding.')
+            return result, offset
+    raise ValueError('Unterminated B64 value.')
+
+
+def validate_habbo_framing_frame(frame):
+    """The local mock's known VL64-then-B64 body; no handler registry."""
+    if not isinstance(frame, (bytes, bytearray, memoryview)) or len(frame) < 6:
+        return False
+    raw = bytes(frame)
+    declared = int.from_bytes(raw[:4], 'big')
+    # Literal bound keeps this function standalone under AST extraction.
+    if declared < 2 or declared > 8192 or declared != len(raw) - 4:
+        return False
+    try:
+        _, offset = decode_vl64(raw, 6)
+        _, offset = decode_b64(raw, offset)
+    except ValueError:
+        return False
+    return offset == len(raw)
+
+
+def validate_habbo_header(header):
+    return isinstance(header, int) and not isinstance(header, bool) and 0 <= header <= 0xffff
+
+
 def validate_owned_lab_ip(value):
     """Select an IPv4 address assigned to this PC, not a remote fuzz target.
 
@@ -155,6 +272,168 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None, bind_ip='127.0.0.1
         thread.join(timeout=1)
 
 
+
+
+
+def run_local_habbo_boofuzz(seed_id=896, cases=40, output_dir=None,
+                            bind_ip='127.0.0.1', fuzz_header=False):
+    """Fuzz only a temporary mock on this PC, never a Habbo server."""
+    import socket
+    import ipaddress
+    from boofuzz import (Session, Target, TCPSocketConnection, s_initialize, s_size,
+                         s_block, s_word, s_group, s_get)
+    # boofuzz 0.4.2 accepts a callable block encoder but does not ship the
+    # encoders module in every distribution. Preserve the Encoder ABC contract.
+    try:
+        from boofuzz.encoders import Encoder
+    except ImportError:
+        from abc import ABC, abstractmethod
+
+        class Encoder(ABC):
+            @abstractmethod
+            def encode(self, data):
+                raise NotImplementedError
+
+            @abstractmethod
+            def decode(self, data):
+                raise NotImplementedError
+
+    # Standalone under the repository tests' AST-extraction namespace.
+    def validate_owned_lab_ip(value):
+        try:
+            address = ipaddress.IPv4Address(str(value).strip())
+        except (ipaddress.AddressValueError, ValueError, TypeError):
+            raise ValueError('Enter a numerical IPv4 address assigned to this PC.') from None
+        if (not (address.is_loopback or address.is_private)
+            or address.is_unspecified or address.is_multicast
+            or address.is_link_local or address.is_reserved):
+            raise ValueError('Only a local loopback or private IPv4 address is accepted.')
+        return str(address)
+
+    def _as_bytes(data):
+        return data.encode('ascii') if isinstance(data, str) else bytes(data)
+
+    def _as_text(data):
+        return _as_bytes(data).decode('ascii') if isinstance(data, (bytes, bytearray, memoryview)) else str(data)
+
+    class Vl64BlockEncoder(Encoder):
+        def encode(self, value):
+            return encode_vl64(int(_as_text(value)))
+
+        def decode(self, data):
+            raw = _as_bytes(data)
+            value, end = decode_vl64(raw)
+            if end != len(raw):
+                raise ValueError('Trailing VL64 bytes.')
+            return str(value)
+
+        def __call__(self, data):
+            return self.encode(data)
+
+    class B64BlockEncoder(Encoder):
+        def encode(self, value):
+            return encode_b64(int(_as_text(value)))
+
+        def decode(self, data):
+            raw = _as_bytes(data)
+            value, end = decode_b64(raw)
+            if end != len(raw):
+                raise ValueError('Trailing B64 bytes.')
+            return str(value)
+
+        def __call__(self, data):
+            return self.encode(data)
+
+    bind_ip = validate_owned_lab_ip(bind_ip)
+    if not validate_habbo_header(seed_id):
+        raise ValueError('Invalid numeric header ID.')
+    if isinstance(cases, bool) or not isinstance(cases, int) or not 1 <= cases <= 100:
+        raise ValueError('Use 1 to 100 local test cases.')
+    stats = {'accepted': 0, 'rejected': 0, 'requests': 0}
+    lock = threading.Lock()
+
+    class LocalHandler(socketserver.BaseRequestHandler):
+        def handle(self):
+            if self.client_address[0] not in ('127.0.0.1', bind_ip):
+                return
+            self.request.settimeout(0.25)
+
+            def recv_exact(count):
+                received = bytearray()
+                while len(received) < count:
+                    try:
+                        chunk = self.request.recv(count - len(received))
+                    except socket.timeout:
+                        break
+                    if not chunk:
+                        break
+                    received.extend(chunk)
+                return bytes(received)
+
+            try:
+                prefix = recv_exact(4)
+                if len(prefix) == 4:
+                    declared = int.from_bytes(prefix, 'big')
+                    frame = prefix + (recv_exact(declared) if declared <= 8192 else b'')
+                else:
+                    frame = prefix
+                accepted = validate_habbo_framing_frame(frame)
+            except OSError:
+                accepted = False
+            with lock:
+                stats['requests'] += 1
+                stats['accepted' if accepted else 'rejected'] += 1
+            try:
+                self.request.sendall(b'OK' if accepted else b'REJECT')
+            except OSError:
+                pass
+
+    class LoopbackServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    try:
+        server = LoopbackServer((bind_ip, 0), LocalHandler)
+    except OSError as exc:
+        raise ValueError('The selected IP is not assigned to your PC or is unavailable.') from exc
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    output_dir = Path(output_dir) if output_dir else Path.cwd() / 'fuzz_lab'
+    output_dir.mkdir(parents=True, exist_ok=True)
+    db = output_dir / ('boofuzz_habbo_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.db')
+    try:
+        values = [
+            '0', '1', '-1', '2', '3', '4', '63', '64', '-64',
+            '255', '256', '-256', '4096', '65535', '-65535',
+            '2147483647', '-2147483648',
+        ]
+        s_initialize('habbo_framing_frame')
+        s_size('habbo_frame_body', length=4, endian='>', output_format='binary',
+               inclusive=False, fuzzable=False, name='habbo_declared_length')
+        with s_block('habbo_frame_body'):
+            s_word(seed_id, endian='>', name='habbo_header_id',
+                   fuzzable=bool(fuzz_header),
+                   fuzz_values=[seed_id, 0, 1, 2, 3, 4, 5, 4000, 0x7fff, 0xffff])
+            with s_block('habbo_vl64', encoder=Vl64BlockEncoder()):
+                s_group(name='habbo_vl64_value', values=values)
+            with s_block('habbo_b64', encoder=B64BlockEncoder()):
+                s_group(name='habbo_b64_value', values=values)
+        session = Session(
+            target=Target(connection=TCPSocketConnection(
+                bind_ip, server.server_address[1], recv_timeout=0.5)),
+            index_end=cases, restart_threshold=1, restart_timeout=0,
+            sleep_time=0.01, receive_data_after_each_request=True,
+            web_address='127.0.0.1', web_port=None, keep_web_open=False,
+            db_filename=str(db))
+        session.connect(s_get('habbo_framing_frame'))
+        session.fuzz()
+        return dict(stats, seed_id=seed_id, case_limit=cases,
+                    scope='this-PC Habbo-framing mock only',
+                    bind_ip=bind_ip, boofuzz_db=str(db))
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=1)
 
 
 # Separate from Habbo's production session and the synthetic Companion mock.
@@ -5084,6 +5363,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.fuzz_running=False
         self.fuzz_last_result=None
         self.fuzz_target_ip_var=tk.StringVar(value='127.0.0.1')
+        self.fuzz_habbo_mode_var=tk.BooleanVar(value=False)
+        self.fuzz_habbo_header_var=tk.BooleanVar(value=False)
         self.fuzz_remote_ip_var=tk.StringVar(value='')
         self.fuzz_remote_port_var=tk.StringVar(value='39099')
         # Never persist the remote lab key, like an actual Habbo ticket.
@@ -7519,6 +7800,15 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._fuzz_start_lab).pack(side='left',padx=(0,8))
         ttk.Button(bar,text='Analyse results with local Ollama',
                    command=self._fuzz_analyse_ollama).pack(side='left')
+        ttk.Checkbutton(
+            holder,
+            text='Habbo framing (VL64/B64 body) instead of the synthetic format',
+            variable=self.fuzz_habbo_mode_var).pack(anchor='w',pady=(9,3))
+        ttk.Checkbutton(
+            holder,text='Also fuzz header IDs',
+            variable=self.fuzz_habbo_header_var).pack(anchor='w',pady=(0,6))
+        ttk.Button(holder,text='Run 40 Habbo-framing cases',
+                   command=self._fuzz_start_habbo_lab).pack(anchor='w',pady=(0,3))
         ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(17,15))
         tk.Label(holder,text='LOCAL ARCTURUS EMULATOR',font=('Segoe UI Semibold',13),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
@@ -7640,6 +7930,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.fuzz_live_var.set('Export failed: '+str(exc)[:130])
 
     def _fuzz_start_lab(self):
+        if self.fuzz_habbo_mode_var.get():
+            self._fuzz_start_habbo_lab()
+            return
         if self.fuzz_running:
             self.fuzz_lab_var.set('Local boofuzz session already running.')
             return
@@ -7656,6 +7949,37 @@ class ChatOverlayApp(PersonaResponderMixin):
         def work():
             try:
                 result=run_local_boofuzz(seed_id=seed,cases=60,bind_ip=bind_ip)
+                self._packet_put(('fuzz_result',result))
+            except ModuleNotFoundError:
+                self._packet_put(('fuzz_error',
+                    'boofuzz not installed. Run: "'+sys.executable+
+                    '" -m pip install boofuzz==0.4.2'))
+            except Exception as exc:
+                self._packet_put(('fuzz_error',type(exc).__name__+': '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
+
+
+    def _fuzz_start_habbo_lab(self):
+        if self.fuzz_running:
+            self.fuzz_lab_var.set('Local boofuzz session already running.')
+            return
+        try:
+            bind_ip=validate_owned_lab_ip(self.fuzz_target_ip_var.get())
+        except ValueError as exc:
+            self.fuzz_lab_var.set(str(exc))
+            return
+        outgoing=[(v['count'],mid) for (direction,mid),v in self.fuzz_counts.items()
+                  if direction=='Outgoing']
+        seed=max(outgoing)[1] if outgoing else 896
+        fuzz_header=bool(self.fuzz_habbo_header_var.get())
+        self.fuzz_running=True
+        self.fuzz_lab_var.set(
+            f'Running up to 40 Habbo-framing cases on your PC at {bind_ip} '
+            f'(seed ID {seed}; fuzz header: {fuzz_header})...')
+        def work():
+            try:
+                result=run_local_habbo_boofuzz(
+                    seed_id=seed,cases=40,bind_ip=bind_ip,fuzz_header=fuzz_header)
                 self._packet_put(('fuzz_result',result))
             except ModuleNotFoundError:
                 self._packet_put(('fuzz_error',
@@ -9986,7 +10310,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.fuzz_lab_var.set(
                     f"Lab boofuzz done: {result['requests']} requests; "
                     f"{result['accepted']} accepted / {result['rejected']} rejected. "
-                    'Results are for a synthetic test server only.')
+                    f"Results: {result['scope']}.")
                 continue
             if item[0]=='fuzz_error':
                 self.fuzz_running=False
