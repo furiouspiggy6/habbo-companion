@@ -15,7 +15,7 @@ sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
-PAGES={'overview','accounts','tcp','chat','responder','packet','outfits','fuzz','manip',
+PAGES={'overview','accounts','tcp','chat','responder','packet','outfits','face','fuzz','manip',
        'classic','headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
@@ -42,6 +42,10 @@ try:
     assert app.outfit_listbox.winfo_exists(), 'Outfit Cycler UI failed to build'
     assert not app._outfit_running, 'Outfit Cycler must start OFF'
     assert app.outfit_delay_var.get()=='300', 'Incorrect default millisecond interval'
+    assert not app._face_running, 'Face Rotator must start OFF'
+    assert app._face_tile is None, 'Face Rotator must require a fresh standing tile'
+    assert app.face_delay_var.get()=='350', 'Incorrect default face turn interval'
+    assert app.face_direction_var.get()=='Clockwise', 'Incorrect default direction'
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.arcturus_header_var.get()=='', (
         'Arcturus header must be supplied by the emulator owner, never guessed')
