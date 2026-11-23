@@ -477,6 +477,11 @@ class PersonaResponderMixin:
         self._responder_hide_target_matches()
         self._responder_apply()
 
+    def _responder_mode_display(self):
+        return ('Chat persona simulation' if
+                self.responder.style_mode=='Chat-log style' else
+                self.responder.style_mode)
+
     def _responder_update_style_controls(self):
         mode=self.responder_style_mode_var.get()
         copying=(mode=='Chat-log style')
@@ -710,7 +715,7 @@ class PersonaResponderMixin:
         if valid_selection:
             state='ON' if self.responder.enabled else 'OFF'
             self.responder_status_var.set(
-                f'AI {state} | {self.responder.style_mode} | '
+                f'AI {state} | {self._responder_mode_display()} | '
                 f'{self.responder.target_mode}: '
                 f'{self.responder.selected_users if self.responder.target_mode=="Selected users" else "active room"}')
         self._responder_log('Settings applied. AI '+(
@@ -850,6 +855,8 @@ class PersonaResponderMixin:
         generation=self._responder_generation
         model=self.responder_model_var.get().strip() or 'gpt-5-mini'
         self._responder_log('Live decision for '+payload['target']+
-                            ' | '+payload['style_mode'])
+                            ' | '+('Chat persona simulation' if
+                                   payload['style_mode']=='Chat-log style'
+                                   else payload['style_mode']))
         threading.Thread(target=self._responder_worker,
                          args=(payload,model,generation,False),daemon=True).start()
