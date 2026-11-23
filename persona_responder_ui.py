@@ -26,7 +26,7 @@ class PersonaResponderMixin:
         self._responder_default_logs=default_logs
         self.responder=PersonaResponder(chosen or default_logs)
         self.responder.reply_cooldown_seconds=clamp_reply_interval(
-            self.config.get('responder_reply_interval',30))
+            self.config.get('responder_reply_interval',10))
         # Always save fresh messages in Companion's own per-user archive,
         # even if the user browses a different historical style source.
         self.responder.archive_dir=self._responder_app_dir/'persona_logs'/'users'
@@ -34,8 +34,7 @@ class PersonaResponderMixin:
         self.responder.auto_rotate=bool(self.config.get('responder_rotation',False))
         # Independent, default-on background archive: older versions kept
         # responder_capture=False and accidentally disabled it in custom mode.
-        self.responder.save_history=bool(
-            self.config.get('background_public_chat_logging',True))
+        self.responder.save_history=True  # Always archive public chat, even with AI OFF.
         self.responder.style_mode=str(self.config.get('responder_style_mode','Custom personality'))
         self.responder.personality=str(self.config.get(
             'responder_personality',self.responder.personality))
@@ -54,7 +53,13 @@ class PersonaResponderMixin:
         self.responder.target_mode=current_mode
         self.responder.fixed_target=''
         self.responder_enabled_var=tk.BooleanVar(value=False)
+        # There is no separate send toggle: enabling the AI means sending via
+        # the existing G-Earth game session when one is connected.
         self.responder_send_var=tk.BooleanVar(value=False)
+        self.responder_everyone_var=tk.BooleanVar(
+            value=self.responder.target_mode=='Everyone')
+        self._responder_target_checkboxes={}
+        self._responder_last_room_refresh=0.0
         self.responder_reply_interval_var=tk.DoubleVar(
             value=self.responder.reply_cooldown_seconds)
         self.responder_reply_interval_text=tk.StringVar(
@@ -104,71 +109,27 @@ class PersonaResponderMixin:
             value='No temporary instructions active.')
 
     def _make_responder_panel(self,parent):
-        """Keep everyday controls on one page; tuck optional controls away."""
+        """Persona-first controls: choose identity, speed and live room audience."""
         p=self._responder_palette
         frame=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
-        # Scrollable pages must size to their contents, not the full canvas
-        # height. Expand here creates the giant empty hole when choices close.
         frame.pack(fill='x')
 
         tk.Label(frame,text='AI RESPONDER',font=('Segoe UI Semibold',18),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
-        ttk.Label(frame,text='Choose how it talks and who it responds to.',
+        ttk.Label(frame,text='Choose a chat persona, who to reply to, and how fast.',
                   style='Panel.TLabel').pack(anchor='w',pady=(3,12))
-
-        switches=ttk.Frame(frame,style='Panel.TFrame')
-        switches.pack(fill='x',pady=(0,12))
-        ttk.Checkbutton(switches,text='Enable AI responder',
+        ttk.Checkbutton(frame,text='Enable AI responder (send in Habbo)',
                         variable=self.responder_enabled_var,
-                        command=self._responder_apply).pack(anchor='w',pady=(0,5))
-        ttk.Checkbutton(switches,text='Send replies in Habbo (G-Earth)',
-                        variable=self.responder_send_var).pack(anchor='w')
-        ttk.Label(switches,text='Turn off sending to preview live replies without posting.',
-                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,0))
-
-        speed=ttk.Frame(frame,style='Panel.TFrame')
-        speed.pack(fill='x',pady=(0,12))
-        title_row=ttk.Frame(speed,style='Panel.TFrame')
-        title_row.pack(fill='x',pady=(0,4))
-        ttk.Label(title_row,text='REPLY SPEED',style='Panel.TLabel').pack(
-            side='left')
-        ttk.Label(title_row,textvariable=self.responder_reply_interval_text,
-                  style='Panel.TLabel').pack(side='right')
-        self.responder_reply_interval_scale=ttk.Scale(
-            speed,from_=5,to=120,orient='horizontal',
-            variable=self.responder_reply_interval_var,
-            command=self._responder_reply_speed_changed)
-        self.responder_reply_interval_scale.pack(fill='x',pady=(0,2))
-        self.responder_reply_interval_scale.bind(
-            '<ButtonRelease-1>',self._responder_commit_reply_speed)
-        caption=ttk.Frame(speed,style='Panel.TFrame')
-        caption.pack(fill='x')
-        ttk.Label(caption,text='Faster (5s)',style='Panel.TLabel').pack(side='left')
-        ttk.Label(caption,text='Slower (2 min)',style='Panel.TLabel').pack(side='right')
-        ttk.Label(speed,text='Minimum time between AI replies. '
-                  'Slide right for less frequent responses.',
-                  style='Panel.TLabel',wraplength=630).pack(
-                      anchor='w',pady=(4,0))
-
-        ttk.Label(frame,text='PERSONALITY',style='Panel.TLabel').pack(
-            anchor='w',pady=(0,5))
-        self._responder_custom_frame=ttk.Frame(frame,style='Panel.TFrame')
-        self._responder_custom_frame.pack(fill='x')
-        self.responder_personality_entry=tk.Text(
-            self._responder_custom_frame,height=4,wrap='word',
-            font=('Segoe UI',10),bg=p['field'],fg=p['text'],
-            insertbackground=p['text'],relief='flat')
-        self.responder_personality_entry.pack(fill='x')
-        self.responder_personality_entry.insert('1.0',self.responder_personality_text)
-        ttk.Label(frame,text='Describe its tone, humour and behaviour in plain language.',
-                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,8))
-        ttk.Label(frame,textvariable=self.responder_log_saving_var,
-                  style='Panel.TLabel',wraplength=640).pack(
-                      anchor='w',pady=(0,8))
+                        command=self._responder_apply).pack(
+                            anchor='w',pady=(0,4))
+        ttk.Label(frame,text='Uses the connected Habbo AIR / G-Earth session. '
+                  'Turn AI off to stop replies; no extra send switch is needed.',
+                  style='Panel.TLabel',wraplength=660).pack(
+                      anchor='w',pady=(0,15))
 
         style_row=ttk.Frame(frame,style='Panel.TFrame')
-        style_row.pack(fill='x',pady=(0,5))
-        ttk.Label(style_row,text='RECREATE A CHAT PERSONA FROM SAVED LOGS',
+        style_row.pack(fill='x',pady=(0,6))
+        ttk.Label(style_row,text='CHAT PERSONA — SAVED ROOM LOGS',
                   style='Panel.TLabel').pack(side='left')
         ttk.Button(style_row,text='Use custom personality',
                    command=self._responder_use_custom_style).pack(side='right')
@@ -177,10 +138,8 @@ class PersonaResponderMixin:
         self.responder_style_search_entry=ttk.Entry(
             search_row,textvariable=self.responder_style_search_var)
         self.responder_style_search_entry.pack(
-            side='left',fill='x',expand=True,padx=(0,7))
-        ttk.Button(search_row,text='Choose log folder',
-                   command=self._responder_browse).pack(side='left',padx=(0,5))
-        ttk.Button(search_row,text='Refresh',
+            side='left',fill='x',expand=True,padx=(0,8))
+        ttk.Button(search_row,text='Refresh names',
                    command=self._responder_refresh_style_users).pack(side='left')
         self._responder_suggestions_area=ttk.Frame(
             frame,style='Panel.TFrame')
@@ -202,93 +161,97 @@ class PersonaResponderMixin:
         self.responder_style_search_entry.bind(
             '<Down>',self._responder_focus_style_matches)
         ttk.Label(frame,textvariable=self.responder_style_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,11))
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(3,12))
 
-        audience=ttk.Frame(frame,style='Panel.TFrame')
-        audience.pack(fill='x',pady=(0,4))
-        ttk.Label(audience,text='REPLY TO',style='Panel.TLabel').pack(
-            side='left',padx=(0,12))
-        self.responder_target_selector=ttk.Combobox(
-            audience,textvariable=self.responder_target_mode_var,
-            values=('Everyone','Selected users','First active speaker'),
-            state='readonly',width=22)
-        self.responder_target_selector.pack(side='left')
-        self.responder_target_selector.bind(
-            '<<ComboboxSelected>>',lambda event:self._responder_update_target_controls())
-        # Permanent layout slot: switching Everyone / Selected users must not
-        # move the username input below the activity log.
+        # The custom box appears only after "Use custom personality".
+        # It does not interfere with recreated chat personas.
+        self._responder_custom_frame=ttk.Frame(frame,style='Panel.TFrame')
+        ttk.Label(self._responder_custom_frame,
+                  text='CUSTOM PERSONALITY',style='Panel.TLabel').pack(
+                      anchor='w',pady=(0,5))
+        self.responder_personality_entry=tk.Text(
+            self._responder_custom_frame,height=4,wrap='word',
+            font=('Segoe UI',10),bg=p['field'],fg=p['text'],
+            insertbackground=p['text'],relief='flat')
+        self.responder_personality_entry.pack(fill='x')
+        self.responder_personality_entry.insert(
+            '1.0',self.responder_personality_text)
+        ttk.Label(self._responder_custom_frame,
+                  text='Edit this freely. Saved personas never inherit it.',
+                  style='Panel.TLabel',wraplength=630).pack(
+                      anchor='w',pady=(3,9))
+
+        self._responder_speed_area=ttk.Frame(frame,style='Panel.TFrame')
+        self._responder_speed_area.pack(fill='x',pady=(0,14))
+        title_row=ttk.Frame(self._responder_speed_area,style='Panel.TFrame')
+        title_row.pack(fill='x',pady=(0,4))
+        ttk.Label(title_row,text='REPLY SPEED',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Label(title_row,textvariable=self.responder_reply_interval_text,
+                  style='Panel.TLabel').pack(side='right')
+        self.responder_reply_interval_scale=ttk.Scale(
+            self._responder_speed_area,from_=0,to=30,orient='horizontal',
+            variable=self.responder_reply_interval_var,
+            command=self._responder_reply_speed_changed)
+        self.responder_reply_interval_scale.pack(fill='x',pady=(0,2))
+        self.responder_reply_interval_scale.bind(
+            '<ButtonRelease-1>',self._responder_commit_reply_speed)
+        caption=ttk.Frame(self._responder_speed_area,style='Panel.TFrame')
+        caption.pack(fill='x')
+        ttk.Label(caption,text='Immediately (0s)',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Label(caption,text='30 seconds',
+                  style='Panel.TLabel').pack(side='right')
+        ttk.Label(self._responder_speed_area,
+                  text='Minimum gap between AI replies, for BOTH saved and custom personas.',
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(4,0))
+
+        ttk.Label(frame,text='REPLY TO — PEOPLE IN THIS ROOM',
+                  style='Panel.TLabel').pack(anchor='w',pady=(0,6))
+        all_row=ttk.Frame(frame,style='Panel.TFrame')
+        all_row.pack(fill='x',pady=(0,6))
+        self.responder_everyone_check=ttk.Checkbutton(
+            all_row,text='Everyone (select all)',
+            variable=self.responder_everyone_var,
+            command=self._responder_toggle_everyone)
+        self.responder_everyone_check.pack(side='left')
+        ttk.Button(all_row,text='Refresh room',
+                   command=self._responder_refresh_room_users).pack(
+                       side='right')
+        self.responder_target_search_entry=ttk.Entry(
+            frame,textvariable=self.responder_target_search_var)
+        self.responder_target_search_entry.pack(fill='x',pady=(0,6))
+        self.responder_target_search_entry.bind(
+            '<KeyRelease>',lambda event:self._responder_render_target_checklist())
         self._responder_targets_area=ttk.Frame(frame,style='Panel.TFrame')
         self._responder_targets_area.pack(fill='x')
-        self._responder_targets_frame=ttk.Frame(
+        self._responder_target_checks_frame=ttk.Frame(
             self._responder_targets_area,style='Panel.TFrame')
-        ttk.Label(self._responder_targets_frame,
-                  text='Search people in this room',style='Panel.TLabel').pack(
-                      anchor='w',pady=(3,4))
-        lookup=ttk.Frame(self._responder_targets_frame,style='Panel.TFrame')
-        lookup.pack(fill='x',pady=(0,4))
-        self.responder_target_search_entry=ttk.Entry(
-            lookup,textvariable=self.responder_target_search_var)
-        self.responder_target_search_entry.pack(
-            side='left',fill='x',expand=True,padx=(0,7))
-        ttk.Button(lookup,text='Refresh room',
-                   command=lambda:self._responder_refresh_room_users(show=True)
-                   ).pack(side='left')
-        self.responder_target_matches_list=tk.Listbox(
-            self._responder_targets_frame,height=5,exportselection=False,
-            selectmode='browse',font=('Segoe UI',10),
-            bg=p['field'],fg=p['text'],selectbackground=p['accent'],
-            selectforeground=p['background'],borderwidth=0,highlightthickness=1,
-            relief='flat')
-        self.responder_target_search_entry.bind(
-            '<KeyRelease>',lambda event:self._responder_refresh_room_users(
-                show=event.keysym not in (
-                    'Up','Down','Return','Escape','Tab','Left','Right')))
-        self.responder_target_search_entry.bind(
-            '<FocusIn>',lambda event:self._responder_refresh_room_users(
-                show=True))
-        self.responder_target_search_entry.bind(
-            '<Escape>',lambda event:self._responder_hide_target_matches())
-        self.responder_target_search_entry.bind(
-            '<Down>',self._responder_focus_target_matches)
-        self.responder_target_matches_list.bind(
-            '<<ListboxSelect>>',self._responder_choose_target_user)
-        ttk.Label(self._responder_targets_frame,
-                  text='Reply only to these users',style='Panel.TLabel').pack(
-                      anchor='w',pady=(3,4))
-        picked=ttk.Frame(self._responder_targets_frame,style='Panel.TFrame')
-        picked.pack(fill='x')
-        self.responder_target_entry=ttk.Entry(
-            picked,textvariable=self.responder_target_var)
-        self.responder_target_entry.pack(
-            side='left',fill='x',expand=True,padx=(0,7))
-        ttk.Button(picked,text='Clear',
-                   command=self._responder_clear_target_users).pack(side='left')
-        ttk.Label(self._responder_targets_frame,
-                  textvariable=self.responder_room_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(
-                      anchor='w',pady=(5,0))
-        self._responder_update_target_controls()
+        self._responder_target_checks_frame.pack(fill='x')
+        ttk.Label(frame,textvariable=self.responder_room_status_var,
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(5,12))
 
         ttk.Label(frame,text='TEMPORARY INSTRUCTIONS',
-                  style='Panel.TLabel').pack(anchor='w',pady=(11,5))
-        ttk.Label(frame,text='Add a temporary direction that overrides the '
-                  'persona while active. One instruction per line.',
-                  style='Panel.TLabel',wraplength=640).pack(
+                  style='Panel.TLabel').pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='One instruction per line; timed instructions expire.',
+                  style='Panel.TLabel',wraplength=650).pack(
                       anchor='w',pady=(0,5))
         self.responder_instruction_input=tk.Text(
             frame,height=2,wrap='word',font=('Segoe UI',10),
-            bg=p['field'],fg=p['text'],insertbackground=p['text'],
-            relief='flat')
+            bg=p['field'],fg=p['text'],insertbackground=p['text'],relief='flat')
         self.responder_instruction_input.pack(fill='x',pady=(0,6))
-        directive_buttons=ttk.Frame(frame,style='Panel.TFrame')
-        directive_buttons.pack(fill='x',pady=(0,5))
-        ttk.Button(directive_buttons,text='Add instruction',
+        action_row=ttk.Frame(frame,style='Panel.TFrame')
+        action_row.pack(fill='x',pady=(0,5))
+        ttk.Button(action_row,text='Add instruction',
                    command=self._responder_add_instructions).pack(
                        side='left',padx=(0,7))
-        ttk.Button(directive_buttons,text='Remove selected',
+        ttk.Button(action_row,text='Remove selected',
                    command=self._responder_remove_instruction).pack(
                        side='left',padx=(0,7))
-        ttk.Button(directive_buttons,text='Clear all',
+        ttk.Button(action_row,text='Clear all',
                    command=self._responder_clear_instructions).pack(side='left')
         self._responder_instruction_list_area=ttk.Frame(
             frame,style='Panel.TFrame')
@@ -302,100 +265,36 @@ class PersonaResponderMixin:
         ttk.Label(frame,textvariable=self.responder_instruction_status_var,
                   style='Panel.TLabel',wraplength=650).pack(
                       anchor='w',pady=(4,5))
-        ttk.Label(frame,text='Examples: be mean to Marc for 10mins '
-                  '(playful teasing), type slow (adds a 10-second send delay), '
-                  'pretend to go afk for 2mins (no replies). Timers start '
-                  'when added; instructions are not saved after restarting.',
+        ttk.Label(frame,text='Examples: be mean to Marc for 10mins, '
+                  'type slow, pretend to go afk for 2mins.',
                   style='Panel.TLabel',wraplength=650).pack(
-                      anchor='w',pady=(0,7))
+                      anchor='w',pady=(0,12))
 
-        actions=ttk.Frame(frame,style='Panel.TFrame')
-        actions.pack(fill='x',pady=(12,13))
-        ttk.Button(actions,text='Save changes',
-                   command=self._responder_apply).pack(side='left',padx=(0,8))
-        ttk.Button(actions,text='Stop',
+        buttons=ttk.Frame(frame,style='Panel.TFrame')
+        buttons.pack(fill='x',pady=(0,10))
+        ttk.Button(buttons,text='Save changes',
+                   command=self._responder_apply).pack(
+                       side='left',padx=(0,8))
+        ttk.Button(buttons,text='Stop AI',
                    command=self._responder_stop).pack(side='left')
 
-        self._responder_advanced_button=ttk.Button(
-            frame,text='Advanced options ▸',command=self._responder_toggle_advanced)
-        self._responder_advanced_button.pack(anchor='w',pady=(0,5))
-        self._responder_advanced_area=ttk.Frame(frame,style='Panel.TFrame')
-        self._responder_advanced_area.pack(fill='x')
-        self._responder_advanced_frame=ttk.Frame(
-            self._responder_advanced_area,style='Panel.TFrame',padding=(10,8))
-
-        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,8))
-        ttk.Label(row,text='Reply frequency',style='Panel.TLabel').pack(
-            side='left',padx=(0,8))
-        self.responder_responsiveness_combo=ttk.Combobox(
-            row,textvariable=self.responder_responsiveness_var,
-            values=('Natural','Chatty'),state='readonly',width=13)
-        self.responder_responsiveness_combo.pack(side='left',padx=(0,16))
-        ttk.Label(row,text='Model',style='Panel.TLabel').pack(
-            side='left',padx=(0,8))
-        ttk.Entry(row,textvariable=self.responder_model_var,width=17).pack(side='left')
-
-        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,8))
-        ttk.Label(row,text='Tone',style='Panel.TLabel').pack(side='left',padx=(0,8))
-        self.responder_tone_combo=ttk.Combobox(
-            row,textvariable=self.responder_tone_var,state='readonly',
-            values=('Casual','Friendly','Playful','Dry','Sarcastic','Serious'),
-            width=15)
-        self.responder_tone_combo.pack(side='left',padx=(0,15))
-        ttk.Label(row,text='Humour',style='Panel.TLabel').pack(
-            side='left',padx=(0,8))
-        self.responder_humour_combo=ttk.Combobox(
-            row,textvariable=self.responder_humour_var,
-            state='readonly',values=('0','1','2','3','4','5'),
-            width=5)
-        self.responder_humour_combo.pack(side='left')
-
-        self._responder_logs_frame=ttk.Frame(
-            self._responder_advanced_frame,style='Panel.TFrame')
-        ttk.Label(self._responder_logs_frame,
-                  text='Saved chat-log preferences',style='Panel.TLabel').pack(
-                      anchor='w',pady=(4,5))
-        self.responder_rotation_check=ttk.Checkbutton(
-            self._responder_logs_frame,
-            text='Rotate through other logged styles every 5 minutes',
-            variable=self.responder_rotation_var)
-        self.responder_rotation_check.pack(anchor='w',pady=3)
-        ttk.Checkbutton(self._responder_logs_frame,
-                        text='Save public room chat in background (even when AI is off)',
-                        variable=self.responder_capture_var,
-                        command=self._responder_change_logging).pack(
-                            anchor='w',pady=3)
-        ttk.Label(self._responder_logs_frame,
-                  text='Search uses the folder chosen above.',
-                  style='Panel.TLabel').pack(anchor='w',pady=(3,6))
-        self._responder_logs_frame.pack(fill='x',pady=(3,8))
-        self._responder_update_style_controls()
-        self._responder_refresh_style_users()
-        self._responder_update_logging_status()
-        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
-        row.pack(fill='x',pady=(3,6))
-        ttk.Button(row,text='Check G-Earth chat capture',
-                   command=self._responder_check_capture).pack(
-                       side='left',padx=(0,8))
-        ttk.Button(row,text='Send latest live draft manually',
-                   command=self._responder_send_latest).pack(side='left')
-        ttk.Label(self._responder_advanced_frame,
-                  text='To send live replies, connect Habbo AIR through G-Earth and '
-                  'send one ordinary public chat message to learn its packet format. '
-                  'An OpenAI API key must already be configured.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,7))
-
+        ttk.Label(frame,textvariable=self.responder_log_saving_var,
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(3,7))
         ttk.Label(frame,textvariable=self.responder_status_var,
-                  style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(5,9))
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(0,9))
         ttk.Label(frame,text='RECENT ACTIVITY',
                   style='Panel.TLabel').pack(anchor='w')
-        self.responder_log_text=tk.Text(frame,height=7,wrap='word',state='disabled',
+        self.responder_log_text=tk.Text(
+            frame,height=6,wrap='word',state='disabled',
             font=('Consolas',9),bg=p['field'],fg=p['text'],
             insertbackground=p['text'],relief='flat')
-        # Fixed requested height: no vertical expansion when dropdowns close.
         self.responder_log_text.pack(fill='x',pady=(5,7))
+        self._responder_update_style_controls()
+        self._responder_refresh_style_users()
+        self._responder_refresh_room_users()
+        self._responder_update_logging_status()
 
     def _responder_toggle_advanced(self):
         self._responder_advanced_open=not self._responder_advanced_open
