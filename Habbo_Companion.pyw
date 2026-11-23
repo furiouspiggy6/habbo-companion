@@ -9590,6 +9590,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             if room_index is None:
                                 try:room_index=int(msg.packet.read_string(6))
                                 except (IndexError,ValueError,TypeError,AttributeError):pass
+                            if room_index is None:
+                                try:
+                                    room_index=removed_room_user_index(
+                                        msg.packet.g_expression(ext))
+                                except (ValueError,TypeError,AttributeError):
+                                    pass
                             self._packet_put(('room_user_removed',room_index))
                         elif kind=='UserObject':
                             identity=own_identity_from_packet(msg.packet)
