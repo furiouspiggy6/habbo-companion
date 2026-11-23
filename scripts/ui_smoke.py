@@ -44,6 +44,12 @@ try:
     assert app.responder_log_text.winfo_exists(), 'AI Responder log failed to build'
     assert not app.responder.enabled, 'AI must start disabled'
     assert not app.responder_send_var.get(), 'Auto-send must start disabled'
+    assert app.responder.save_history, (
+        'Background public chat saving should start ON independently of AI')
+    assert app.responder_capture_var.get(), (
+        'Background logging checkbox must reflect enabled state')
+    assert 'ON' in app.responder_log_saving_var.get(), (
+        'Main responder view should show background logging status')
     # Simplified single-screen responder: advanced controls remain available
     # but hidden; switching targets must reveal the username field in place.
     assert not app._responder_advanced_open, 'Advanced must start collapsed'
@@ -107,6 +113,8 @@ try:
         try:
             app._responder_select_style_user()
             assert app.responder.style_mode=='Chat-log style'
+            assert app.responder.save_history, (
+                'Selecting a style must not disable background logging')
             assert app.responder.persona=='MaraGene'
             assert app.responder.style_examples()==['heyyy lol','wbuuu']
             assert app.responder_personality_entry.cget('state')=='disabled'
@@ -116,7 +124,15 @@ try:
                 'Selecting a style must not start game messaging')
             app._responder_use_custom_style()
             assert app.responder.style_mode=='Custom personality'
+            assert app.responder.save_history, (
+                'Custom personality must not disable background logging')
             assert app.responder_personality_entry.cget('state')=='normal'
+            app.responder_capture_var.set(False)
+            app._responder_change_logging()
+            assert not app.responder.save_history and not app.responder.enabled
+            app.responder_capture_var.set(True)
+            app._responder_change_logging()
+            assert app.responder.save_history and not app.responder.enabled
         finally:
             app.save=original_save
     assert not app.responder.enabled and not app.responder_send_var.get(), (
