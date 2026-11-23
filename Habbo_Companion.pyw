@@ -5090,6 +5090,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.fuzz_remote_key_var=tk.StringVar(value='')
         self.fuzz_live_var=tk.StringVar(value='Passive reader OFF. Connect G-Earth first.')
         self.fuzz_lab_var=tk.StringVar(value='Local boofuzz lab idle; never sends to Habbo.')
+        self.arcturus_header_var=tk.StringVar(value='')
+        self.arcturus_cases_var=tk.StringVar(value='20')
+        self.arcturus_status_var=tk.StringVar(
+            value='Arcturus emulator idle. Preview offline or explicitly start '
+                  'a local-only test (127.0.0.1:30000).')
         self.fuzz_connected_server_var=tk.StringVar(value='Connected game server: none detected. Boofuzz traffic stays on your PC.')
         self._packet_auto_retry_after=0.0
         self.packet_connection_status=tk.StringVar(value='Waiting for G-Earth backend...')
@@ -7515,6 +7520,36 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Button(bar,text='Analyse results with local Ollama',
                    command=self._fuzz_analyse_ollama).pack(side='left')
         ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(17,15))
+        tk.Label(holder,text='LOCAL ARCTURUS EMULATOR',font=('Segoe UI Semibold',13),
+                 bg=p['background'],fg=p['text']).pack(anchor='w')
+        tk.Label(holder,text='Experimental binary-frame fuzzing for your own '
+                 'Arcturus instance at 127.0.0.1:30000. This is independent '
+                 'of Habbo, G-Earth and Direct TCP. The sample body contains '
+                 'one VL64 integer and a signed single-digit B64 field; no '
+                 'specific handler or authentication handshake is assumed. '
+                 'Malformed test messages can crash your emulator.',
+                 wraplength=650,justify='left',bg=p['background'],
+                 fg=p['muted']).pack(anchor='w',pady=(5,9))
+        inputs=ttk.Frame(holder,style='Panel.TFrame')
+        inputs.pack(fill='x',pady=(0,7))
+        ttk.Label(inputs,text='Known header ID',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Entry(inputs,textvariable=self.arcturus_header_var,
+                  width=11).pack(side='left',padx=(7,13))
+        ttk.Label(inputs,text='Cases (1–50)',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Entry(inputs,textvariable=self.arcturus_cases_var,
+                  width=7).pack(side='left',padx=(7,0))
+        actions=ttk.Frame(holder,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(0,7))
+        ttk.Button(actions,text='Preview frame (offline)',
+                   command=self._fuzz_preview_arcturus).pack(
+                       side='left',padx=(0,8))
+        ttk.Button(actions,text='Run Arcturus local fuzz',
+                   command=self._fuzz_start_arcturus).pack(side='left')
+        ttk.Label(holder,textvariable=self.arcturus_status_var,
+                  style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(0,7))
+        ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(17,15))
         tk.Label(holder,text='REMOTE TEST MACHINE',font=('Segoe UI Semibold',13),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
         tk.Label(holder,text='Connect to a test server on another machine, using '
@@ -7628,6 +7663,76 @@ class ChatOverlayApp(PersonaResponderMixin):
                     '" -m pip install boofuzz==0.4.2'))
             except Exception as exc:
                 self._packet_put(('fuzz_error',type(exc).__name__+': '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
+
+    def _fuzz_arcturus_header_id(self):
+        raw=self.arcturus_header_var.get().strip()
+        if not raw:
+            raise ValueError('Enter a known Arcturus header ID; none is guessed.')
+        header_id=int(raw,16 if raw.lower().startswith('0x') else 10)
+        validate_arcturus_emulator_parameters(header_id,1)
+        return header_id
+
+    def _fuzz_preview_arcturus(self):
+        try:
+            header_id=self._fuzz_arcturus_header_id()
+            frame=preview_arcturus_emulator_packet(header_id)
+            self.arcturus_status_var.set(
+                'Offline preview ONLY (no network): '+
+                frame.hex(' ')[:180]+
+                f' | {len(frame)} bytes; length field={len(frame)-4}.')
+        except ModuleNotFoundError:
+            self.arcturus_status_var.set(
+                'boofuzz missing. Install with: "'+
+                sys.executable+'" -m pip install boofuzz==0.4.2')
+        except (ValueError,TypeError) as exc:
+            self.arcturus_status_var.set('Preview error: '+str(exc)[:180])
+        except Exception as exc:
+            self.arcturus_status_var.set(
+                'Preview failed: '+type(exc).__name__+'. Nothing was sent.')
+
+    def _fuzz_start_arcturus(self):
+        if self.fuzz_running:
+            self.arcturus_status_var.set('Another boofuzz session is already running.')
+            return
+        try:
+            header_id=self._fuzz_arcturus_header_id()
+            cases=int(self.arcturus_cases_var.get().strip())
+            validate_arcturus_emulator_parameters(header_id,cases)
+        except (ValueError,TypeError) as exc:
+            self.arcturus_status_var.set('Invalid Arcturus test: '+str(exc)[:180])
+            return
+        if not messagebox.askyesno(
+                'Confirm LOCAL emulator fuzzing',
+                f'Fuzz ONLY your local Arcturus emulator at '
+                f'{ARCTURUS_EMULATOR_HOST}:{ARCTURUS_EMULATOR_PORT}?\n\n'
+                f'Header ID: {header_id}; up to {cases} cases.\n'
+                'This can crash your emulator. No Habbo login, '
+                'G-Earth injection, or remote target is used.',
+                default='no'):
+            return
+        self.fuzz_running=True
+        self.arcturus_status_var.set(
+            f'Running up to {cases} local Arcturus cases at '
+            f'{ARCTURUS_EMULATOR_HOST}:{ARCTURUS_EMULATOR_PORT} ...')
+        def work():
+            try:
+                result=run_arcturus_emulator_boofuzz(
+                    header_id=header_id,cases=cases)
+                self._packet_put(('arcturus_result',result))
+            except ModuleNotFoundError:
+                self._packet_put(('arcturus_error',
+                    'boofuzz missing. Install with: "'+
+                    sys.executable+'" -m pip install boofuzz==0.4.2'))
+            except (OSError,ValueError) as exc:
+                self._packet_put(('arcturus_error',
+                    'Local Arcturus test failed: '+
+                    type(exc).__name__+': '+
+                    redact_sensitive_diagnostic(str(exc))[:150]))
+            except Exception as exc:
+                self._packet_put(('arcturus_error',
+                    'Local Arcturus test failed: '+type(exc).__name__+
+                    '. Check that your emulator is running on localhost:30000.'))
         threading.Thread(target=work,daemon=True).start()
 
     def _fuzz_start_remote(self):
@@ -9860,6 +9965,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if self.fuzz_seen%25==0:
                     self.fuzz_live_var.set(f'Read-only: {self.fuzz_seen} packets, '
                                            f'{len(self.fuzz_counts)} direction/ID groups.')
+                continue
+            if item[0]=='arcturus_result':
+                self.fuzz_running=False
+                result=item[1]
+                self.arcturus_status_var.set(
+                    f"Arcturus localhost test finished: "
+                    f"{result['requests']} packets sent (limit {result['case_limit']}). "
+                    f"Report: {result['boofuzz_db']}. "
+                    "Emulator acceptance not established.")
+                continue
+            if item[0]=='arcturus_error':
+                self.fuzz_running=False
+                self.arcturus_status_var.set(item[1])
                 continue
             if item[0]=='fuzz_result':
                 self.fuzz_running=False
