@@ -6685,6 +6685,11 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_connect_selected(self):
         account=self._bot_selected_profile()
+        if self.bot_gearth_var.get():
+            self.bot_status_var.set(
+                'G-Earth interception ON (preview): direct login blocked '
+                'until the packet-routing bridge is available.')
+            return
         if account is None:
             self.bot_status_var.set('Add and select an account in Accounts first.')
             return
@@ -6723,6 +6728,15 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_send_action(self,account_override=None,action_override=None,
                          room_override=None):
+        # Prevent manual actions from bypassing the selected interception
+        # mode even if a socket was established through the separate TCP tab.
+        bridge_choice=getattr(self,'bot_gearth_var',None)
+        if bridge_choice is not None and bridge_choice.get():
+            self.bot_status_var.set(
+                'G-Earth interception ON (preview): actions are blocked '
+                'until the packet-routing bridge is available. '
+                'Turn OFF and disconnect/restart for normal Direct TCP.')
+            return
         account=(account_override if account_override is not None
                  else self._bot_selected_profile())
         if account is None:
@@ -6930,6 +6944,12 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_auto_connect_startup(self):
         if not self.tcp_autostart_var.get():
+            return
+        bridge_choice=getattr(self,'bot_gearth_var',None)
+        if bridge_choice is not None and bridge_choice.get():
+            self.tcp_status_var.set(
+                'Clientless G-Earth interception ON (preview): '
+                'automatic Direct TCP startup skipped; bridge unavailable.')
             return
         # Only existing saved sessions are requested; never start a browser,
         # prompt for credentials, or launch a game executable.
