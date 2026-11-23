@@ -32,18 +32,24 @@ class FakeRoot:
 
 
 class AutoConnectTests(unittest.TestCase):
-    def fake(self,window=None,room=None):
+    def fake(self,window=None,room=None,capture=True):
         calls=[]
         fake=SimpleNamespace(
             packet_started=False,_packet_auto_retry_after=0.0,
             tracker=SimpleNamespace(find=lambda excluded:window),
             root=FakeRoot(),overlay=SimpleNamespace(winfo_id=lambda:2),
             room_id=room,packet_connection_status=RecordingValue(),
+            packet_auto_capture_var=SimpleNamespace(get=lambda:capture),
             _connect_gearth=lambda capture:calls.append(capture))
         return fake,calls
 
-    def test_auto_attaches_before_habbo_launch_without_enabling_capture(self):
+    def test_auto_attaches_before_habbo_launch_with_capture(self):
         fake,calls=self.fake()
+        namespace['_maybe_auto_connect_packet_tools'](fake)
+        self.assertEqual(calls,[True])
+
+    def test_auto_attach_respects_disabled_capture_preference(self):
+        fake,calls=self.fake(capture=False)
         namespace['_maybe_auto_connect_packet_tools'](fake)
         self.assertEqual(calls,[False])
 
@@ -56,7 +62,7 @@ class AutoConnectTests(unittest.TestCase):
     def test_attach_with_room_evidence(self):
         fake,calls=self.fake(window=('game',),room=123)
         namespace['_maybe_auto_connect_packet_tools'](fake)
-        self.assertEqual(calls,[False])
+        self.assertEqual(calls,[True])
 
     def test_no_duplicate_or_early_retry(self):
         fake,calls=self.fake()
