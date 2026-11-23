@@ -1,3 +1,11 @@
+v1.1.97: Clientless Bot auto-walk after room join. Save primary X,Y and up to
+three backup X,Y tiles per Room ID, turn on auto-walk, then select an account.
+The bot waits for verified room entry and self-avatar identity, sends Walk
+and checks incoming self-position updates for arrival. After 14 seconds
+without a confirmed arrival it tries the next backup, then stops.
+Does not send a blind walk if identity or room entry is unavailable.
+Automatic walking starts OFF until configured. See README.md.
+
 v1.1.96: One-click clientless profile selection. Choose a saved account from
 Clientless Bot or click Run selected profile in Accounts; Companion reuses
 Windows-vault login or an isolated background Habbo browser, retrieves an

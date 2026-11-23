@@ -136,6 +136,7 @@ class RoomFavoriteTests(unittest.TestCase):
             bot_status_var=Var(""),
             _tcp_generation={"abcdef":1},
             _bot_action_worker=lambda *args:None,
+            _bot_arm_walk=lambda *args:None,
             config={"clientless_last_room_id":"777"},
             save=lambda:saves.append("saved"),
         )

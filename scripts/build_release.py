@@ -28,7 +28,8 @@ TCP_IMPORT = ("from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habb
 BOT_IMPORT = (
     "from clientless_bot import (ClientlessBotError, build_clientless_action,\n"
     "    capture_clientless_headers, validate_clientless_headers,\n"
-    "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES)\n"
+    "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,\n"
+    "    clientless_walk_positions, decode_clientless_room_observation)\n"
 )
 DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"

@@ -237,3 +237,184 @@ def decode_clientless_chat(mapping, release, packet_id, payload):
     if any(char in "\x00\r" for char in body):
         return None
     return name,index,body
+
+
+# Source-pinned, read-only room/position observations from the same WIN63
+# package-38 build as BUNDLED_AIR_HEADERS. No guessed headers for other builds.
+# IncomingHeader: ROOM_ENTER=2833, UNIT=3357, UNIT_STATUS=996, USER_INFO=1168.
+# Parser layouts: RoomEnterParser, RoomUnitParser, RoomUnitStatusParser,
+# UserInfoDataParser in plus-emulator/Volt-Renderer at commit c8f74ffd.
+_ROOM_ENTER=2833
+_ROOM_UNITS=3357
+_UNIT_STATUS=996
+_USER_INFO=1168
+
+
+def clientless_walk_positions(primary, backups=""):
+    """Validate one primary X,Y and up to three ordered fallback positions.
+
+    An empty primary disables the preset; never invent 0,0 as a destination.
+    """
+    if not isinstance(primary, str) or not isinstance(backups, str):
+        raise ClientlessBotError("Walk coordinates must be text.")
+    if not primary.strip():
+        if backups.strip():
+            raise ClientlessBotError("Set the primary X,Y before backups.")
+        return ()
+    raw=[primary.strip()]
+    if backups.strip():
+        raw.extend(s.strip() for s in backups.split(";"))
+    if len(raw)>4 or any(not s for s in raw):
+        raise ClientlessBotError("Use a primary and at most three backups separated by semicolons.")
+    points=[]
+    for item in raw:
+        match=re.fullmatch(r"([0-9]{1,4})\s*,\s*([0-9]{1,4})",item)
+        if not match:
+            raise ClientlessBotError("Each position must be X,Y, e.g. 10,15.")
+        x,y=int(match[1]),int(match[2])
+        _int_arg(x,"x")
+        _int_arg(y,"y")
+        if (x,y) in points:
+            raise ClientlessBotError("Primary and backup positions must be different.")
+        points.append((x,y))
+    return tuple(points)
+
+
+def _walk_int(payload,offset):
+    if offset+4>len(payload):
+        raise ValueError("Truncated room integer.")
+    return struct.unpack_from(">i",payload,offset)[0],offset+4
+
+
+def _walk_short(payload,offset):
+    if offset+2>len(payload):
+        raise ValueError("Truncated room short.")
+    return struct.unpack_from(">H",payload,offset)[0],offset+2
+
+
+def _walk_string(payload,offset):
+    size,offset=_walk_short(payload,offset)
+    if size>2048 or offset+size>len(payload):
+        raise ValueError("Truncated/oversize room string.")
+    return payload[offset:offset+size].decode("utf-8"),offset+size
+
+
+def _walk_byte(payload,offset):
+    if offset>=len(payload):
+        raise ValueError("Truncated room flag.")
+    return payload[offset],offset+1
+
+
+def _walk_user_roster(payload):
+    """Parse bounded AIR Users, returning *only numeric* user -> room indexes.
+
+    Names, figures and other personal profile metadata are discarded.
+    Reject partially decoded data instead of attributing another user's
+    position to the selected account.
+    """
+    count,at=_walk_int(payload,0)
+    if not 0<=count<=200:
+        raise ValueError("Invalid room roster count.")
+    users={}
+    for _ in range(count):
+        user_id,at=_walk_int(payload,at)
+        _,at=_walk_string(payload,at) # username (not retained)
+        _,at=_walk_string(payload,at) # custom
+        _,at=_walk_string(payload,at) # figure
+        room_index,at=_walk_int(payload,at)
+        x,at=_walk_int(payload,at)
+        y,at=_walk_int(payload,at)
+        _,at=_walk_string(payload,at) # z
+        _,at=_walk_int(payload,at) # direction
+        unit_type,at=_walk_int(payload,at)
+        if unit_type==1:  # Habbo player
+            _,at=_walk_string(payload,at) # gender
+            _,at=_walk_int(payload,at) # group id
+            _,at=_walk_int(payload,at) # group status
+            _,at=_walk_string(payload,at) # group name
+            _,at=_walk_string(payload,at) # swim figure
+            _,at=_walk_int(payload,at) # activity
+            _,at=_walk_byte(payload,at) # is moderator
+            _,at=_walk_int(payload,at) # badge rank
+            if user_id>0 and 0<=room_index<=100000 and 0<=x<=1023 and 0<=y<=1023:
+                users[user_id]=(room_index,x,y)
+        elif unit_type==2: # Pet
+            _,at=_walk_int(payload,at) # subtype
+            _,at=_walk_int(payload,at) # owner
+            _,at=_walk_string(payload,at)
+            _,at=_walk_int(payload,at) # rarity
+            for _ in range(6):
+                _,at=_walk_byte(payload,at)
+            _,at=_walk_int(payload,at)
+            _,at=_walk_string(payload,at)
+        elif unit_type==3: # Bot
+            pass
+        elif unit_type==4: # Rentable bot
+            _,at=_walk_string(payload,at)
+            _,at=_walk_int(payload,at)
+            _,at=_walk_string(payload,at)
+            skills,at=_walk_int(payload,at)
+            if not 0<=skills<=64:
+                raise ValueError("Invalid bot skill count.")
+            for _ in range(skills):
+                _,at=_walk_short(payload,at)
+        else:
+            raise ValueError("Unknown user type.")
+    if at!=len(payload):
+        raise ValueError("Unexpected room roster tail.")
+    return users
+
+
+def _walk_statuses(payload):
+    count,at=_walk_int(payload,0)
+    if not 0<=count<=200:
+        raise ValueError("Invalid status count.")
+    records=[]
+    for _ in range(count):
+        index,at=_walk_int(payload,at)
+        x,at=_walk_int(payload,at)
+        y,at=_walk_int(payload,at)
+        _,at=_walk_string(payload,at) # z
+        for _ in range(3):
+            _,at=_walk_int(payload,at)
+        actions,at=_walk_string(payload,at)
+        target=None
+        match=re.search(r"(?:^|/)mv\s+(\d+),(\d+),",actions)
+        if match:
+            tx,ty=int(match[1]),int(match[2])
+            if 0<=tx<=1023 and 0<=ty<=1023:
+                target=(tx,ty)
+        if 0<=index<=100000 and 0<=x<=1023 and 0<=y<=1023:
+            records.append((index,x,y,target))
+    if at!=len(payload):
+        raise ValueError("Unexpected status data.")
+    return tuple(records)
+
+
+def decode_clientless_room_observation(release, packet_id, payload):
+    """Read-only, source-pinned room signals; None means unverified.
+
+    Returns ('ready', room id), ('identity', user id), ('users', numeric
+    index map), or ('status', numeric status tuple). No text/credentials.
+    """
+    if (release!=BUNDLED_AIR_RELEASE
+        or type(packet_id) is not int
+        or not isinstance(payload,bytes) or not 4<=len(payload)<=16384):
+        return None
+    try:
+        if packet_id==_ROOM_ENTER:
+            if len(payload)!=4:
+                return None
+            room,at=_walk_int(payload,0)
+            return ("ready",room) if 0<room<=2147483647 else None
+        if packet_id==_USER_INFO:
+            user_id,at=_walk_int(payload,0)
+            name,at=_walk_string(payload,at)
+            return ("identity",user_id) if user_id>0 and 0<len(name)<=32 else None
+        if packet_id==_ROOM_UNITS:
+            return ("users",_walk_user_roster(payload))
+        if packet_id==_UNIT_STATUS:
+            return ("status",_walk_statuses(payload))
+    except (ValueError,UnicodeError,struct.error,OverflowError):
+        return None
+    return None
