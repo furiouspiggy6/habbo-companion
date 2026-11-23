@@ -602,6 +602,8 @@ DEFAULT = dict(
     clientless_gearth_intercept=False,
     clientless_auto_walk=False,
     clientless_walk_presets={},
+    # Optional overrides for each saved account; fallback is room-wide preset.
+    clientless_account_walk_presets={},
     clientless_anti_afk_profiles={},
     responder_persona='Mario35',
     responder_target='',
@@ -6313,6 +6315,18 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_save_walk_preset).pack(side='left',padx=(0,6))
         ttk.Button(walkbuttons,text='Load room positions',
                    command=self._bot_load_walk_preset).pack(side='left')
+        override_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        override_buttons.pack(fill='x',pady=(0,6))
+        ttk.Button(override_buttons,text='Save positions for current account',
+                   command=self._bot_save_account_walk_preset).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(override_buttons,text='Clear account override',
+                   command=self._bot_clear_account_walk_preset).pack(side='left')
+        ttk.Label(frame,text='Room-wide saved positions are the default. '
+                  'Use Save positions for current account to give each bot '
+                  'a different destination in the same room.',
+                  style='Panel.TLabel',wraplength=620).pack(
+                      anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
@@ -6475,6 +6489,14 @@ class ChatOverlayApp(PersonaResponderMixin):
         room=clientless_saved_room_value(self.bot_room_var.get())
         stored=self.config.get('clientless_walk_presets',{})
         values=stored.get(room,[]) if isinstance(stored,dict) else []
+        account=self._bot_selected_profile()
+        account_walk=self.config.get('clientless_account_walk_presets',{})
+        override=False
+        if account is not None and isinstance(account_walk,dict):
+            per_account=account_walk.get(account['id'],{})
+            if isinstance(per_account,dict) and room in per_account:
+                values=per_account[room]
+                override=True
         valid=[]
         try:
             if isinstance(values,list) and values:
@@ -6488,7 +6510,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_walk_backups_var.set(
             ';'.join(','.join(map(str,p)) for p in valid[1:]))
         self.bot_walk_status_var.set(
-            ('Loaded '+str(len(valid))+' saved tile(s) for room '+room+'.'
+            ('Loaded '+str(len(valid))+' '+
+             ('account-specific' if override else 'room-wide')+
+             ' tile(s) for room '+room+'.'
              if valid else 'No automatic walking positions saved for room '+room+'.'))
 
     def _bot_save_walk_preset(self):
@@ -6534,6 +6558,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         stored=self.config.get('clientless_walk_presets',{})
         raw=stored.get(str(room)) if isinstance(stored,dict) else None
+        account_presets=self.config.get('clientless_account_walk_presets',{})
+        profile_presets=(account_presets.get(ident,{})
+                         if isinstance(account_presets,dict) else {})
+        if isinstance(profile_presets,dict) and str(room) in profile_presets:
+            raw=profile_presets[str(room)]
         if not isinstance(raw,list) or not raw:
             self.bot_walk_status_var.set(
                 'Room '+str(room)+': no saved destinations; no auto-walk.')
@@ -6961,6 +6990,7 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_run_selected(self):
         self._bot_anti_afk_load_selected()
+        self._bot_load_walk_preset()
         account=self._bot_selected_profile()
         if account is None:
             self.bot_status_var.set('Choose a saved Habbo account profile first.')
