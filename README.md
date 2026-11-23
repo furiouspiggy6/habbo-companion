@@ -1,5 +1,26 @@
 # Habbo Companion
 
+## v1.1.80 — Adjustable AI reply speed
+
+AI Responder now has a **Reply speed** slider on the main page. Drag toward
+**Faster (5s)** or **Slower (2 min)** to set a minimum of 5–120 seconds
+between AI-generated replies, in five-second increments. The default on
+existing and new installations is **30 seconds**, replacing the previous
+fixed four-second cooldown.
+
+- Moving the slider changes the live responder's minimum interval immediately.
+  The setting saves when you release the slider or click **Save changes**,
+  and is restored after restarting Companion.
+- The first reply may be generated as soon as a suitable message arrives.
+  The interval is enforced **between subsequent generated replies**, not
+  as a typing animation or guaranteed delay for every message.
+- The normal AI decision logic can still choose to skip conversations.
+  Slower settings mean *at most* one generated reply per interval, not a
+  scheduled message every interval.
+- Moving the slider does not enable AI or auto-send. Saved personalities,
+  current-room target search, background chat logging, and working G-Earth
+  packet sending are unchanged.
+
 ## v1.1.79 — Search live room users for reply targets; compact AI interface
 
 **Reply to → Selected users** now has a **Search people in this room**
