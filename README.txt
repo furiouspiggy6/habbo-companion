@@ -1,3 +1,30 @@
+HABBO COMPANION v1.1.78 — CONTINUOUS PUBLIC CHAT LOGGING
+==========================================================
+
+NEW: Automatic background recording of every NEW public Habbo AIR room chat
+message into a separate .txt file for each username, e.g. Cheesecake.txt.
+Existing files are appended (not overwritten). The format remains:
+[2026-11-23 13:26:00] Cheesecake: original public chat message
+
+Archive path: %APPDATA%\HabboViewChat\persona_logs\users
+The per-user archive stays at that path regardless of where historical
+writing-style samples are loaded from.
+
+- Enabled by default, independently of the AI responder and auto-send.
+- Continues while Companion is on another page or minimized.
+- Captures off-screen public chat and your own public chat.
+- Excludes whispers/private messages.
+- See a "Public chat auto-save: ON" status on the AI Responder page.
+- Disable from Advanced options if needed.
+- Press Refresh beside the style-search box to see newly logged usernames.
+- No browser automation, keyboard coordinates, or change to G-Earth send.
+
+CONDITIONS: The Companion process AND a live Habbo AIR chat feed must
+continue running. Closing Companion, Habbo disconnecting, or Windows
+sleep/PC shutdown will stop recording. No hidden Windows service or
+login autostart is installed. Open Companion to resume recording.
+
+
 HABBO COMPANION v1.1.77 — SEARCH USER CHAT LOGS FOR WRITING STYLE
 ===================================================================
 

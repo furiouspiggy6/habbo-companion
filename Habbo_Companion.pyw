@@ -361,6 +361,8 @@ DEFAULT = dict(
     responder_target='',
     responder_rotation=False,
     responder_capture=False,
+    # Per-user public chat logging is separate from AI and starts enabled.
+    background_public_chat_logging=True,
     responder_log_dir='',
     responder_style_mode='Custom personality',
     responder_personality=('A friendly, conversational Habbo player. Keep things '
@@ -10196,6 +10198,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             name=str(item.get('name') or 'Habbo')[:80]
             body=str(item.get('text') or '').strip()
             if not body:return
+            # Archive the actual incoming AIR feed event BEFORE applying the
+            # VIEW CHAT 'Only people inside my view' visual filter, so public
+            # chat from other room participants is never lost from style logs.
+            # Ignore whispers even when their type is only known via G-Earth.
+            chat_type_explicit=('chatType' in item or 'chat_type' in item)
+            chat_type=int(item.get('chatType',item.get('chat_type',0)) or 0)
+            if item.get('isWhisper') is True or item.get('whisper') is True:
+                chat_type=1
+                chat_type_explicit=True
+            arrived=time.time()
+            if not chat_type_explicit and match_recent_whisper(
+                    self.whisper_hints,body,arrived):
+                chat_type=1
+            self.responder.record_public_message(
+                name,body,chat_type=chat_type,now=arrived)
+            self._responder_update_logging_status()
             x=item.get('x');y=item.get('y');sw=item.get('sw');sh=item.get('sh')
             within=True
             if isinstance(x,(int,float)) and isinstance(y,(int,float)) and sw and sh:
@@ -10223,11 +10241,6 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     f'{cached[0]} verified from current room chat and profile (ID {cached[1]}).')
             raw_style=item.get('style')
             style_id=int(raw_style) if raw_style is not None else None
-            chat_type_explicit=('chatType' in item or 'chat_type' in item)
-            chat_type=int(item.get('chatType',item.get('chat_type',0)) or 0)
-            if item.get('isWhisper') is True or item.get('whisper') is True:
-                chat_type=1
-                chat_type_explicit=True
             raw_color=item.get('forcedColor')
             forced_color=int(raw_color) if isinstance(raw_color,(float,int)) else None
             image_path=None
@@ -10242,12 +10255,6 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             # While reviewing earlier chat, keep the same messages in view as
             # incoming messages arrive instead of snapping back to the bottom.
             if self.scroll_offset>0:self.scroll_offset+=1
-            arrived=time.time()
-            # G-Earth text-only hints are a fallback ONLY when the AIR feed
-            # did not provide an explicit chat type. Never reclassify shouts.
-            if not chat_type_explicit and match_recent_whisper(
-                    self.whisper_hints,body,arrived):
-                chat_type=1
             self.messages.append(Message(name,body,arrived,within,room,
                                          style_id,chat_type,forced_color,image_path,
                                          chat_type_explicit))

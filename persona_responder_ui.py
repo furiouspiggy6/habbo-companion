@@ -25,9 +25,15 @@ class PersonaResponderMixin:
         chosen=str(self.config.get('responder_log_dir','')).strip()
         self._responder_default_logs=default_logs
         self.responder=PersonaResponder(chosen or default_logs)
+        # Always save fresh messages in Companion's own per-user archive,
+        # even if the user browses a different historical style source.
+        self.responder.archive_dir=self._responder_app_dir/'persona_logs'/'users'
         self.responder.persona=str(self.config.get('responder_persona','Mario35'))
         self.responder.auto_rotate=bool(self.config.get('responder_rotation',False))
-        self.responder.save_history=bool(self.config.get('responder_capture',False))
+        # Independent, default-on background archive: older versions kept
+        # responder_capture=False and accidentally disabled it in custom mode.
+        self.responder.save_history=bool(
+            self.config.get('background_public_chat_logging',True))
         self.responder.style_mode=str(self.config.get('responder_style_mode','Custom personality'))
         self.responder.personality=str(self.config.get(
             'responder_personality',self.responder.personality))
@@ -49,6 +55,7 @@ class PersonaResponderMixin:
         self.responder_send_var=tk.BooleanVar(value=False)
         self.responder_rotation_var=tk.BooleanVar(value=self.responder.auto_rotate)
         self.responder_capture_var=tk.BooleanVar(value=self.responder.save_history)
+        self.responder_log_saving_var=tk.StringVar(value='')
         self.responder_persona_var=tk.StringVar(value=self.responder.persona)
         self.responder_style_mode_var=tk.StringVar(value=self.responder.style_mode)
         self.responder_style_search_var=tk.StringVar(
@@ -112,6 +119,9 @@ class PersonaResponderMixin:
         self.responder_personality_entry.insert('1.0',self.responder_personality_text)
         ttk.Label(frame,text='Describe its tone, humour and behaviour in plain language.',
                   style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,8))
+        ttk.Label(frame,textvariable=self.responder_log_saving_var,
+                  style='Panel.TLabel',wraplength=640).pack(
+                      anchor='w',pady=(0,8))
 
         style_row=ttk.Frame(frame,style='Panel.TFrame')
         style_row.pack(fill='x',pady=(0,5))
@@ -223,14 +233,17 @@ class PersonaResponderMixin:
                         text='Rotate through other logged styles every 5 minutes',
                         variable=self.responder_rotation_var).pack(anchor='w',pady=3)
         ttk.Checkbutton(self._responder_logs_frame,
-                        text='Capture new public chat into local style logs',
-                        variable=self.responder_capture_var).pack(anchor='w',pady=3)
+                        text='Save public room chat in background (even when AI is off)',
+                        variable=self.responder_capture_var,
+                        command=self._responder_change_logging).pack(
+                            anchor='w',pady=3)
         ttk.Label(self._responder_logs_frame,
                   text='Search uses the folder chosen above.',
                   style='Panel.TLabel').pack(anchor='w',pady=(3,6))
         self._responder_logs_frame.pack(fill='x',pady=(3,8))
         self._responder_update_style_controls()
         self._responder_refresh_style_users()
+        self._responder_update_logging_status()
         row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
         row.pack(fill='x',pady=(3,6))
         ttk.Button(row,text='Check G-Earth chat capture',
@@ -384,6 +397,32 @@ class PersonaResponderMixin:
         self._responder_update_style_controls()
         self._responder_apply()
 
+    def _responder_change_logging(self):
+        """Apply the logging switch without resetting any AI conversation."""
+        self.responder.save_history=bool(self.responder_capture_var.get())
+        self.config['background_public_chat_logging']=self.responder.save_history
+        self.config['responder_capture']=self.responder.save_history
+        self.save()
+        self._responder_update_logging_status()
+        self._responder_log(
+            'Background public chat logging '+(
+                'ON.' if self.responder.save_history else 'OFF.'))
+
+    def _responder_update_logging_status(self):
+        if not hasattr(self,'responder_log_saving_var'):
+            return
+        if not self.responder.save_history:
+            self.responder_log_saving_var.set(
+                'Public chat auto-save: OFF (turn it on under Advanced options).')
+        elif self.responder.log_error:
+            self.responder_log_saving_var.set(self.responder.log_error)
+        else:
+            self.responder_log_saving_var.set(
+                'Public chat auto-save: ON — '+
+                str(self.responder.logged_messages)+
+                ' saved this session to persona_logs/users. Works even with '
+                'AI OFF while Habbo AIR and Companion are running.')
+
     def _responder_browse(self):
         folder=filedialog.askdirectory(
             title='Choose folder containing username.txt chat logs',
@@ -418,8 +457,8 @@ class PersonaResponderMixin:
         self.responder.responsiveness=self.responder_responsiveness_var.get()
         self.responder.persona=self.responder_persona_var.get().strip()[:80] or 'Mario35'
         self.responder.auto_rotate=bool(self.responder_rotation_var.get())
-        self.responder.save_history=bool(self.responder_capture_var.get()) if (
-            self.responder.style_mode=='Chat-log style') else False
+        # Keep background archival independent of personality source.
+        self.responder.save_history=bool(self.responder_capture_var.get())
         self.responder.log_dir=Path(
             self.responder_log_dir_var.get().strip() or self._responder_default_logs)
 
@@ -451,6 +490,7 @@ class PersonaResponderMixin:
             responder_target='',  # clear old single-target configuration
             responder_rotation=self.responder.auto_rotate,
             responder_capture=self.responder.save_history,
+            background_public_chat_logging=self.responder.save_history,
             responder_log_dir=str(self.responder.log_dir),
             responder_model=self.responder_model_var.get().strip() or 'gpt-5-mini',
         )
@@ -463,6 +503,7 @@ class PersonaResponderMixin:
                 f'{self.responder.selected_users if self.responder.target_mode=="Selected users" else "active room"}')
         self._responder_log('Settings applied. AI '+(
             'ON' if self.responder.enabled else 'OFF')+'.')
+        self._responder_update_logging_status()
 
     def _responder_test_reply(self):
         """Test current unsaved personality settings with no game send side effects."""
