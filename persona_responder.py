@@ -93,6 +93,72 @@ def chat_expression_from_template(template, reply):
     return template[:a] + replacement + template[b:]
 
 
+def verified_outgoing_chat_frame(frame, probe):
+    """Confirm that a real outgoing G-Earth frame carries our one-time phrase.
+
+    Habbo's frame layout: 4-byte payload size, 2-byte message header,
+    then a 2-byte UTF-8 text size followed by the typed chat text.
+    A unique, explicit, manually typed probe avoids trusting stale G-Earth
+    packet-name dictionaries or guessing any message ID.
+    """
+    if not isinstance(frame, (bytes, bytearray)):
+        return False
+    if not isinstance(probe, str) or not re.fullmatch(r"hc-[a-f0-9]{12}", probe):
+        return False
+    size = len(frame)
+    if size < 12 or size > 65536:
+        return False
+    if int.from_bytes(frame[:4], "big") != size - 4:
+        return False
+    header = int.from_bytes(frame[4:6], "big", signed=False)
+    if header == 0:
+        return False
+    text_size = int.from_bytes(frame[6:8], "big")
+    if text_size != len(probe.encode("utf-8")):
+        return False
+    return bytes(frame[8:8 + text_size]) == probe.encode("utf-8")
+
+
+def replacement_chat_frame(captured_frame, reply):
+    """Replace only the verified original first text field and frame length.
+
+    The exact observed outgoing header and its other fields are preserved.
+    Returns bytes suitable for HPacket(id).append_bytes(...), or None.
+    """
+    if not isinstance(captured_frame, (bytes, bytearray)):
+        return None
+    if (not isinstance(reply, str) or not reply or
+            len(reply) > MAX_REPLY_CHARS or "\r" in reply or "\n" in reply):
+        return None
+    original = bytes(captured_frame)
+    if len(original) < 12 or len(original) > 65536:
+        return None
+    if int.from_bytes(original[:4], "big") != len(original) - 4:
+        return None
+    if int.from_bytes(original[4:6], "big") == 0:
+        return None
+    old_text_size = int.from_bytes(original[6:8], "big")
+    old_text_end = 8 + old_text_size
+    if old_text_size < 1 or old_text_end > len(original):
+        return None
+    # Only a frame learned from a unique, manually typed challenge qualifies.
+    if not re.fullmatch(rb"hc-[a-f0-9]{12}", original[8:old_text_end]):
+        return None
+    new_text = reply.encode("utf-8")
+    if not new_text or len(new_text) > 65535:
+        return None
+    updated_body = (
+        original[4:6] + len(new_text).to_bytes(2, "big")
+        + new_text + original[old_text_end:]
+    )
+    if len(updated_body) > 65532:
+        return None
+    updated = len(updated_body).to_bytes(4, "big") + updated_body
+    if len(updated) > 65536:
+        return None
+    return updated
+
+
 def clean_model_reply(raw):
     reply = str(raw or "").strip().strip('"').strip("'").strip()
     if not reply or reply.upper() == "SKIP":
