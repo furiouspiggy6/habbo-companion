@@ -46,6 +46,8 @@ try:
     assert not app.responder_send_var.get(), 'Auto-send must start disabled'
     assert app.responder.save_history, (
         'Background public chat saving should start ON independently of AI')
+    assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
+        'Background chat should always be archived to Companion persona_logs/users')
     assert app.responder_capture_var.get(), (
         'Background logging checkbox must reflect enabled state')
     assert 'ON' in app.responder_log_saving_var.get(), (
@@ -116,6 +118,8 @@ try:
             assert app.responder.save_history, (
                 'Selecting a style must not disable background logging')
             assert app.responder.persona=='MaraGene'
+            assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
+                'Changing style sample folder must not move the background archive')
             assert app.responder.style_examples()==['heyyy lol','wbuuu']
             assert app.responder_personality_entry.cget('state')=='disabled'
             assert not app.responder.auto_rotate, (
