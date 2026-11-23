@@ -24,7 +24,12 @@ HEADLESS_IMPORT = (
     "                                MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)\n"
 )
 TCP_IMPORT = ("from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,\n"
-              "                       probe_classic_websocket)\n")
+              "                       probe_classic_websocket, TCP_FALLBACK_RELEASE)\n")
+BOT_IMPORT = (
+    "from clientless_bot import (ClientlessBotError, build_clientless_action,\n"
+    "    capture_clientless_headers, validate_clientless_headers,\n"
+    "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES)\n"
+)
 DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
     "                                  launch_local_classic)\n"
@@ -47,7 +52,8 @@ def bundled_application(root=ROOT):
     root = Path(root)
     app = (root / APP_FILES[0]).read_text(encoding="utf-8")
     if (app.count(HEADLESS_IMPORT) != 1 or app.count(DIRECT_IMPORT) != 1
-        or app.count(TCP_IMPORT) != 1 or app.count(PERSONA_IMPORT) != 1
+        or app.count(TCP_IMPORT) != 1 or app.count(BOT_IMPORT) != 1
+        or app.count(PERSONA_IMPORT) != 1
         or app.count(PERSONA_UI_IMPORT) != 1):
         raise ValueError("Companion module imports changed; update bundle anchors")
     if app.count(APP_ANCHOR) != 1:
@@ -55,7 +61,8 @@ def bundled_application(root=ROOT):
 
     modules = []
     for filename in ("headless_transport.py", "local_classic_launch.py", "habbo_tcp.py",
-                     "persona_responder.py", "persona_responder_ui.py"):
+                     "clientless_bot.py", "persona_responder.py",
+                     "persona_responder_ui.py"):
         source = (root / filename).read_text(encoding="utf-8")
         marker = "from __future__ import annotations\n"
         if source.count(marker) != 1:
@@ -70,6 +77,7 @@ def bundled_application(root=ROOT):
     app = app.replace(HEADLESS_IMPORT, "", 1)
     app = app.replace(DIRECT_IMPORT, "", 1)
     app = app.replace(TCP_IMPORT, "", 1)
+    app = app.replace(BOT_IMPORT, "", 1)
     app = app.replace(PERSONA_IMPORT, "", 1)
     app = app.replace(PERSONA_UI_IMPORT, "", 1)
     embedded = (
@@ -80,12 +88,14 @@ def bundled_application(root=ROOT):
         + "\n" + modules[2]
         + "\n" + modules[3]
         + "\n" + modules[4]
+        + "\n" + modules[5]
     )
     app = app.replace(APP_ANCHOR, "\n" + embedded + APP_ANCHOR, 1)
     compile(app, str(root / APP_FILES[0]), "exec")
     if any(text in app for text in ("from headless_transport import",
             "from local_classic_launch import", "from habbo_tcp import",
-            "from persona_responder import", "from persona_responder_ui import")):
+            "from clientless_bot import", "from persona_responder import",
+            "from persona_responder_ui import")):
         raise ValueError("Unbundled application dependency remains")
     return app.encode("utf-8")
 

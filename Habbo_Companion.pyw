@@ -11,7 +11,10 @@ from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
 from local_classic_launch import (parse_classic_ticket, official_local_executable,
                                   launch_local_classic)
 from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,
-                       probe_classic_websocket)
+                       probe_classic_websocket, TCP_FALLBACK_RELEASE)
+from clientless_bot import (ClientlessBotError, build_clientless_action,
+    capture_clientless_headers, validate_clientless_headers,
+    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -5237,6 +5240,20 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._tcp_inflight=set()
         self._tcp_generation={}
         self._tcp_states={}
+        self._bot_headers=self.config.get('clientless_header_map')
+        self._bot_action_inflight=set()
+        self._bot_last_action_at={}
+        self.bot_account_var=tk.StringVar(value='')
+        self.bot_action_var=tk.StringVar(value='Say')
+        self.bot_message_var=tk.StringVar(value='')
+        self.bot_recipient_var=tk.StringVar(value='')
+        self.bot_room_var=tk.StringVar(value='')
+        self.bot_x_var=tk.StringVar(value='0')
+        self.bot_y_var=tk.StringVar(value='0')
+        self.bot_id_var=tk.StringVar(value='1')
+        self.bot_status_var=tk.StringVar(value=
+            'Clientless controls OFF. Authenticate a Direct TCP account '
+            'and capture matching AIR headers from G-Earth.')
         self._classic_probe_running=False
         self.tcp_status_var=tk.StringVar(
             value='Real TCP: enter an official ticket or save an authenticated Habbo session.')
@@ -5785,6 +5802,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'overview':('Overview','Your Habbo Companion workspace'),
             'accounts':('Accounts','Independent profiles, sign-in and browser sessions'),
             'tcp':('Direct TCP','Official game-server connections and live diagnostics'),
+            'bot':('Clientless Bot','Manual room, movement, chat and avatar controls via Direct TCP'),
             'chat':('View Chat','Original Habbo bubbles and overlay settings'),
             'responder':('AI Responder','Room-aware writing style and target controls'),
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
@@ -5820,6 +5838,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('overview','Overview'),
             ('accounts','Accounts'),
             ('tcp','Direct TCP'),
+            ('bot','Clientless Bot'),
             ('chat','View Chat'),
             ('responder','AI Responder')))
         self._ui_add_nav('TOOLS',(
@@ -5885,6 +5904,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['classic'],'classic'))
         self._make_live_tcp_panel(self._ui_scroll_area(
             self._ui_pages['tcp'],'tcp'))
+        self._make_clientless_bot_panel(self._ui_scroll_area(
+            self._ui_pages['bot'],'bot'))
         self._make_headless_panel(self._ui_scroll_area(
             self._ui_pages['headless'],'headless'))
         self._make_manipulator_panel(self._ui_scroll_area(
@@ -6079,6 +6100,209 @@ class ChatOverlayApp(PersonaResponderMixin):
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
 
+    def _make_clientless_bot_panel(self,parent):
+        """Manual, source-derived AIR bot commands over an authenticated TCP session."""
+        frame=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        frame.pack(fill='both',expand=True)
+        tk.Label(frame,text='CLIENTLESS BOT (EXPERIMENTAL)',
+                 font=('Segoe UI Semibold',17),
+                 bg=COMPANION_UI['background'],
+                 fg=COMPANION_UI['text']).pack(anchor='w')
+        ttk.Label(frame,text='No game window required. Uses Companion’s '
+                  'existing account-specific Direct TCP socket, official '
+                  'SSO workflow and Windows credential vault. '
+                  'Based on the open-source Habbo-Bot packet structures, '
+                  'not its outdated 2025 header IDs.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,12))
+        ttk.Label(frame,text='Connected account',style='Panel.TLabel').pack(anchor='w')
+        self.bot_account_picker=ttk.Combobox(
+            frame,textvariable=self.bot_account_var,state='readonly',width=42)
+        self.bot_account_picker.pack(anchor='w',fill='x',pady=(4,7))
+        commands=ttk.Frame(frame,style='Panel.TFrame')
+        commands.pack(fill='x',pady=(0,11))
+        ttk.Button(commands,text='Refresh accounts',
+                   command=self._bot_refresh_accounts).pack(side='left',padx=(0,7))
+        ttk.Button(commands,text='Connect via Direct TCP',
+                   command=self._bot_connect_selected).pack(side='left')
+        ttk.Label(frame,text='Before sending actions, connect the current AIR '
+                  'client through G-Earth and capture its named packet mappings. '
+                  'Companion remembers only packet names and numeric IDs, '
+                  'never cookies or SSO tickets. The selected Direct TCP '
+                  'session must use the same AIR release.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
+        ttk.Button(frame,text='Capture action mappings from G-Earth',
+                   command=self._bot_capture_mapping).pack(anchor='w',pady=(0,10))
+        ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
+        self.bot_action_picker=ttk.Combobox(
+            frame,textvariable=self.bot_action_var,state='readonly',width=25,
+            values=('Say','Shout','Whisper','Join room','Leave room',
+                    'Walk','Face tile','Dance','Sign','Posture'))
+        self.bot_action_picker.pack(anchor='w',pady=(3,9))
+        for label,var in (
+            ('Message (Say / Shout / Whisper)',self.bot_message_var),
+            ('Recipient username (Whisper)',self.bot_recipient_var),
+            ('Room ID (Join room)',self.bot_room_var),
+            ('Tile X (Walk / Face tile)',self.bot_x_var),
+            ('Tile Y (Walk / Face tile)',self.bot_y_var),
+            ('Number: Dance 0–4, Sign 0–14, Posture 0–1',self.bot_id_var)):
+            ttk.Label(frame,text=label,style='Panel.TLabel').pack(anchor='w')
+            ttk.Entry(frame,textvariable=var,width=42).pack(
+                anchor='w',fill='x',pady=(2,7))
+        ttk.Button(frame,text='Send one action',style='Primary.TButton',
+                   command=self._bot_send_action).pack(anchor='w',pady=(3,11))
+        ttk.Label(frame,textvariable=self.bot_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='Incoming text-only chat (when current-release '
+                  'incoming headers are mapped). The original AIR bubble '
+                  'feed remains separate. No automatic replies or bulk actions.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        self.bot_chat_log=tk.Text(
+            frame,height=7,state='disabled',
+            bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],
+            relief='flat',font=('Consolas',9))
+        self.bot_chat_log.pack(fill='x',pady=(0,6))
+        self._bot_refresh_accounts()
+
+    def _bot_refresh_accounts(self):
+        if not hasattr(self,'bot_account_picker'):
+            return
+        items=[a['label']+' ['+a['id'][:6]+']' for a in self._account_profiles]
+        current=self.bot_account_var.get()
+        self.bot_account_picker.configure(values=items)
+        if current not in items:
+            self.bot_account_var.set(items[0] if items else '')
+
+    def _bot_selected_profile(self):
+        selected=self.bot_account_var.get()
+        return next((a for a in self._account_profiles
+                     if a['label']+' ['+a['id'][:6]+']'==selected),None)
+
+    def _bot_connect_selected(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_status_var.set('Add and select an account in Accounts first.')
+            return
+        self._tcp_connect_one(account)
+        self._tcp_render()
+        self.bot_status_var.set('Direct TCP connection requested for '+account['label']+
+                                '. Check the Direct TCP log for authentication status.')
+
+    def _bot_capture_mapping(self):
+        ext=self.packet_extension
+        if ext is None or not self.packet_started or not self._habbo_session_connected:
+            self.bot_status_var.set(
+                'Connect the matching Habbo AIR client through G-Earth first.')
+            return
+        try:
+            from g_python.hmessage import Direction
+            mapping=capture_clientless_headers(
+                (getattr(ext,'packet_infos',None) or {}).get(Direction.TO_SERVER,{}),
+                (getattr(ext,'packet_infos',None) or {}).get(Direction.TO_CLIENT,{}),
+                TCP_FALLBACK_RELEASE)
+            mapping=validate_clientless_headers(mapping,TCP_FALLBACK_RELEASE)
+        except (ImportError,ValueError,TypeError,AttributeError) as exc:
+            self.bot_status_var.set('Could not capture named headers: '+str(exc)[:140])
+            return
+        self._bot_headers=mapping
+        # Only integer packet IDs and a public release string are persisted.
+        self.config['clientless_header_map']=mapping
+        self.save()
+        names=', '.join(mapping['outgoing'])
+        self.bot_status_var.set(
+            f'Captured {len(mapping["outgoing"])} outgoing / '
+            f'{len(mapping["incoming"])} incoming named headers for '
+            f'{TCP_FALLBACK_RELEASE}. Mappings assume the G-Earth AIR client '
+            'matches that build; mismatched releases will be rejected. '
+            'Actions available: '+names[:190])
+
+    def _bot_send_action(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_status_var.set('Select a saved account first.')
+            return
+        ident=account['id']
+        session=self._tcp_sessions.get(ident)
+        if session is None or not session.authenticated or session.stop.is_set():
+            self.bot_status_var.set('Selected account is not game-authenticated '
+                                    'in Direct TCP. Check Direct TCP diagnostics.')
+            return
+        if ident in self._bot_action_inflight:
+            self.bot_status_var.set('Previous action is still being sent.')
+            return
+        now=time.monotonic()
+        if now-self._bot_last_action_at.get(ident,0)<0.4:
+            self.bot_status_var.set('Please allow at least 400 ms between actions.')
+            return
+        action=self.bot_action_var.get()
+        args={}
+        try:
+            if action=='Join room':
+                args['room']=int(self.bot_room_var.get())
+            elif action in ('Walk','Face tile'):
+                args['x']=int(self.bot_x_var.get())
+                args['y']=int(self.bot_y_var.get())
+            elif action in ('Say','Shout'):
+                args['text']=self.bot_message_var.get()
+            elif action=='Whisper':
+                args['text']=self.bot_message_var.get()
+                args['recipient']=self.bot_recipient_var.get()
+            elif action in ('Dance','Sign','Posture'):
+                args[action.lower()]=int(self.bot_id_var.get())
+            packets=encode_clientless_action(
+                self._bot_headers,session.release,action,**args)
+        except (ValueError,TypeError,AttributeError) as exc:
+            self.bot_status_var.set('Action not ready: '+str(exc)[:160])
+            return
+        self._bot_last_action_at[ident]=now
+        self._bot_action_inflight.add(ident)
+        self.bot_status_var.set('Sending '+action+' via authenticated Direct TCP '
+                                'for '+account['label']+'…')
+        generation=self._tcp_generation.get(ident,0)
+        threading.Thread(
+            target=self._bot_action_worker,
+            args=(ident,generation,session,action,packets),
+            daemon=True,name='companion-bot-send-'+ident).start()
+
+    def _bot_action_worker(self,ident,generation,session,action,packets):
+        try:
+            if self._tcp_generation.get(ident,0)!=generation:
+                raise HabboTcpError('Connection was replaced before the action.')
+            for packet_id,body,_name in packets:
+                session.send_game_action(packet_id,body)
+            self._packet_put(('bot_action_result',ident,generation,
+                              action,len(packets),None))
+        except (HabboTcpError,ValueError,OSError,RuntimeError) as exc:
+            # Never log packet bytes, session cookies or authentication tickets.
+            detail=(str(exc)[:120] if isinstance(exc,(HabboTcpError,ClientlessBotError))
+                    else type(exc).__name__)
+            self._packet_put(('bot_action_result',ident,generation,
+                              action,0,detail))
+
+    def _bot_observe_packet(self,ident,generation,session,packet_id,body):
+        """Only expose parsed chat prefixes, not raw packets or credentials."""
+        mapping=self._bot_headers
+        if not mapping or not session.authenticated:
+            return
+        try:
+            parsed=decode_clientless_chat(mapping,session.release,packet_id,body)
+        except (ClientlessBotError,ValueError,TypeError):
+            return
+        if parsed is not None:
+            self._packet_put(('bot_chat',ident,generation,*parsed))
+
+    def _bot_show_chat(self,ident,kind,index,message):
+        if not hasattr(self,'bot_chat_log') or not self.bot_chat_log.winfo_exists():
+            return
+        widget=self.bot_chat_log
+        widget.configure(state='normal')
+        clean=''.join(ch for ch in str(message) if ch.isprintable())[:300]
+        widget.insert('end',f'{time.strftime("%H:%M:%S")} '
+                      f'[{ident[:6]}] {kind} room index {index}: {clean}\n')
+        if int(widget.index('end-1c').split('.')[0])>150:
+            widget.delete('1.0','40.0')
+        widget.see('end')
+        widget.configure(state='disabled')
+
     def _tcp_test_classic_websocket(self):
         # One read-only protocol reachability check, independent of accounts.
         if self._classic_probe_running:
@@ -6143,6 +6367,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         elif self._account_profiles:
             table.selection_set(self._account_profiles[0]['id'])
         self._fuzz_refresh_connected_server()
+        self._bot_refresh_accounts()
 
     def _tcp_save_session(self):
         account=self._tcp_selected()
@@ -6302,7 +6527,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                 status=lambda msg:self._packet_put(
                     ('tcp_state',ident,generation,msg)),
                 packet=lambda packet_id,size:self._packet_put(
-                    ('tcp_packet',ident,generation,packet_id,size)))
+                    ('tcp_packet',ident,generation,packet_id,size)),
+                content=lambda packet_id,body:self._bot_observe_packet(
+                    ident,generation,session,packet_id,body))
             session.connect(actual)
             self._packet_put(('tcp_connected',ident,generation,session))
         except (OSError,ValueError,RuntimeError,HabboTcpError,TimeoutError) as exc:
@@ -10905,6 +11132,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._classic_probe_running=False
                 self.tcp_status_var.set(item[1])
                 self._tcp_log_event('classic',item[1])
+                continue
+            if item[0]=='bot_action_result':
+                _,ident,generation,action,count,error=item
+                self._bot_action_inflight.discard(ident)
+                if generation!=self._tcp_generation.get(ident,0):
+                    continue
+                self.bot_status_var.set(
+                    ('Direct TCP local send accepted: '+action+
+                     f' ({count} packet(s)). Server application not verified.'
+                     if error is None else 'Clientless action failed: '+error))
+                continue
+            if item[0]=='bot_chat':
+                _,ident,generation,kind,index,message=item
+                if generation==self._tcp_generation.get(ident,0):
+                    self._bot_show_chat(ident,kind,index,message)
                 continue
             if item[0] in ('tcp_state','tcp_connected','tcp_failed','tcp_packet'):
                 event,ident,generation=item[:3]
