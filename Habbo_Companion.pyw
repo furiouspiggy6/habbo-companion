@@ -593,6 +593,7 @@ DEFAULT = dict(
     # Persistent clientless favorites and read-only AIR packet header mappings.
     clientless_last_room_id='69118545',
     clientless_header_map=None,
+    clientless_standalone=True,
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -5266,6 +5267,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_headers=self.config.get('clientless_header_map')
         self._bot_action_inflight=set()
         self._bot_last_action_at={}
+        # Pending one-click room entries are tied to the exact account generation.
+        self._bot_pending_room={}
+        self.bot_standalone_var=tk.BooleanVar(
+            value=bool(self.config.get('clientless_standalone',True)))
         self.bot_account_var=tk.StringVar(value='')
         self.bot_action_var=tk.StringVar(value='Say')
         self.bot_message_var=tk.StringVar(value='')
@@ -5276,8 +5281,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_y_var=tk.StringVar(value='0')
         self.bot_id_var=tk.StringVar(value='1')
         self.bot_status_var=tk.StringVar(value=
-            'Clientless controls OFF. Authenticate a Direct TCP account '
-            'and capture matching AIR headers from G-Earth.')
+            'Choose a saved profile to connect directly and join your saved room. '
+            'HabboAIR and G-Earth are not required for the bundled AIR release.')
         self._classic_probe_running=False
         self.tcp_status_var=tk.StringVar(
             value='Real TCP: enter an official ticket or save an authenticated Habbo session.')
@@ -6142,19 +6147,31 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_account_var,state='readonly',width=42)
         self.bot_account_picker.pack(anchor='w',fill='x',pady=(4,7))
+        # Selecting a profile is an explicit user action; never auto-run on launch.
+        self.bot_account_picker.bind(
+            '<<ComboboxSelected>>',lambda _event:self._bot_run_selected())
         commands=ttk.Frame(frame,style='Panel.TFrame')
         commands.pack(fill='x',pady=(0,11))
         ttk.Button(commands,text='Refresh accounts',
                    command=self._bot_refresh_accounts).pack(side='left',padx=(0,7))
-        ttk.Button(commands,text='Connect via Direct TCP',
-                   command=self._bot_connect_selected).pack(side='left')
-        ttk.Label(frame,text='Before sending actions, connect the current AIR '
-                  'client through G-Earth and capture its named packet mappings. '
-                  'Companion remembers only packet names and numeric IDs, '
-                  'never cookies or SSO tickets. The selected Direct TCP '
-                  'session must use the same AIR release.',
+        ttk.Button(commands,text='Run selected profile',
+                   style='Primary.TButton',
+                   command=self._bot_run_selected).pack(side='left',padx=(0,7))
+        ttk.Button(commands,text='Disconnect',
+                   command=self._bot_disconnect_selected).pack(side='left')
+        ttk.Checkbutton(
+            frame,text='Clientless-only mode: never auto-start G-Earth',
+            variable=self.bot_standalone_var,
+            command=self._bot_standalone_changed,
+            style='Panel.TCheckbutton').pack(anchor='w',pady=(1,8))
+        ttk.Label(frame,text='Profile selection automatically uses the saved '
+                  'website session or a private background login, obtains an '
+                  'official ticket, authenticates Direct TCP and joins the saved '
+                  'room. The bundled November 4 AIR mapping needs no G-Earth. '
+                  'Later releases require newly verified headers; CAPTCHA and '
+                  'email verification still need manual official sign-in.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
-        ttk.Button(frame,text='Capture action mappings from G-Earth',
+        ttk.Button(frame,text='Advanced: capture newer AIR mappings from G-Earth',
                    command=self._bot_capture_mapping).pack(anchor='w',pady=(0,10))
         ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
             anchor='w',pady=(0,5))
@@ -6215,6 +6232,94 @@ class ChatOverlayApp(PersonaResponderMixin):
         return next((a for a in self._account_profiles
                      if a['label']+' ['+a['id'][:6]+']'==selected),None)
 
+    def _bot_standalone_changed(self):
+        enabled=bool(self.bot_standalone_var.get())
+        self.config['clientless_standalone']=enabled
+        self.save()
+        self.bot_status_var.set(
+            'Clientless-only mode '+('enabled: G-Earth startup is disabled.'
+                                     if enabled else
+                                     'disabled: advanced G-Earth tools remain available.'))
+
+    def _bot_run_from_accounts(self):
+        account=self._account_selected()
+        if account is not None:
+            self.bot_account_var.set(
+                account['label']+' ['+account['id'][:6]+']')
+            self._bot_run_account(account)
+
+    def _bot_run_selected(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_status_var.set('Choose a saved Habbo account profile first.')
+            return
+        self._bot_run_account(account)
+
+    def _bot_run_account(self,account):
+        """One click: use a saved session, otherwise private login, then room.
+
+        Runs only for a user-selected profile. The session worker handles
+        official SSO, MFA/CAPTCHA stops, socket authentication and isolation.
+        No Habbo.exe, HabboAIR, G-Earth or G-Python process is launched.
+        """
+        ident=account['id']
+        if not any(p['id']==ident for p in self._account_profiles):
+            self.bot_status_var.set('This account profile has been removed.')
+            return
+        room=int(clientless_saved_room_value(self.bot_room_var.get()))
+        self.bot_room_var.set(str(room))
+        # A subsequent selection cancels any unfulfilled automatic room join,
+        # but keeps already authenticated TCP connections intact.
+        self._bot_pending_room.clear()
+        session=self._tcp_sessions.get(ident)
+        if session and session.authenticated and not session.stop.is_set():
+            self._bot_send_action(account_override=account,
+                                  action_override='Join room',
+                                  room_override=room)
+            return
+        if ident not in self._tcp_inflight:
+            # Prefer Windows-vault session cookies (no browser necessary).
+            self._tcp_connect_one(account)
+            if ident not in self._tcp_inflight:
+                # Missing cookies: import via the profile's isolated browser.
+                self._tcp_connect_one(account,auto_capture=True)
+        if ident not in self._tcp_inflight:
+            self.bot_status_var.set(
+                'Could not start Direct TCP for '+account['label']+': '+
+                self._tcp_states.get(ident,'no valid saved session.'))
+            return
+        self._bot_pending_room[ident]=(
+            self._tcp_generation.get(ident,0),room)
+        self.bot_status_var.set(
+            'Connecting '+account['label']+
+            ' in the background; Coffee House / saved room '+str(room)+
+            ' will be requested after Habbo confirms authentication.')
+        self._tcp_render()
+
+    def _bot_dispatch_pending_room(self,ident,generation):
+        pending=self._bot_pending_room.pop(ident,None)
+        if not pending or pending[0]!=generation:
+            return
+        account=next((a for a in self._account_profiles
+                      if a['id']==ident),None)
+        session=self._tcp_sessions.get(ident)
+        if (account is None or not session or not session.authenticated
+            or session.stop.is_set()
+            or self._tcp_generation.get(ident,0)!=generation):
+            return
+        self._bot_send_action(account_override=account,
+                              action_override='Join room',
+                              room_override=pending[1])
+
+    def _bot_disconnect_selected(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            return
+        self._bot_pending_room.pop(account['id'],None)
+        self._tcp_disconnect_one(account['id'])
+        self._tcp_render()
+        self.bot_status_var.set('Disconnected '+account['label']+'.')
+
     def _bot_join_coffee_house(self):
         """Explicit one-click favorite; never sends automatically on startup."""
         self.bot_action_var.set('Join room')
@@ -6259,8 +6364,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             'matches that build; mismatched releases will be rejected. '
             'Actions available: '+names[:190])
 
-    def _bot_send_action(self):
-        account=self._bot_selected_profile()
+    def _bot_send_action(self,account_override=None,action_override=None,
+                         room_override=None):
+        account=(account_override if account_override is not None
+                 else self._bot_selected_profile())
         if account is None:
             self.bot_status_var.set('Select a saved account first.')
             return
@@ -6277,11 +6384,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         if now-self._bot_last_action_at.get(ident,0)<0.4:
             self.bot_status_var.set('Please allow at least 400 ms between actions.')
             return
-        action=self.bot_action_var.get()
+        action=(action_override if action_override is not None
+                else self.bot_action_var.get())
         args={}
         try:
             if action=='Join room':
-                args['room']=int(self.bot_room_var.get())
+                args['room']=(int(room_override) if room_override is not None
+                              else int(self.bot_room_var.get()))
             elif action in ('Walk','Face tile'):
                 args['x']=int(self.bot_x_var.get())
                 args['y']=int(self.bot_y_var.get())
@@ -6330,7 +6439,7 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _bot_observe_packet(self,ident,generation,session,packet_id,body):
         """Only expose parsed chat prefixes, not raw packets or credentials."""
         mapping=self._bot_headers
-        if not mapping or not session.authenticated:
+        if not session.authenticated:
             return
         try:
             parsed=decode_clientless_chat(mapping,session.release,packet_id,body)
@@ -6605,6 +6714,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                                 'profile with a queued ticket or saved session.')
 
     def _tcp_disconnect_one(self,ident):
+        self._bot_pending_room.pop(ident,None)
         self._tcp_generation[ident]=self._tcp_generation.get(ident,0)+1
         self._tcp_inflight.discard(ident)
         session=self._tcp_sessions.pop(ident,None)
@@ -7161,6 +7271,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                      anchor='w',pady=(0,8))
         autoplay=ttk.Frame(right,style='Card.TFrame')
         autoplay.pack(fill='x',pady=(0,7))
+        ttk.Button(right,text='Run selected profile (clientless, no AIR window)',
+                   style='Primary.TButton',
+                   command=self._bot_run_from_accounts).pack(
+                       anchor='w',pady=(0,9))
         ttk.Button(autoplay,text='Auto Play selected',
                    command=self._account_auto_play).pack(
                        side='left',padx=(0,9))
@@ -10149,6 +10263,9 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _auto_prepare_gearth(self):
         """Prepare the internal engine; show errors if startup cannot proceed."""
         self._engine_start_attempted=True
+        if getattr(self,'bot_standalone_var',None) is not None and self.bot_standalone_var.get():
+            self.engine_status_var.set('Engine: skipped (clientless-only mode)')
+            return
         if not self.gearth_auto_arm_var.get():
             self.engine_status_var.set('Engine: automatic startup disabled')
             return
@@ -10474,7 +10591,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         open, wait for chat/room evidence. The Coffee Pass Loop Start button is
         also an explicit room-ready signal and can attach directly.
         """
-        if self.packet_started or time.monotonic()<self._packet_auto_retry_after:
+        if (self.packet_started or time.monotonic()<self._packet_auto_retry_after
+            or (getattr(self,'bot_standalone_var',None) is not None
+                and self.bot_standalone_var.get())):
             return
         try:
             game_window=self.tracker.find([self.root.winfo_id(),self.overlay.winfo_id()])
@@ -11220,8 +11339,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.tcp_status_var.set(self._tcp_states[ident])
                     self._tcp_log_event(ident,self._tcp_states[ident])
                     self._tcp_render()
+                    if item[3].authenticated:
+                        # Tk event queue owns the transition; this callback must
+                        # recheck account generation before sending anything.
+                        if ident in self._bot_pending_room:
+                            self.root.after(0,lambda uid=ident,gen=generation:
+                                self._bot_dispatch_pending_room(uid,gen))
+                    else:
+                        self._bot_pending_room.pop(ident,None)
                 elif event=='tcp_failed':
                     self._tcp_inflight.discard(ident)
+                    pending=self._bot_pending_room.pop(ident,None)
+                    if pending and pending[0]==generation:
+                        self.bot_status_var.set(
+                            'Clientless profile connection failed: '+item[3])
                     self._tcp_states[ident]='Connection failed: '+item[3]
                     self.tcp_status_var.set(self._tcp_states[ident])
                     self._tcp_log_event(ident,self._tcp_states[ident])
