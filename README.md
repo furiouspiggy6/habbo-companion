@@ -1,5 +1,49 @@
 # Habbo Companion
 
+## v1.1.86 — Local Arcturus emulator packet fuzzing in Protocol Lab
+
+The existing **Protocol Lab** now includes a separate **LOCAL ARCTURUS
+EMULATOR** panel. It is part of the same Companion app and updater for all
+users. The original synthetic mock-server fuzzing and authenticated remote
+lab remain available and unchanged.
+
+**Scope and safety**
+
+- The new test always targets **127.0.0.1:30000**, a local emulator on your
+  own machine. There is **no editable remote IP**, no connection to Habbo's
+  production servers, no reuse of the live Direct TCP/G-Earth socket, and no
+  SSO tickets or saved account credentials.
+- Enter a **known 16-bit packet header ID** from the handler you are testing;
+  Companion never guesses an ID. Choose **1–50 cases**. A confirmation
+  prompt appears before any fuzz traffic.
+- **Preview frame (offline)** builds and checks a sample without opening
+  a socket. It displays the frame bytes, header ID and length.
+- The boofuzz request uses `s_size(... output_format='binary')` covering
+  exactly the header-and-body block, plus a 2-byte big-endian header ID.
+  The sample body fuzzes a signed 32-bit integer through a custom
+  callable **VL64Encoder** and a restricted signed single-digit value
+  through a **B64Encoder**. Both encoders preserve the supplied character
+  constraints; the B64 encoder intentionally refuses larger numbers
+  because their digit ordering has **not** been confirmed.
+- **TODO:** The supplied format does not identify the chosen handler's full
+  body schema, required authentication handshake, or multidigit B64 rules.
+  The minimal sample frame is not guaranteed to be accepted by Arcturus.
+  A rejected packet does **not** imply the emulator is vulnerable.
+- Each run records a local boofuzz SQLite test report under
+  `%APPDATA%\\HabboViewChat\\fuzz_lab`. Reports are stored locally.
+  Tests can crash or disconnect your emulator; use a restartable test server.
+
+**Dependency:** Install boofuzz into Companion's Python environment:
+
+```powershell
+py -m pip install boofuzz==0.4.2
+```
+
+As of this update, 0.4.2 is the current published PyPI release; the
+previous example mentioned 0.4.3, which could not be verified as a
+published version. The new code uses the documented 0.4.2 block-encoder
+and `s_size` APIs and is tested against that release in CI.
+
 ## v1.1.85 — Remove departed Habbo players from AI Reply To
 
 The **AI Responder → Reply To** checklist no longer grows indefinitely
