@@ -1,3 +1,38 @@
+HABBO COMPANION v1.1.84 — PERSONA-FIRST AI RESPONDER
+=======================================================
+
+This is the same Companion and update channel for you and your friends.
+
+AI RESPONDER CONTROLS
+- One Enable AI switch: enables both AI and actual G-Earth sending when
+  the AIR session is connected. OFF by default; Stop AI stops both.
+- 0–30 second reply-speed slider (one-second steps) for ALL persona modes.
+  Zero = no additional cooldown, not zero API/network processing time.
+  Default is 10s; older saved values are clamped to 30s.
+- Search saved usernames and recreate their chat persona. Log folders
+  are discovered automatically—no folder chooser required.
+- Use custom personality reveals an editable multiline personality box.
+  Selecting a logged persona hides and ignores that generic custom text.
+- Reply To has an Everyone (select all) checkbox plus individual room
+  user checkboxes. Search to filter names; changes save automatically.
+  Current room players refresh periodically or via Refresh room.
+- Temporary instructions, timed AFK, optional extra slow-send instruction
+  and Recent Activity are preserved.
+
+REMOVED FROM THE INTERFACE
+- Extra G-Earth sending checkbox
+- Reply-frequency dropdown, tone/humour controls and Advanced options
+- Manual draft send and G-Earth chat capture diagnostic buttons
+- Choose log folder and public chat auto-save toggle
+
+PUBLIC ROOM CHAT IS ALWAYS ARCHIVED (even with AI OFF) to:
+%APPDATA%\HabboViewChat\persona_logs\users
+
+G-Earth sending, Habbo AIR chat reader, installation and auto-update
+mechanisms remain unchanged. Enabling AI authorizes game messaging;
+it requires an attached G-Earth session and observed Chat packet format.
+
+
 HABBO COMPANION v1.1.83 — SECURITY HARDENING FOR SHARING
 =========================================================
 
