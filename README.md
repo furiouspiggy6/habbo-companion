@@ -1,5 +1,62 @@
 # Habbo Companion
 
+## v1.1.102 — Start multiple clientless accounts together
+
+**Clientless Bot → MULTI-ACCOUNT CLIENTLESS** shows every saved profile,
+its independent connection status, and the room it was asked to join.
+Highlight several rows with **Ctrl/Shift** or click **Select all**, then
+click **Run highlighted (Direct TCP)**. Companion starts their already
+configured account-specific session/login workflows, staggered by
+1.2 seconds to avoid opening multiple private browsers at once.
+Each profile uses **its own game socket, SSO, saved credentials and
+room-entry generation**. Only accounts explicitly selected by the user
+are started; simply launching Companion never starts the multi-runner.
+**Disconnect highlighted** ends only those accounts, not the rest,
+and cancels any queued group starts.
+
+The current numeric **Room ID** field is the destination for all
+highlighted profiles in that run (Coffee House `69118545` by default).
+Each account maintains its own pending room join, walk plan, avatar
+position, chat observations, and opt-in four-minute anti-AFK state.
+Starting another profile no longer erases another account's pending
+room entry or walking route. Already connected profiles are not
+needlessly reconnected or sent another room join when running a group.
+
+### Different walking positions for each clientless account
+
+Room-wide **Save positions** remains the default for every account.
+To prevent a group from all attempting the same occupied tile, select
+a profile in **Connected account**, fill **Primary X,Y** and optional
+**Backups**, then click **Save positions for current account**.
+Repeat for each account. That creates an override for *that profile
+and that Room ID only*; other accounts continue using their own
+overrides or the room-wide fallback. **Clear account override**
+removes it and restores the room-wide default. The global
+**Walk automatically after room entry** setting must be ON for these
+destinations to activate. Anti-AFK remains a separate checkbox
+saved for each profile.
+
+### G-Earth limitations and mixed mode
+
+The existing **G-Earth ON** single-profile button still intercepts
+one profile at a time. One G-Earth beta-29 Flash proxy cannot
+intercept all independent clientless accounts simultaneously.
+The multi-account button is deliberately labelled
+**Run highlighted (Direct TCP)** even if the global single-profile
+G-Earth toggle is ON: it creates **new Direct TCP sessions only**.
+It can leave an *already connected* G-Earth-profile running untouched;
+that profile remains intercepted, and the added Direct TCP profiles
+**do not appear in G-Earth's logger**. There is no automatic fallback
+from a failed intercepted connection to direct traffic.
+Disconnecting an account also clears its explicit multi-runner
+Direct TCP permission.
+
+This release supports simultaneous signed-in account sessions, not
+coordinated mass chat or a bulk packet injector. Actual multiple
+Habbo account login success still depends on each saved account having
+a working official session or completing its own manual verification.
+Do not infer server success from a local-send acknowledgement.
+
 ## v1.1.101 — Stationary clientless anti-AFK (opt-in)
 
 **Clientless Bot → STATIONARY ANTI-AFK** has a new checkbox,
