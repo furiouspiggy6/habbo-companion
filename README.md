@@ -1,5 +1,31 @@
 # Habbo Companion
 
+## v1.1.92 — Dance Controller (four moves and auto-cycle)
+
+Habbo Companion now includes a **Dance Controller** page in the sidebar,
+with one-click playback of all four normal Habbo dance styles:
+**Hab-Hop (1)**, **Pogo Mogo (2)**, **Duck Funk (3)** and **The Rollie (4)**.
+The standard dance is open to everyone; Pogo Mogo, Duck Funk and The Rollie
+usually require Habbo Club, enforced by the actual Habbo server. The app
+does not bypass membership checks or claim a denied move worked.
+
+**How to use:** connect through G-Earth and go to **Dance Controller**.
+Choose a dance from the dropdown and press **Dance** to play it once.
+For automatically changing dances, check at least two dance styles, enter
+a **millisecond interval** between **1000 and 60000** (default **3000 ms**),
+and click **Start cycling**. A **STOP DANCING** button immediately cancels
+the scheduled cycle and sends the standard **Dance(0)** stop command when
+the connection remains active.
+
+All requests use **named** G-Earth **`{out:Dance}{i:ID}`** packets. No numeric
+header is guessed or stored. The cycle starts only on user action and
+stops automatically if a packet fails, the hotel disconnects, or the room
+changes. Disconnect and shutdown do not attempt additional network sends.
+Packet Viewer labels generated requests **Dance Controller**; the counts
+mean local G-Earth send acceptance, **not** confirmation that the Habbo
+server displayed the requested dance. Automatic cycling does not send
+movement commands and never changes the avatar's square.
+
 ## v1.1.91 — Stationary 360° Face Rotator (eight LookTo directions)
 
 A separate **Face Rotator** sidebar page rotates your avatar in place through
