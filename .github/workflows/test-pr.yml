@@ -7,6 +7,8 @@ on:
       - 'headless_transport.py'
       - 'local_classic_launch.py'
       - 'habbo_tcp.py'
+      - 'persona_responder.py'
+      - 'persona_responder_ui.py'
       - 'Habbo_Update_Helper.py'
       - 'tests/**'
       - 'scripts/playwright_smoke.py'
@@ -20,7 +22,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Check source syntax
-        run: python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py local_classic_launch.py habbo_tcp.py
+        run: python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py local_classic_launch.py habbo_tcp.py persona_responder.py persona_responder_ui.py
       - name: Install boofuzz for local-only integration test
         run: python -m pip install --disable-pip-version-check boofuzz==0.4.2
       - name: Run non-Windows unit tests
