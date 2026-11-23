@@ -1,5 +1,52 @@
 # Habbo Companion
 
+## v1.1.84 — Persona-first AI Responder, fewer controls
+
+AI Responder now prioritises **recreating a chat persona from saved room logs**.
+Everything used regularly sits on one screen, and redundant controls have
+been removed. **Your existing G-Earth packet sending still works.**
+
+- **One switch:** **Enable AI responder (send in Habbo)**. There is no second
+  "Send replies in Habbo (G-Earth)" switch. The responder starts OFF as before;
+  enabling it automatically sends generated replies through the connected
+  G-Earth/AIR session. Stop AI halts both generation and sending. A valid game
+  connection and one observed outgoing public Chat packet are still necessary.
+- **Reply Speed:** A working **0–30 second** slider for **both recreated and
+  custom personas**, in one-second increments. Zero means no added cooldown;
+  API generation, observation and G-Earth delivery still take some time. The
+  default for new installations is 10 seconds. Older saved values above 30
+  are clamped to 30 and updated when settings are saved. The previous persona
+  30-second fixed gap is gone.
+- **Persona search:** The application automatically scans its own
+  `%APPDATA%\HabboViewChat\persona_logs\users` chat archive plus
+  available existing/legacy log folders. Type part of a username to choose a
+  recorded persona. No **Choose log folder** button is needed.
+- **Custom personality:** Click **Use custom personality** to reveal the fully
+  editable multiline personality box. The editor stays **hidden when a
+  recorded persona is selected**, so its generic text cannot override the
+  logged persona. Selecting a recorded persona hides it again.
+- **Reply To:** A compact live-room checklist replaces the dropdown, manual
+  comma-separated username field and suggestions list. Tick **Everyone
+  (select all)** to include every detected room player, or untick it and
+  select individual users. Search filters the displayed checkboxes without
+  dropping selections. New room players are discovered automatically and
+  by **Refresh room**; your own avatar is not offered.
+- **Removed redundant interface:** There is no Advanced options menu,
+  separate Reply frequency/Natural/Chatty control, Tone or Humour selector,
+  style rotation toggle, manual "send latest draft" button, G-Earth capture
+  diagnostic button, or chat-recording switch. The AI no longer includes
+  Tone, Humour or Natural/Chatty in its prompts for either persona mode.
+  Temporary instructions and the activity log remain available.
+- **Chat recording always ON:** Every public AIR room-chat message continues
+  to append to its sender's local `persona_logs/users/username.txt`,
+  even with AI OFF and regardless of the selected persona. Whispers are not
+  recorded as public chat. The on-screen message count remains informational.
+
+This changes the interface and settings wiring **only**; the game proxy,
+outgoing packet template, G-Earth sender, account manager and installer/update
+format remain the same. The setting to enable AI is explicit and always starts
+OFF, though it now also authorizes sending when a live session is available.
+
 ## v1.1.83 — Safer distribution for friends, same Companion for everyone
 
 This release keeps **one app, one codebase and one update feed** for you and
