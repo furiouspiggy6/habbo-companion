@@ -6,12 +6,12 @@
 running a clientless profile.** The old v1.1.99 bridge used port
 `31451` on `127.0.0.2` as Companion's relay. However, the actual
 [G-Earth 1.5.4-beta-29 ConnectionInterceptor](https://github.com/G-Realm/G-Earth/blob/1.5.4-beta-29/G-Earth/src/main/java/gearth/app/protocol/interceptor/ConnectionInterceptor.java)
-also binds the FIRST Flash proxy listener to `127.0.0.3:31451`
+also binds the FIRST Flash proxy listener to `127.0.0.2:31451`
 (`loopbackIndex=c+1`), unlike the older source which used
 `127.0.0.1`. The two programs were competing for the exact same
 address and port. The corrected routing in v1.1.100 is:
 
-- **G-Earth's Flash listener:** `127.0.0.3:31451`
+- **G-Earth's Flash listener:** `127.0.0.2:31451`
 - **Companion's relay upstream:** `127.0.0.3:31451`
 - **G-Earth target hostname:** `127.0.0.3.nip.io`
 
@@ -90,12 +90,12 @@ Habbo -> Companion decrypts -> 127.0.0.3:31451 -> 127.0.0.2:31451
                                     Companion receives modified incoming
 ```
 
-G-Earth's source-pinned Flash proxy normally listens on a local
-`127.0.0.1:port` and opens an upstream socket to the hostname that was
+G-Earth beta-29's source-pinned Flash proxy listens on a local
+`127.0.0.2:port` and opens an upstream socket to the hostname that was
 resolved **before** rewriting the hosts file. Choosing `127.0.0.3` for
 the upstream lets the relay occupy the same numeric port without conflicting
 with G-Earth's listener. For background, see
-[G-Realm/G-Earth NormalFlashProxyProvider](https://github.com/G-Realm/G-Earth/blob/master/G-Earth/src/main/java/gearth/protocol/connection/proxy/flash/NormalFlashProxyProvider.java).
+[G-Realm/G-Earth ConnectionInterceptor beta-29](https://github.com/G-Realm/G-Earth/blob/1.5.4-beta-29/G-Earth/src/main/java/gearth/app/protocol/interceptor/ConnectionInterceptor.java).
 
 The bridge uses a synthetic non-secret first AIR greeting so G-Earth
 recognizes the local traffic stream. It does **not** relay login and
