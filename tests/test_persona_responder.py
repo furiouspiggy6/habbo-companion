@@ -8,6 +8,7 @@ from persona_responder import (
     PersonaResponder, chat_expression_from_template,
     clean_model_reply, safe_persona_filename,
     selected_usernames, DEFAULT_PERSONALITY, generate_persona_reply,
+    list_style_usernames, matching_style_usernames,
 )
 
 class PersonaResponderTests(unittest.TestCase):
@@ -64,6 +65,47 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIsNone(self.bot.pop_ready(now=13.0))
         self.bot.observe("Alice","still there?",now=16.0)
         self.assertIsNotNone(self.bot.pop_ready(now=17.0))
+
+    def test_user_log_username_discovery_and_case_insensitive_search(self):
+        folder=Path(self.temp.name)
+        (folder/'MaraGene.txt').write_text(
+            "[13:00] MaraGene: hey lol\n", encoding='utf-8')
+        (folder/'marioboy.txt').write_text(
+            "[13:01] marioboy: sup\n", encoding='utf-8')
+        (folder/'alice.txt').write_text(
+            "[13:02] alice: hello\n", encoding='utf-8')
+        (folder/'notes.md').write_text("ignore",encoding='utf-8')
+        (folder/'invalid.name.txt').write_text("ignore",encoding='utf-8')
+        (folder/'empty_dir.txt').mkdir()
+        names=list_style_usernames(folder)
+        self.assertEqual(names,['alice','MaraGene','marioboy','Mario35'])
+        self.assertEqual(matching_style_usernames(names,'MARA'),['MaraGene'])
+        self.assertEqual(matching_style_usernames(names,'ar'),
+                         ['MaraGene','marioboy','Mario35'])
+        self.assertEqual(matching_style_usernames(names,'e'),
+                         ['alice','MaraGene'])
+        self.assertEqual(matching_style_usernames(names,'zz'),[])
+        self.assertEqual(matching_style_usernames(names,''),names)
+        self.assertEqual(len(matching_style_usernames(names,'',limit=2)),2)
+
+    def test_parent_chat_logs_folder_and_selected_style_examples(self):
+        folder=Path(self.temp.name)/'chat_logs'/'users'
+        folder.mkdir(parents=True)
+        (folder/'MaraGene.txt').write_text(
+            '[12:00] MaraGene: u okay lol\n'
+            '[12:01] MaraGene: wbu thoooo\n',
+            encoding='utf-8')
+        self.assertEqual(
+            list_style_usernames(folder.parent), ['MaraGene'])
+        self.bot.log_dir=folder
+        self.bot.persona=matching_style_usernames(
+            list_style_usernames(folder),'gene')[0]
+        self.bot.style_mode='Chat-log style'
+        payload=self.bot.test_payload('Someone','hey')
+        self.assertEqual(payload['persona'],'MaraGene')
+        self.assertEqual(payload['style_examples'],
+                         ['u okay lol','wbu thoooo'])
+        self.assertEqual(payload['style_mode'],'Chat-log style')
 
     def test_style_files_sanitized_and_parsed(self):
         self.assertEqual(safe_persona_filename("../../secret"),"secret.txt")
