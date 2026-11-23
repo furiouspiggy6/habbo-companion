@@ -55,6 +55,39 @@ def safe_persona_filename(username):
     return (stem or "unknown") + ".txt"
 
 
+
+def list_style_usernames(log_dir):
+    """List real per-user style logs for search/autocomplete.
+
+    Only files that the existing safe_persona_filename() loader can reopen
+    are offered. No message contents are read until a user is selected.
+    """
+    root = Path(log_dir).expanduser()
+    if root.name.casefold() == "chat_logs" and (root / "users").is_dir():
+        root = root / "users"
+    try:
+        entries = root.iterdir()
+        names = {}
+        for item in entries:
+            if not item.is_file() or item.suffix.casefold() != ".txt":
+                continue
+            name = item.stem
+            if not name or safe_persona_filename(name) != item.name:
+                continue
+            names.setdefault(name.casefold(), name)
+        return sorted(names.values(), key=str.casefold)
+    except OSError:
+        return []
+
+
+def matching_style_usernames(usernames, search="", limit=80):
+    """Match username substrings case-insensitively, preferring prefix matches."""
+    query = str(search or "").strip().casefold()
+    matches = [name for name in usernames if query in name.casefold()]
+    matches.sort(key=lambda name: (
+        not name.casefold().startswith(query), name.casefold()))
+    return matches[:max(1, min(int(limit), 200))]
+
 def blocked_name(username):
     name = str(username).strip().casefold()
     return any(part in name for part in BLOCKED_NAME_PARTS)
