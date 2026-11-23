@@ -602,6 +602,8 @@ DEFAULT = dict(
     clientless_gearth_intercept=False,
     clientless_auto_walk=False,
     clientless_walk_presets={},
+    # Optional overrides for each saved account; fallback is room-wide preset.
+    clientless_account_walk_presets={},
     clientless_anti_afk_profiles={},
     responder_persona='Mario35',
     responder_target='',
@@ -5278,6 +5280,14 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_last_action_at={}
         # Pending one-click room entries are tied to the exact account generation.
         self._bot_pending_room={}
+        self._bot_run_room_targets={}
+        # Account-level explicit Direct TCP permission for multi-select mode;
+        # never treat a global G-Earth ON setting as permission to bypass.
+        self._bot_multi_direct_ids=set()
+        self._bot_multi_start_generation=0
+        self._bot_multi_ui_generation=0
+        self.bot_multi_status_var=tk.StringVar(
+            value='Select multiple profiles below and choose Run highlighted.')
         self._bot_gearth_bridges={}
         self._bot_walk_plans={}
         self._bot_self_ids={}
@@ -6213,6 +6223,43 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_run_selected).pack(side='left',padx=(0,7))
         ttk.Button(commands,text='Disconnect',
                    command=self._bot_disconnect_selected).pack(side='left')
+        ttk.Label(frame,text='MULTI-ACCOUNT CLIENTLESS',
+                  style='Section.TLabel').pack(anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Select multiple saved accounts using Ctrl/Shift '
+                  'or Select all. Run highlighted (Direct TCP) opens an '
+                  'independent session for each account and joins the Room ID '
+                  'below. Auto-walk and anti-AFK run separately. An existing '
+                  'G-Earth-intercepted account can stay connected, but only '
+                  'that account is intercepted; additional accounts use '
+                  'Direct TCP without G-Earth.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
+        table=ttk.Treeview(
+            frame,columns=('connection','room'),show='tree headings',
+            selectmode='extended',height=5)
+        table.heading('#0',text='Saved account')
+        table.heading('connection',text='Connection')
+        table.heading('room',text='Target room')
+        table.column('#0',width=180,minwidth=110,stretch=True)
+        table.column('connection',width=210,minwidth=130,stretch=True)
+        table.column('room',width=100,minwidth=80,stretch=False)
+        table.pack(fill='x',pady=(0,6))
+        self.bot_multi_tree=table
+        multi_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        multi_buttons.pack(fill='x',pady=(0,5))
+        ttk.Button(multi_buttons,text='Select all',
+                   command=self._bot_multi_select_all).pack(side='left',padx=(0,6))
+        ttk.Button(multi_buttons,text='Run highlighted (Direct TCP)',
+                   command=self._bot_multi_run_selected,
+                   style='Primary.TButton').pack(side='left',padx=(0,6))
+        ttk.Button(multi_buttons,text='Disconnect highlighted',
+                   command=self._bot_multi_disconnect_selected).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_multi_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(
+                      anchor='w',pady=(0,12))
+        self._bot_multi_ui_generation+=1
+        self._bot_multi_refresh()
+        self.root.after(2500,lambda generation=self._bot_multi_ui_generation:
+                        self._bot_multi_tick(generation))
         ttk.Checkbutton(
             frame,text='Clientless-only mode: never auto-start G-Earth',
             variable=self.bot_standalone_var,
@@ -6268,6 +6315,18 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_save_walk_preset).pack(side='left',padx=(0,6))
         ttk.Button(walkbuttons,text='Load room positions',
                    command=self._bot_load_walk_preset).pack(side='left')
+        override_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        override_buttons.pack(fill='x',pady=(0,6))
+        ttk.Button(override_buttons,text='Save positions for current account',
+                   command=self._bot_save_account_walk_preset).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(override_buttons,text='Clear account override',
+                   command=self._bot_clear_account_walk_preset).pack(side='left')
+        ttk.Label(frame,text='Room-wide saved positions are the default. '
+                  'Use Save positions for current account to give each bot '
+                  'a different destination in the same room.',
+                  style='Panel.TLabel',wraplength=620).pack(
+                      anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
@@ -6331,6 +6390,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if current not in items:
             self.bot_account_var.set(items[0] if items else '')
         self._bot_anti_afk_load_selected()
+        if hasattr(self,'bot_multi_tree'):
+            self._bot_multi_refresh()
 
     def _bot_selected_profile(self):
         selected=self.bot_account_var.get()
@@ -6428,6 +6489,14 @@ class ChatOverlayApp(PersonaResponderMixin):
         room=clientless_saved_room_value(self.bot_room_var.get())
         stored=self.config.get('clientless_walk_presets',{})
         values=stored.get(room,[]) if isinstance(stored,dict) else []
+        account=self._bot_selected_profile()
+        account_walk=self.config.get('clientless_account_walk_presets',{})
+        override=False
+        if account is not None and isinstance(account_walk,dict):
+            per_account=account_walk.get(account['id'],{})
+            if isinstance(per_account,dict) and room in per_account:
+                values=per_account[room]
+                override=True
         valid=[]
         try:
             if isinstance(values,list) and values:
@@ -6441,7 +6510,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_walk_backups_var.set(
             ';'.join(','.join(map(str,p)) for p in valid[1:]))
         self.bot_walk_status_var.set(
-            ('Loaded '+str(len(valid))+' saved tile(s) for room '+room+'.'
+            ('Loaded '+str(len(valid))+' '+
+             ('account-specific' if override else 'room-wide')+
+             ' tile(s) for room '+room+'.'
              if valid else 'No automatic walking positions saved for room '+room+'.'))
 
     def _bot_save_walk_preset(self):
@@ -6477,6 +6548,61 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('Automatic walking ON.' if self.bot_auto_walk_var.get()
              else 'Automatic walking OFF.'))
 
+    def _bot_save_account_walk_preset(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_walk_status_var.set(
+                'Select an account in Connected account first.')
+            return
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        if str(self.bot_room_var.get()).strip()!=room:
+            self.bot_walk_status_var.set('Enter a valid Room ID first.')
+            return
+        try:
+            positions=clientless_walk_positions(
+                self.bot_walk_primary_var.get(),
+                self.bot_walk_backups_var.get())
+        except (ClientlessBotError,ValueError,TypeError) as exc:
+            self.bot_walk_status_var.set('Cannot save: '+str(exc)[:155])
+            return
+        if not positions:
+            self.bot_walk_status_var.set(
+                'Enter a primary X,Y. To remove an override use '
+                'Clear account override.')
+            return
+        all_presets=self.config.get('clientless_account_walk_presets',{})
+        all_presets=dict(all_presets) if isinstance(all_presets,dict) else {}
+        own=all_presets.get(account['id'],{})
+        own=dict(own) if isinstance(own,dict) else {}
+        own[room]=[list(point) for point in positions]
+        all_presets[account['id']]=own
+        self.config['clientless_account_walk_presets']=all_presets
+        self.save()
+        self.bot_walk_status_var.set(
+            account['label']+': '+str(len(positions))+
+            ' personal walking tile(s) saved for room '+room+'. '+
+            ('Automatic walking ON.' if self.bot_auto_walk_var.get()
+             else 'Enable Walk automatically after room entry to use them.'))
+
+    def _bot_clear_account_walk_preset(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_walk_status_var.set('Select an account first.')
+            return
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        own_all=self.config.get('clientless_account_walk_presets',{})
+        own_all=dict(own_all) if isinstance(own_all,dict) else {}
+        own=own_all.get(account['id'],{})
+        own=dict(own) if isinstance(own,dict) else {}
+        own.pop(room,None)
+        if own:
+            own_all[account['id']]=own
+        else:
+            own_all.pop(account['id'],None)
+        self.config['clientless_account_walk_presets']=own_all
+        self.save()
+        self._bot_load_walk_preset()
+
     def _bot_arm_walk(self,ident,generation,session,room):
         """Arm only a saved, user-enabled route for the requested room."""
         self._bot_walk_plans.pop(ident,None)
@@ -6487,6 +6613,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         stored=self.config.get('clientless_walk_presets',{})
         raw=stored.get(str(room)) if isinstance(stored,dict) else None
+        account_presets=self.config.get('clientless_account_walk_presets',{})
+        profile_presets=(account_presets.get(ident,{})
+                         if isinstance(account_presets,dict) else {})
+        if isinstance(profile_presets,dict) and str(room) in profile_presets:
+            raw=profile_presets[str(room)]
         if not isinstance(raw,list) or not raw:
             self.bot_walk_status_var.set(
                 'Room '+str(room)+': no saved destinations; no auto-walk.')
@@ -6676,6 +6807,137 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.root.after(800,lambda uid=ident,gen=generation:
                             self._bot_walk_tick(uid,gen))
 
+    def _bot_multi_refresh(self):
+        """Keep multi-select rows in sync without losing highlighted profiles."""
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return
+        try:
+            if not tree.winfo_exists():
+                return
+            highlighted=set(tree.selection())
+            for key in tree.get_children(''):
+                tree.delete(key)
+            for account in self._account_profiles:
+                ident=account['id']
+                session=self._tcp_sessions.get(ident)
+                if (session is not None and session.authenticated
+                    and not session.stop.is_set()):
+                    connection=('Connected · G-Earth' if ident in
+                                self._bot_gearth_bridges else 'Connected · Direct TCP')
+                elif ident in self._tcp_inflight:
+                    connection='Connecting…'
+                else:
+                    state=str(self._tcp_states.get(ident,'Disconnected'))
+                    connection=state[:58]
+                room=self._bot_run_room_targets.get(ident,'—')
+                tree.insert('', 'end',iid=ident,text=account['label'],
+                            values=(connection,room))
+            keep=tuple(a['id'] for a in self._account_profiles
+                       if a['id'] in highlighted)
+            if keep:
+                tree.selection_set(keep)
+        except (tk.TclError,ValueError):
+            pass
+
+    def _bot_multi_tick(self,generation):
+        if generation!=self._bot_multi_ui_generation:
+            return
+        tree=getattr(self,'bot_multi_tree',None)
+        try:
+            if tree is None or not tree.winfo_exists():
+                return
+            self._bot_multi_refresh()
+            self.root.after(2500,lambda generation=generation:
+                            self._bot_multi_tick(generation))
+        except (tk.TclError,RuntimeError):
+            pass
+
+    def _bot_multi_selected(self):
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return ()
+        try:
+            selected=set(tree.selection())
+        except tk.TclError:
+            return ()
+        return tuple(a for a in self._account_profiles
+                     if a['id'] in selected)
+
+    def _bot_multi_select_all(self):
+        self._bot_multi_refresh()
+        tree=getattr(self,'bot_multi_tree',None)
+        if tree is None:
+            return
+        tree.selection_set(tuple(a['id'] for a in self._account_profiles))
+        self.bot_multi_status_var.set(
+            str(len(self._account_profiles))+' profiles highlighted. '
+            'Click Run highlighted to connect; nothing starts automatically.')
+
+    def _bot_multi_run_selected(self):
+        """Explicit user action; one independently authenticated socket per id."""
+        chosen=self._bot_multi_selected()
+        if not chosen:
+            self.bot_multi_status_var.set(
+                'Highlight one or more saved profiles first (Ctrl/Shift).')
+            return
+        try:
+            room=int(str(self.bot_room_var.get()).strip())
+            if not 1<=room<=2147483647:
+                raise ValueError()
+        except (TypeError,ValueError):
+            self.bot_multi_status_var.set(
+                'Enter a valid numeric Room ID (1–2147483647) before launching.')
+            return
+        # This button always means Direct TCP: it never requests a second
+        # G-Earth process or silently changes the intercepted profile.
+        self._bot_multi_start_generation+=1
+        generation=self._bot_multi_start_generation
+        count=len(chosen)
+        self.bot_multi_status_var.set(
+            'Starting '+str(count)+' saved profile(s) for room '+str(room)+
+            ' using Direct TCP for newly connected accounts. Existing '
+            'authenticated profiles (including G-Earth) stay unchanged.')
+        for i,account in enumerate(chosen):
+            # Stagger the independent browser login workers to avoid opening
+            # many isolated Chromium sessions in the same millisecond.
+            self.root.after(
+                1200*i,lambda uid=account['id'],gen=generation,target=room:
+                self._bot_multi_run_one(uid,gen,target))
+
+    def _bot_multi_run_one(self,ident,generation,room):
+        if generation!=self._bot_multi_start_generation:
+            return  # stop highlighted invalidates queued starts.
+        account=next((a for a in self._account_profiles
+                      if a['id']==ident),None)
+        if account is None:
+            return
+        session=self._tcp_sessions.get(ident)
+        if (ident in self._tcp_inflight or
+            (session is not None and session.authenticated
+             and not session.stop.is_set())):
+            # Existing sessions keep their room, auto-walk and AFK state.
+            self._bot_multi_refresh()
+            return
+        self._bot_run_account(account,room_override=room,force_direct=True)
+        self._bot_multi_refresh()
+
+    def _bot_multi_disconnect_selected(self):
+        chosen=self._bot_multi_selected()
+        if not chosen:
+            self.bot_multi_status_var.set(
+                'Highlight one or more profiles to disconnect.')
+            return
+        # Stop any queued starts first, then only disconnect highlighted IDs.
+        self._bot_multi_start_generation+=1
+        for account in chosen:
+            self._tcp_disconnect_one(account['id'])
+        self._tcp_render()
+        self._bot_multi_refresh()
+        self.bot_multi_status_var.set(
+            'Disconnected '+str(len(chosen))+' selected profile(s); '
+            'other accounts remain running.')
+
     def _bot_run_from_accounts(self):
         account=self._account_selected()
         if account is not None:
@@ -6783,13 +7045,14 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_run_selected(self):
         self._bot_anti_afk_load_selected()
+        self._bot_load_walk_preset()
         account=self._bot_selected_profile()
         if account is None:
             self.bot_status_var.set('Choose a saved Habbo account profile first.')
             return
         self._bot_run_account(account)
 
-    def _bot_run_account(self,account):
+    def _bot_run_account(self,account,room_override=None,force_direct=False):
         """One click: user-selected profile, optional G-Earth gameplay MITM.
 
         Login and RC4 remain in Companion. With G-Earth ON, post-auth gameplay
@@ -6799,7 +7062,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not any(p['id']==ident for p in self._account_profiles):
             self.bot_status_var.set('This account profile has been removed.')
             return
-        if self.bot_gearth_var.get():
+        if force_direct:
+            # This is a separate, explicitly labelled multi-account action.
+            # The single-account G-Earth ON preference remains untouched.
+            self._bot_multi_direct_ids.add(ident)
+        elif self.bot_gearth_var.get():
             session=self._tcp_sessions.get(ident)
             if ident in self._tcp_inflight or (
                 session is not None and session.authenticated):
@@ -6810,11 +7077,17 @@ class ChatOverlayApp(PersonaResponderMixin):
             if not self._bot_start_gearth_bridge(ident):
                 self.bot_status_var.set(self.bot_gearth_status_var.get())
                 return
-        room=int(clientless_saved_room_value(self.bot_room_var.get()))
-        self.bot_room_var.set(str(room))
-        # A subsequent selection cancels unfinished joins and walking.
-        self._bot_pending_room.clear()
-        self._bot_walk_plans.clear()
+        room=(int(room_override) if room_override is not None else
+              int(clientless_saved_room_value(self.bot_room_var.get())))
+        if not 1<=room<=2147483647:
+            self.bot_status_var.set('Invalid clientless Room ID.')
+            return
+        if room_override is None:
+            self.bot_room_var.set(str(room))
+        # Crucial: never cancel another live profile's room join or walking.
+        self._bot_pending_room.pop(ident,None)
+        self._bot_walk_plans.pop(ident,None)
+        self._bot_run_room_targets[ident]=room
         session=self._tcp_sessions.get(ident)
         if session and session.authenticated and not session.stop.is_set():
             self._bot_send_action(account_override=account,
@@ -6830,6 +7103,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if ident not in self._tcp_inflight:
             bridge=self._bot_gearth_bridges.pop(ident,None)
             if bridge:bridge.close()
+            if force_direct:self._bot_multi_direct_ids.discard(ident)
             self.bot_status_var.set(
                 'Could not start game TCP for '+account['label']+': '+
                 self._tcp_states.get(ident,'no valid saved session.'))
@@ -6865,6 +7139,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans.pop(account['id'],None)
         self._tcp_disconnect_one(account['id'])
         self._tcp_render()
+        self._bot_multi_refresh()
         self.bot_status_var.set('Disconnected '+account['label']+'.')
 
     def _bot_join_coffee_house(self):
@@ -6924,7 +7199,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                      else self._bot_selected_profile())
             ident=account['id'] if account is not None else ''
             bridge=self._bot_gearth_bridges.get(ident)
-            if bridge is None or not bridge.ready:
+            explicit_direct=ident in self._bot_multi_direct_ids
+            if not explicit_direct and (bridge is None or not bridge.ready):
                 self.bot_status_var.set(
                     'G-Earth interception ON, but the local packet relay '
                     'is not ready. Actions cannot bypass it.')
@@ -7315,6 +7591,8 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_disconnect_one(self,ident):
         self._bot_pending_room.pop(ident,None)
+        self._bot_run_room_targets.pop(ident,None)
+        self._bot_multi_direct_ids.discard(ident)
         bridge=self._bot_gearth_bridges.pop(ident,None)
         if bridge is not None:bridge.close()
         self._bot_walk_plans.pop(ident,None)

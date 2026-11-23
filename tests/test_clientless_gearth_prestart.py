@@ -39,6 +39,7 @@ def fixture(connected=False):
         _tcp_sessions={account["id"]:session} if connected else {},
         _tcp_inflight=set(),_tcp_generation={},_tcp_states={},
         _bot_pending_room={},_bot_walk_plans={},_bot_gearth_bridges={},
+        _bot_run_room_targets={},_bot_multi_direct_ids=set(),
         bot_room_var=Var("69118545"),bot_account_var=Var(""),
         bot_status_var=Var(""),bot_gearth_var=Var(False),
         bot_gearth_status_var=Var(""),

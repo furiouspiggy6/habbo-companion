@@ -1,3 +1,16 @@
+v1.1.102: Clientless Bot can now run multiple saved accounts at once.
+Use MULTI-ACCOUNT CLIENTLESS > Select all (or Ctrl/Shift highlight) >
+Run highlighted (Direct TCP). Each account has an isolated game TCP
+session, saved official login, room join, walk and anti-AFK state.
+Disconnect highlighted stops just those accounts. Starts are staggered,
+and no multi-account run starts on app launch. The current Room ID is
+shared for that run. To give accounts different destinations, select
+each profile and use Save positions for current account; the room-wide
+saved positions remain the fallback. G-Earth supports one intercepted
+profile at a time; the group-start button explicitly uses Direct TCP.
+One existing G-Earth-profile may remain connected while extra Direct TCP
+accounts run alongside it. See README.md for details.
+
 v1.1.101: Stationary anti-AFK toggle in Clientless Bot. Save it
 independently for each account. It is OFF by default and sends a
 mapped LookTo packet to the avatar's current, verified tile about

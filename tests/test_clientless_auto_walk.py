@@ -16,7 +16,9 @@ SOURCE=(Path(__file__).resolve().parents[1]/"Habbo_Companion.pyw").read_text(enc
 TREE=ast.parse(SOURCE)
 APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef) and n.name=="ChatOverlayApp")
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
-NAMES=("_bot_load_walk_preset","_bot_save_walk_preset","_bot_arm_walk",
+NAMES=("_bot_load_walk_preset","_bot_save_walk_preset",
+       "_bot_save_account_walk_preset","_bot_clear_account_walk_preset",
+       "_bot_arm_walk",
        "_bot_walk_maybe_start","_bot_receive_walk_observation","_bot_walk_next",
        "_bot_walk_send","_bot_walk_tick")
 now=[1000.0]
@@ -75,7 +77,8 @@ def fake_app():
         _bot_last_action_at={},_tcp_sessions={account_id:session},
         _tcp_generation={account_id:3},root=Root(),
         _bot_action_worker=lambda *args:None,
-        save=lambda:None)
+        save=lambda:None,
+        _bot_selected_profile=lambda:{"id":account_id,"label":"First"})
     bind(app)
     return app,account_id,session
 
@@ -114,6 +117,25 @@ class WalkPresetTests(unittest.TestCase):
         app.bot_walk_backups_var.set("")
         app._bot_save_walk_preset()
         self.assertFalse(app.bot_auto_walk_var.get())
+
+
+    def test_per_profile_walk_overrides_shared_preset_without_changing_it(self):
+        app,ident,session=fake_app()
+        app.bot_walk_primary_var.set("21,11")
+        app.bot_walk_backups_var.set("22,11;23,11")
+        app._bot_save_account_walk_preset()
+        self.assertEqual(
+            app.config["clientless_account_walk_presets"][ident]["69118545"],
+            [[21,11],[22,11],[23,11]])
+        self.assertEqual(
+            app.config["clientless_walk_presets"]["69118545"][0],[10,15])
+        app._bot_arm_walk(ident,3,session,69118545)
+        self.assertEqual(app._bot_walk_plans[ident]["points"],
+                         ((21,11),(22,11),(23,11)))
+        app._bot_clear_account_walk_preset()
+        app._bot_arm_walk(ident,3,session,69118545)
+        self.assertEqual(app._bot_walk_plans[ident]["points"][0],(10,15))
+        self.assertNotIn(ident,app.config["clientless_account_walk_presets"])
 
 
 class RoomPacketTests(unittest.TestCase):
