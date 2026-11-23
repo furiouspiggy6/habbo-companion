@@ -6394,6 +6394,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         plan=self._bot_walk_plans.get(ident)
         if plan is None or plan['generation']!=generation:
             return
+        if kind=='ready' and value!=plan['room']:
+            self.bot_walk_status_var.set(
+                'Auto-walk stopped: server entered a different room.')
+            self._bot_walk_plans.pop(ident,None)
+            return
         if kind=='ready' and value==plan['room']:
             plan['phase']='waiting_avatar'
             plan['deadline']=time.monotonic()+15
@@ -6909,6 +6914,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             for other in self._account_profiles if other['id']!=ident):
             self._tcp_states[ident]='Browser port conflict between accounts'
             return
+        # A new login must not inherit identity or position observations
+        # from a previous socket, even when the saved profile ID is reused.
+        getattr(self,'_bot_walk_plans',{}).pop(ident,None)
+        getattr(self,'_bot_self_ids',{}).pop(ident,None)
+        getattr(self,'_bot_user_roster',{}).pop(ident,None)
         generation=self._tcp_generation.get(ident,0)+1
         self._tcp_generation[ident]=generation
         self._tcp_inflight.add(ident)
@@ -11592,7 +11602,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self.bot_walk_status_var.set('Room join failed: '+error)
                 if action=='Auto Walk' and error is not None:
                     self._bot_walk_next(ident,generation,'Walk request failed')
-                if action=='Auto Walk' and error is None:
+                if (action=='Auto Walk' and error is None
+                    and ident in self._bot_walk_plans):
                     self.bot_walk_status_var.set(
                         'Walking request sent; awaiting avatar position confirmation.')
                 self.bot_status_var.set(
