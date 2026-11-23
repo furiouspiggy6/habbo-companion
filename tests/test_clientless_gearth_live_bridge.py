@@ -38,7 +38,7 @@ class FakeGearthProxy:
         self.port=port
         self.server=socket.socket()
         self.server.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
-        self.server.bind(("127.0.0.1",port))
+        self.server.bind(("127.0.0.2",port))
         self.server.listen(1)
         self.front=None
         self.upstream=None
@@ -52,7 +52,7 @@ class FakeGearthProxy:
         try:
             self.server.settimeout(3)
             self.front,_=self.server.accept()
-            self.upstream=socket.create_connection(("127.0.0.2",self.port),timeout=2)
+            self.upstream=socket.create_connection(("127.0.0.3",self.port),timeout=2)
             hello_id,hello_body=b._read_frame(self.front)
             assert hello_id==4000
             self.upstream.sendall(b._frame(hello_id,hello_body))
@@ -154,9 +154,9 @@ class GearthGameplayBridgeTests(unittest.TestCase):
 class PacketSafetyAndTransportTests(unittest.TestCase):
     def test_only_loopback_bridge_domain_is_allowed(self):
         with patch.object(b.socket,"getaddrinfo",return_value=[
-            (socket.AF_INET,socket.SOCK_STREAM,6,"",("127.0.0.2",0))]):
-            self.assertEqual(b.verify_bridge_alias("127.0.0.2.nip.io"),
-                             "127.0.0.2.nip.io")
+            (socket.AF_INET,socket.SOCK_STREAM,6,"",("127.0.0.3",0))]):
+            self.assertEqual(b.verify_bridge_alias("127.0.0.3.nip.io"),
+                             "127.0.0.3.nip.io")
         with patch.object(b.socket,"getaddrinfo",return_value=[
             (socket.AF_INET,socket.SOCK_STREAM,6,"",("203.0.113.5",0))]):
             with self.assertRaises(b.GearthBridgeError):
