@@ -61,7 +61,7 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIsNotNone(self.bot.pop_ready(now=17.0))
 
     def test_style_files_sanitized_and_parsed(self):
-        self.assertEqual(safe_persona_filename("../../secret"),"______secret.txt")
+        self.assertEqual(safe_persona_filename("../../secret"),"secret.txt")
         self.assertEqual(self.bot.style_examples(),["hey there","what you up to"])
 
     def test_template_uses_real_outgoing_packet_shape(self):
