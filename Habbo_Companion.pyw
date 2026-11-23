@@ -282,7 +282,21 @@ def run_local_habbo_boofuzz(seed_id=896, cases=40, output_dir=None,
     import ipaddress
     from boofuzz import (Session, Target, TCPSocketConnection, s_initialize, s_size,
                          s_block, s_word, s_group, s_get)
-    from boofuzz.encoders import Encoder
+    # boofuzz 0.4.2 accepts a callable block encoder but does not ship the
+    # encoders module in every distribution. Preserve the Encoder ABC contract.
+    try:
+        from boofuzz.encoders import Encoder
+    except ImportError:
+        from abc import ABC, abstractmethod
+
+        class Encoder(ABC):
+            @abstractmethod
+            def encode(self, data):
+                raise NotImplementedError
+
+            @abstractmethod
+            def decode(self, data):
+                raise NotImplementedError
 
     # Standalone under the repository tests' AST-extraction namespace.
     def validate_owned_lab_ip(value):
