@@ -31,6 +31,40 @@ class ClientlessBotError(ValueError):
     """A prohibited or unverified action; never send a guessed packet."""
 
 
+# Source-pinned November 7, 2026 AIR package 38 mappings.
+# plus-emulator/Volt-Renderer commit c8f74ffdd9c3eeb27a532a705e09b665b76e67a1:
+# OutgoingHeader.ts and IncomingHeader.ts (ClientHello BUILD matches below).
+# These IDs are a COMPATIBILITY BASELINE, not live proof of Habbo.com's
+# current release. Never apply them to another WIN63 build, and never guess.
+BUNDLED_AIR_RELEASE = "WIN63-202611041140-327405090"
+BUNDLED_AIR_HEADERS = {
+    "release": BUNDLED_AIR_RELEASE,
+    "outgoing": {
+        "GetGuestRoom": 216, "MoveAvatar": 2995, "LookTo": 2574,
+        "Chat": 3463, "Shout": 3079, "Whisper": 3523,
+        "Dance": 1366, "Sign": 207, "ChangePosture": 1117,
+        # No verified Quit header in the pinned source: leave it unavailable.
+    },
+    "incoming": {
+        "Chat": 3477, "Shout": 1206, "Whisper": 2229,
+        "RoomReady": 2833,  # IncomingHeader.ROOM_ENTER; entry signal, not proof of loading.
+    },
+}
+
+
+def bundled_air_headers(release):
+    """Return a fresh, release-bound mapping without G-Earth or HabboAIR.
+
+    Unknown/rotated releases fail closed. The caller must not downgrade a
+    session's release just to satisfy this map.
+    """
+    if release != BUNDLED_AIR_RELEASE:
+        raise ClientlessBotError(
+            "No bundled AIR mapping for this release; import matching "
+            "named headers before using clientless actions.")
+    return validate_clientless_headers(BUNDLED_AIR_HEADERS, release)
+
+
 def _int_arg(value, key):
     low, high = _ALLOWED_INTS[key]
     if type(value) is not int or not low <= value <= high:
@@ -167,7 +201,8 @@ def validate_clientless_headers(mapping, release):
 
 def encode_clientless_action(mapping, release, action, **kwargs):
     """Fail entirely before sending if any required header is missing."""
-    validated = validate_clientless_headers(mapping, release)
+    validated = (bundled_air_headers(release) if mapping is None
+                 else validate_clientless_headers(mapping, release))
     actions = build_clientless_action(action, **kwargs)
     result = []
     for name, body in actions:
@@ -186,7 +221,8 @@ def decode_clientless_chat(mapping, release, packet_id, payload):
     Other fields are deliberately ignored; this does not replace the original
     AIR bubble feed and is never persisted by the clientless module.
     """
-    headers = validate_clientless_headers(mapping, release)["incoming"]
+    headers = (bundled_air_headers(release) if mapping is None
+               else validate_clientless_headers(mapping, release))["incoming"]
     name = next((k for k in ("Chat","Shout","Whisper")
                  if headers.get(k) == packet_id), None)
     if name is None or not isinstance(payload, bytes) or not 6 <= len(payload) <= 8192:
