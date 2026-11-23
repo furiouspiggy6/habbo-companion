@@ -9810,6 +9810,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     'Your avatar room index: unknown after room change; waiting for Users.')
                 self._room_users.clear()
                 self._room_chat_names.clear()
+                self._responder_room_speakers.clear()
                 self._room_profile_cache.clear()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
@@ -9865,6 +9866,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._room_users,removed=remove_room_user_by_index(self._room_users,index)
                 for name in removed:
                     self._room_chat_names.discard(name)
+                    self._responder_room_speakers.pop(name,None)
                     self._room_profile_cache.pop(name,None)
                 if self._coffee_running and self._coffee_group_active:
                     # A server-confirmed departure is an automatic exclusion,
@@ -9911,6 +9913,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._room_users.clear()
                     self._last_room_users_binary=None
                     self._room_chat_names.clear()
+                    self._responder_room_speakers.clear()
                     self._room_profile_cache.clear()
                     self._coffee_profile_pending=None
                     self._coffee_profile_generation+=1
@@ -10214,11 +10217,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             self.responder.record_public_message(
                 name,body,chat_type=chat_type,now=arrived)
             self._responder_update_logging_status()
-            x=item.get('x');y=item.get('y');sw=item.get('sw');sh=item.get('sh')
-            within=True
-            if isinstance(x,(int,float)) and isinstance(y,(int,float)) and sw and sh:
-                within=bool(0<=x<=sw and 0<=y<=sh)
-            if self.config.get('visible_only',True) and not within:return
+            # Update live room state even for chat outside the on-screen
+            # viewport. Historical per-user logs are NOT the target roster.
             room=item.get('room')
             if room is not None and self.room_id is not None and room!=self.room_id:
                 self._responder_generation+=1
@@ -10227,12 +10227,20 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.clear_msgs()
                 self._room_users.clear()
                 self._room_chat_names.clear()
+                self._responder_room_speakers.clear()
                 self._room_profile_cache.clear()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
                 self.coffee_users_status_var.set('Room changed. Waiting for player IDs...')
                 if self._coffee_running:self._stop_coffee_loop('Room changed; coffee pass stopped.')
             if room is not None:self.room_id=room
+            if chat_type not in (1,12):
+                self._responder_room_speakers[name.casefold()]=(name,arrived)
+            x=item.get('x');y=item.get('y');sw=item.get('sw');sh=item.get('sh')
+            within=True
+            if isinstance(x,(int,float)) and isinstance(y,(int,float)) and sw and sh:
+                within=bool(0<=x<=sw and 0<=y<=sh)
+            if self.config.get('visible_only',True) and not within:return
             self._room_chat_names.add(name.casefold())
             cached=self._room_profile_cache.pop(name.casefold(),None)
             if cached and self._habbo_session_connected:

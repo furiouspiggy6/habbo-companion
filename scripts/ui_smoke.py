@@ -69,6 +69,65 @@ try:
         'Selected users input did not appear')
     assert app._responder_targets_frame.master==app._responder_targets_area, (
         'Selected users input moved out of its reserved layout')
+    assert app.responder_target_search_entry.winfo_exists(), (
+        'Search room-players input must be available')
+    assert app.responder_target_matches_list.winfo_exists(), (
+        'Live room username suggestion list is missing')
+    assert not app.responder_target_matches_list.winfo_manager(), (
+        'Room suggestions must start collapsed')
+    # In-room G-Earth roster can include quiet players; AIR public-chat
+    # speakers are also eligible even if they are outside the view.
+    app._own_name='ownAvatar'
+    app._room_users={
+        'maragene':('MaraGene',12345,4),
+        'cheesecake':('Cheesecake',56789,6),
+        'ownavatar':('ownAvatar',111,1),
+    }
+    app._responder_room_speakers={
+        'popbrocks':('popbrocks',123456.0),
+    }
+    app._responder_refresh_room_users(show=False)
+    assert app._responder_room_names==[
+        'Cheesecake','MaraGene','popbrocks'], (
+        'Room player suggestions must include only this room, not historical logs')
+    assert not app.responder_target_matches_list.winfo_manager()
+    app.responder_target_search_var.set('ARAg')
+    app._responder_refresh_room_users(show=True)
+    assert app._responder_target_matches==['MaraGene'], (
+        'Case-insensitive substring search of current room failed')
+    assert app.responder_target_matches_list.winfo_manager()=='pack'
+    assert app.responder_target_matches_list.size()==1
+    app.responder_target_matches_list.selection_set(0)
+    original_save=app.save
+    app.save=lambda:None
+    try:
+        app._responder_choose_target_user()
+        assert app.responder_target_var.get()=='MaraGene'
+        assert app.responder.target_mode=='Selected users'
+        assert app.responder.selected_users=='MaraGene'
+        assert not app.responder_target_matches_list.winfo_manager(), (
+            'Selecting a room suggestion must collapse the dropdown')
+        app.responder_target_search_var.set('BROCK')
+        app._responder_refresh_room_users(show=True)
+        assert app._responder_target_matches==['popbrocks']
+        app.responder_target_matches_list.selection_set(0)
+        app._responder_choose_target_user()
+        assert app.responder.selected_users=='MaraGene, popbrocks', (
+            'Multiple room selections must accumulate without duplicates')
+        app.responder_target_search_var.set('BROCK')
+        app._responder_refresh_room_users(show=True)
+        app.responder_target_matches_list.selection_set(0)
+        app._responder_choose_target_user()
+        assert app.responder.selected_users=='MaraGene, popbrocks', (
+            'Choosing the same user twice must not duplicate targets')
+        app._room_users.clear()
+        app._responder_room_speakers.clear()
+        app._responder_refresh_room_users(show=True)
+        assert not app._responder_room_names, (
+            'Disconnected/cleared room must not offer stale users')
+        assert not app.responder_target_matches_list.winfo_manager()
+    finally:
+        app.save=original_save
     app.responder_target_mode_var.set('Everyone')
     app._responder_update_target_controls()
     assert not app._responder_targets_frame.winfo_manager(), (
@@ -89,6 +148,16 @@ try:
     assert not app._responder_advanced_open
     assert not app._responder_advanced_frame.winfo_manager(), (
         'Advanced settings did not collapse')
+    # Confirm both collapsing panels actually reclaim vertical space.
+    # The old fill=both/expand=True settings created a huge empty gap.
+    app._ui_show_page('responder')
+    root.update_idletasks()
+    assert app.responder_log_text.winfo_manager()=='pack'
+    assert (app.responder_log_text.winfo_y()-
+            app._responder_advanced_button.winfo_y()) < 180, (
+        'Collapsed Advanced left a large empty gap above Recent Activity')
+    assert not app.responder_target_matches_list.winfo_manager()
+    assert not app.responder_style_matches_list.winfo_manager()
     # Verify filtering and selecting a real per-user file automatically switches
     # to that specific writing style without enabling any live game sends.
     with tempfile.TemporaryDirectory() as folder:

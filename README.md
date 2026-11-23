@@ -1,5 +1,30 @@
 # Habbo Companion
 
+## v1.1.79 — Search live room users for reply targets; compact AI interface
+
+**Reply to → Selected users** now has a **Search people in this room**
+field with a list of matching players. The picker draws from the current
+G-Earth `Users` snapshot and names observed speaking in the current AIR
+room (including speakers outside the View Chat viewport), not the historical
+per-user chat-log folder. Start typing any part of a name (case-insensitive),
+select a suggestion, and the username is added to **Reply only to these users**.
+You can select multiple people, edit the comma-separated list, or click
+**Clear**. Selections are saved and applied immediately, while keeping the
+existing AI and optional G-Earth sending switches unchanged.
+
+Use **Refresh room** to reload currently detected names. The list also
+refreshes on search focus or typing. Room changes, disconnections and player
+departure packets remove old room entries. Users not yet identified by the
+current feed/snapshot cannot appear in suggestions; entering a room with
+G-Earth attached gives the best coverage. **Reply targets** remain separate
+from **Copy writing style from saved chat logs**.
+
+**UI layout fix:** Removed the `expand=True` vertical expansion on the
+AI Responder's scrollable panel and Recent Activity log. Closing the
+Advanced panel or hiding a username search dropdown now reclaims its
+space rather than leaving a large empty region above the activity log.
+The rest of Companion's working AIR/G-Earth sending logic is unchanged.
+
 ## v1.1.78 — Continuous public room-chat logging (independent of AI)
 
 Companion now **automatically saves new public Habbo AIR room messages in the

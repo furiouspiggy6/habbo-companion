@@ -71,6 +71,11 @@ class PersonaResponderMixin:
             value=self.responder.responsiveness)
         self.responder_target_mode_var=tk.StringVar(value=self.responder.target_mode)
         self.responder_target_var=tk.StringVar(value=self.responder.selected_users)
+        self.responder_target_search_var=tk.StringVar(value='')
+        self.responder_room_status_var=tk.StringVar(value='Search detected room players.')
+        self._responder_room_names=[]
+        self._responder_target_matches=[]
+        self._responder_room_speakers={}
         self.responder_log_dir_var=tk.StringVar(value=str(self.responder.log_dir))
         self.responder_model_var=tk.StringVar(value=str(
             self.config.get('responder_model','gpt-5-mini')))
@@ -90,7 +95,9 @@ class PersonaResponderMixin:
         """Keep everyday controls on one page; tuck optional controls away."""
         p=self._responder_palette
         frame=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
-        frame.pack(fill='both',expand=True)
+        # Scrollable pages must size to their contents, not the full canvas
+        # height. Expand here creates the giant empty hole when choices close.
+        frame.pack(fill='x')
 
         tk.Label(frame,text='AI RESPONDER',font=('Segoe UI Semibold',18),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
@@ -179,11 +186,51 @@ class PersonaResponderMixin:
         self._responder_targets_frame=ttk.Frame(
             self._responder_targets_area,style='Panel.TFrame')
         ttk.Label(self._responder_targets_frame,
-                  text='Usernames (separate with commas)',style='Panel.TLabel').pack(
+                  text='Search people in this room',style='Panel.TLabel').pack(
                       anchor='w',pady=(3,4))
+        lookup=ttk.Frame(self._responder_targets_frame,style='Panel.TFrame')
+        lookup.pack(fill='x',pady=(0,4))
+        self.responder_target_search_entry=ttk.Entry(
+            lookup,textvariable=self.responder_target_search_var)
+        self.responder_target_search_entry.pack(
+            side='left',fill='x',expand=True,padx=(0,7))
+        ttk.Button(lookup,text='Refresh room',
+                   command=lambda:self._responder_refresh_room_users(show=True)
+                   ).pack(side='left')
+        self.responder_target_matches_list=tk.Listbox(
+            self._responder_targets_frame,height=5,exportselection=False,
+            selectmode='browse',font=('Segoe UI',10),
+            bg=p['field'],fg=p['text'],selectbackground=p['accent'],
+            selectforeground=p['background'],borderwidth=0,highlightthickness=1,
+            relief='flat')
+        self.responder_target_search_entry.bind(
+            '<KeyRelease>',lambda event:self._responder_refresh_room_users(
+                show=event.keysym not in (
+                    'Up','Down','Return','Escape','Tab','Left','Right')))
+        self.responder_target_search_entry.bind(
+            '<FocusIn>',lambda event:self._responder_refresh_room_users(
+                show=True))
+        self.responder_target_search_entry.bind(
+            '<Escape>',lambda event:self._responder_hide_target_matches())
+        self.responder_target_search_entry.bind(
+            '<Down>',self._responder_focus_target_matches)
+        self.responder_target_matches_list.bind(
+            '<<ListboxSelect>>',self._responder_choose_target_user)
+        ttk.Label(self._responder_targets_frame,
+                  text='Reply only to these users',style='Panel.TLabel').pack(
+                      anchor='w',pady=(3,4))
+        picked=ttk.Frame(self._responder_targets_frame,style='Panel.TFrame')
+        picked.pack(fill='x')
         self.responder_target_entry=ttk.Entry(
-            self._responder_targets_frame,textvariable=self.responder_target_var)
-        self.responder_target_entry.pack(fill='x')
+            picked,textvariable=self.responder_target_var)
+        self.responder_target_entry.pack(
+            side='left',fill='x',expand=True,padx=(0,7))
+        ttk.Button(picked,text='Clear',
+                   command=self._responder_clear_target_users).pack(side='left')
+        ttk.Label(self._responder_targets_frame,
+                  textvariable=self.responder_room_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(
+                      anchor='w',pady=(5,0))
         self._responder_update_target_controls()
 
         actions=ttk.Frame(frame,style='Panel.TFrame')
@@ -264,7 +311,8 @@ class PersonaResponderMixin:
         self.responder_log_text=tk.Text(frame,height=7,wrap='word',state='disabled',
             font=('Consolas',9),bg=p['field'],fg=p['text'],
             insertbackground=p['text'],relief='flat')
-        self.responder_log_text.pack(fill='both',expand=True,pady=(5,7))
+        # Fixed requested height: no vertical expansion when dropdowns close.
+        self.responder_log_text.pack(fill='x',pady=(5,7))
 
     def _responder_toggle_advanced(self):
         self._responder_advanced_open=not self._responder_advanced_open
@@ -278,8 +326,101 @@ class PersonaResponderMixin:
     def _responder_update_target_controls(self):
         if self.responder_target_mode_var.get()=='Selected users':
             self._responder_targets_frame.pack(fill='x',pady=(0,3))
+            self._responder_refresh_room_users(show=False)
         else:
+            self._responder_hide_target_matches()
             self._responder_targets_frame.pack_forget()
+
+    def _responder_refresh_room_users(self,show=False):
+        """Use the current G-Earth room roster plus this room's AIR speakers.
+
+        Do not mix in saved historical logs; a profile search and a live
+        reply-target search are intentionally different sources.
+        """
+        found={}
+        own=str(getattr(self,'_own_name','') or '').casefold()
+        for user in getattr(self,'_room_users',{}).values():
+            if not isinstance(user,(tuple,list)) or not user:
+                continue
+            name=str(user[0]).strip()
+            if name and name.casefold()!=own:
+                found[name.casefold()]=name
+        for name,_when in getattr(self,'_responder_room_speakers',{}).values():
+            if name.casefold()!=own:
+                found.setdefault(name.casefold(),name)
+        self._responder_room_names=sorted(found.values(),key=str.casefold)
+        self._responder_filter_target_users(show=show)
+        n=len(self._responder_room_names)
+        self.responder_room_status_var.set(
+            f'{n} player(s) detected in the current room. '
+            'Type part of a name and click a suggestion to add it.'
+            if n else
+            'No room players detected yet. Join a room with G-Earth connected, '
+            'then click Refresh room.')
+
+    def _responder_filter_target_users(self,event=None,show=True):
+        if event is not None and event.keysym in (
+            'Up','Down','Return','Escape','Tab','Left','Right'):
+            return
+        query=self.responder_target_search_var.get()
+        names=matching_style_usernames(self._responder_room_names,query,limit=80)
+        self._responder_target_matches=names
+        box=self.responder_target_matches_list
+        box.delete(0,'end')
+        for name in names:
+            box.insert('end',name)
+        if names and show and self.responder_target_mode_var.get()=='Selected users':
+            box.configure(height=min(6,len(names)))
+            if not box.winfo_manager():
+                # Pack before the selected-name label, preserving layout order
+                # even after repeatedly hiding and reopening the dropdown.
+                label=next(
+                    (w for w in self._responder_targets_frame.pack_slaves()
+                     if isinstance(w,ttk.Label) and
+                     str(w.cget('text'))=='Reply only to these users'),None)
+                if label is not None:
+                    box.pack(fill='x',pady=(0,5),before=label)
+                else:
+                    box.pack(fill='x',pady=(0,5))
+        else:
+            self._responder_hide_target_matches()
+
+    def _responder_hide_target_matches(self):
+        self.responder_target_matches_list.pack_forget()
+
+    def _responder_focus_target_matches(self,event=None):
+        if self._responder_target_matches:
+            box=self.responder_target_matches_list
+            box.focus_set()
+            box.selection_set(0)
+            box.activate(0)
+        return 'break'
+
+    def _responder_choose_target_user(self,event=None):
+        selected=self.responder_target_matches_list.curselection()
+        if not selected:
+            return
+        chosen=self.responder_target_matches_list.get(selected[0])
+        self.responder_target_matches_list.selection_clear(0,'end')
+        if chosen not in self._responder_room_names:
+            return
+        picked=[n.strip() for n in
+                self.responder_target_var.get().split(',') if n.strip()]
+        if chosen.casefold() not in {n.casefold() for n in picked}:
+            picked.append(chosen)
+        self.responder_target_var.set(', '.join(picked))
+        self.responder_target_search_var.set('')
+        self._responder_hide_target_matches()
+        # Apply immediately, so the responder targets only selected users;
+        # the outgoing G-Earth Chat template and sending switch stay intact.
+        self._responder_apply()
+        self._responder_log('Reply targets updated: '+self.responder_target_var.get())
+
+    def _responder_clear_target_users(self):
+        self.responder_target_var.set('')
+        self.responder_target_search_var.set('')
+        self._responder_hide_target_matches()
+        self._responder_apply()
 
     def _responder_update_style_controls(self):
         mode=self.responder_style_mode_var.get()

@@ -1,3 +1,24 @@
+HABBO COMPANION v1.1.79 — LIVE ROOM SEARCH & COLLAPSING LAYOUT
+=================================================================
+
+AI RESPONDER: REPLY TO > SELECTED USERS
+- Search people in this room: partial, case-insensitive username matching.
+- Dropdown suggestions combine the current G-Earth room Users snapshot and
+  actual speakers in your Habbo AIR room, including offscreen public chat.
+- Click a suggested username to add it to the reply-only list and apply it.
+- Select multiple names without duplicate entries, or click Clear.
+- Refresh room reloads names, as does focusing/typing into the search field.
+- Names from historical chat log files are NOT offered as current room users.
+- Room changes, disconnections and departures clear stale detected players.
+- Current reply targeting remains separate from writing-style imitation.
+
+LAYOUT FIX
+- AI Responder panel and Recent Activity log no longer expand vertically to
+  fill empty canvas space. Collapsing Advanced options or search results
+  restores a compact layout without the giant empty gap.
+- Other app functions and the established G-Earth packet send are unchanged.
+
+
 HABBO COMPANION v1.1.78 — CONTINUOUS PUBLIC CHAT LOGGING
 ==========================================================
 
