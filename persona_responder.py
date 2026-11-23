@@ -183,7 +183,11 @@ class PersonaResponder:
     def __init__(self, log_dir):
         self.log_dir = Path(log_dir)
         self.enabled = False
-        self.save_history = False
+        # Independent of whether AI responding is enabled. The app feeds
+        # public room events here even when the AI is OFF or the page is hidden.
+        self.save_history = True
+        self.logged_messages = 0
+        self.log_error = ""
         self.auto_rotate = False
         self.persona = "Mario35"  # Used only in optional Chat-log style mode
         self.style_mode = STYLE_MODES[0]
@@ -236,16 +240,32 @@ class PersonaResponder:
             return unique
         return random.sample(unique[:-40], 40) + unique[-40:]
 
-    def _record(self, username, message):
-        if not self.save_history:
-            return
+    def record_public_message(self, username, message, chat_type=0, now=None):
+        """Append one new public AIR chat event to the sender's log file.
+
+        This is independent of enabled/auto-send, selected personality and
+        the on-screen visible-only filter. Never archive whispered/private
+        messages as public chat. Timestamp is when the event is received.
+        """
+        if not self.save_history or chat_type in (1, 12):
+            return False
+        name = str(username).strip()[:80]
+        body = str(message).replace("\r", " ").replace("\n", " ").strip()[:4000]
+        if not name or not body:
+            return False
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
-            with self._file_for(username).open("a", encoding="utf-8") as stream:
-                date = time.strftime("%Y-%m-%d %H:%M:%S")
-                stream.write(f"[{date}] {username}: {message[:500]}\n")
-        except OSError:
-            pass
+            with self._file_for(name).open("a", encoding="utf-8") as stream:
+                stamp = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(time.time() if now is None else now))
+                stream.write(f"[{stamp}] {name}: {body}\n")
+            self.logged_messages += 1
+            self.log_error = ""
+            return True
+        except OSError as exc:
+            self.log_error = f"Could not save chat logs: {exc}"[:180]
+            return False
 
     def _rotate(self, now):
         if (self.style_mode != "Chat-log style" or not self.auto_rotate
@@ -305,7 +325,9 @@ class PersonaResponder:
             self.room_users[username.casefold()] = (username, now)
         if not is_self:
             self.context.append(f"{username}: {message}")
-            self._record(username, message)
+        # Public chat is archived by the AIR feed's ingestion path, not
+        # observe(), so off-screen users and the account owner are included
+        # exactly once and AI OFF never prevents saving.
         self._rotate(now)
         if not self.enabled or is_self or is_blocked:
             return
