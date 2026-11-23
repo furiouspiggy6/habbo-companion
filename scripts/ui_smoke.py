@@ -48,6 +48,12 @@ try:
         'Default reply interval should be a less spammy 30 seconds')
     assert app.responder_reply_interval_scale.winfo_exists(), (
         'Main AI Responder reply-speed slider is missing')
+    assert app.responder_instruction_input.winfo_exists(), (
+        'Temporary instruction text area is missing')
+    assert app.responder_instruction_list.winfo_exists(), (
+        'Temporary instruction active list is missing')
+    assert not app.responder_instruction_list.winfo_manager(), (
+        'Empty directive list should collapse to avoid blank gaps')
     assert app.responder_reply_interval_text.get().endswith('30 sec'), (
         'Slider must display the current minimum reply interval')
     app.responder_reply_interval_var.set(95)
@@ -205,6 +211,19 @@ try:
             assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
                 'Changing style sample folder must not move the background archive')
             assert app.responder.style_examples()==['heyyy lol','wbuuu']
+            assert 'disabled' in app.responder_tone_combo.state(), (
+                'Custom tone must be disabled for selected persona')
+            assert 'disabled' in app.responder_humour_combo.state(), (
+                'Custom humour must be disabled for selected persona')
+            assert 'disabled' in app.responder_responsiveness_combo.state(), (
+                'Natural/Chatty must be disabled for selected persona')
+            assert 'disabled' in app.responder_reply_interval_scale.state(), (
+                'Custom reply speed must be disabled for selected persona')
+            assert 'disabled' in app.responder_rotation_check.state(), (
+                'Rotating personas must be disabled for one selected user')
+            assert not {'personality','tone','humour','responsiveness'}.intersection(
+                app.responder.test_payload('Alice','hey')), (
+                'Selected persona must not inherit generic AI characteristics')
             evidence=app.responder.persona_reference()
             assert evidence['sample_message_count']==2, (
                 'Selected chat persona must retain behavioural evidence')
@@ -217,8 +236,33 @@ try:
                 'Single-user style must not rotate unexpectedly')
             assert not app.responder.enabled and not app.responder_send_var.get(), (
                 'Selecting a style must not start game messaging')
+            app.responder_instruction_input.insert(
+                '1.0','be mean to Marc for 10mins\n'
+                      'type slow\npretend to go afk for 2mins')
+            app._responder_add_instructions()
+            assert len(app.responder.temporary_instructions)==3, (
+                'All three temporary natural-language directions should apply')
+            assert app.responder.is_temporarily_afk(), (
+                'AFK should immediately pause generated public replies')
+            assert app.responder.temporary_send_delay()==10, (
+                'Type slow should schedule a 10-second G-Earth delay')
+            assert app.responder_instruction_list.winfo_manager()=='pack', (
+                'Active instructions must be visible')
+            assert app.responder_instruction_list.size()==3
+            assert not app.responder.enabled and not app.responder_send_var.get()
+            app.responder_instruction_list.selection_set(0)
+            app._responder_remove_instruction()
+            assert len(app.responder.temporary_instructions)==2
+            app._responder_clear_instructions()
+            assert not app.responder.temporary_instructions
+            assert not app.responder_instruction_list.winfo_manager(), (
+                'Clearing directives must reclaim vertical space')
             app._responder_use_custom_style()
             assert app.responder.style_mode=='Custom personality'
+            assert 'disabled' not in app.responder_tone_combo.state()
+            assert 'disabled' not in app.responder_humour_combo.state()
+            assert 'disabled' not in app.responder_responsiveness_combo.state()
+            assert 'disabled' not in app.responder_reply_interval_scale.state()
             assert app.responder.save_history, (
                 'Custom personality must not disable background logging')
             assert app.responder_personality_entry.cget('state')=='normal'

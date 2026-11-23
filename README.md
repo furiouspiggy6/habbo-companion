@@ -1,5 +1,44 @@
 # Habbo Companion
 
+## v1.1.82 — Independent chat personas with temporary instructions
+
+**Recreate a chat persona from saved logs** now uses only the selected
+player's observed chat history and current room context to determine how
+they react and speak. The custom **Personality** text, **Tone**, **Humour**,
+**Reply frequency (Natural/Chatty)**, **Reply Speed** slider and **Rotate
+styles** control are disabled when a recorded persona is selected. These
+generic settings are **omitted from the AI request** in persona mode, not
+just visually greyed out. Switching to **Use custom personality** restores
+them. Persona mode keeps a 30-second minimum gap as an anti-spam safeguard.
+
+**Temporary instructions** is a new text area on the main AI Responder page.
+Enter one rule per line and click **Add instruction**. The app shows current
+instructions and their remaining durations. Select an instruction and click
+**Remove selected**, or **Clear all**. Examples:
+
+- `be mean to Marc for 10mins`: temporarily use mildly cheeky teasing
+  toward Marc in relevant conversations, without abuse or threats
+- `type slow`: delay each generated outgoing G-Earth message by
+  **10 seconds** until removed (G-Earth sends one complete chat packet;
+  it cannot simulate individual keystrokes or display per-letter typing)
+- `pretend to go afk for 2mins`: **send no AI replies** for two minutes;
+  any pending generation/delayed send is cancelled immediately
+- `talk about coffee for 3mins`: add an ordinary user-defined behaviour
+  direction for three minutes. Other plain-language instructions are
+  accepted as text directions for the model, not executed as code.
+
+Supported time formats include seconds, mins/minutes and hours (up to
+4 hours). Untimed generic or teasing directions default to ten minutes;
+untimed AFK defaults to two minutes; untimed `type slow` remains active
+until removed. Temporary instructions take precedence over the baseline
+persona *only while active*. The main AI thread automatically expires them
+and updates the list; these transient rules **do not persist after an
+application restart**. Every rule change invalidates any old in-flight reply.
+
+The existing **Reply to** room-player selector and safety filters,
+background public-chat logging, G-Earth connection and packet sender are
+unchanged. Both AI response generation and Auto-send still start OFF.
+
 ## v1.1.81 — Recreate a fuller conversational persona from chat logs
 
 In **AI Responder**, the saved-user selector is now called **Recreate a chat

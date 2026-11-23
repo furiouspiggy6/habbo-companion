@@ -1,3 +1,31 @@
+HABBO COMPANION v1.1.82 — TEMPORARY PERSONA INSTRUCTIONS
+============================================================
+
+RECREATED CHAT PERSONA
+- Uses real chat-log observations, without the custom personality/assistant
+  description, Tone, Humour, Natural/Chatty or custom Reply Speed slider.
+- All these inactive controls are disabled visually and removed from the
+  OpenAI request while chat-log persona mode is selected.
+- The existing 30-second minimum chat gap remains to prevent flooding.
+
+TEMPORARY INSTRUCTIONS (MAIN AI RESPONDER SCREEN)
+- Type one instruction per line, press Add instruction.
+- See active commands and remaining times; Remove selected or Clear all.
+- "be mean to Marc for 10mins" = playful snark toward Marc (non-abusive).
+- "type slow" = 10-second wait before each G-Earth chat send.
+  It does NOT type individual letters; G-Earth sends a full packet.
+- "pretend to go afk for 2mins" = no AI replies for 2 minutes.
+  In-flight drafts and delayed sends are cancelled when AFK starts.
+- "talk about coffee for 3mins" = a temporary free-text behaviour direction.
+- Timers expire automatically. Rules are not saved across restarts.
+- Without a duration: generic/teasing instructions last 10 minutes, AFK
+  lasts 2 minutes, and type slow runs until manually removed.
+- Supported duration units: seconds, minutes, hours (up to 4 hours).
+
+Existing G-Earth sending, room-user search, saved log search and public
+chat archive remain unchanged. Automatic sending remains opt-in.
+
+
 HABBO COMPANION v1.1.81 — FULLER CHAT PERSONA SIMULATION
 ==========================================================
 

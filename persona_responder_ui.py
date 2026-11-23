@@ -97,6 +97,11 @@ class PersonaResponderMixin:
         self._responder_last_draft=None
         self._responder_test_running=False
         self._responder_advanced_open=False
+        self._responder_scheduled_send=None
+        self._responder_instruction_rows=[]
+        self._responder_instruction_display=()
+        self.responder_instruction_status_var=tk.StringVar(
+            value='No temporary instructions active.')
 
     def _make_responder_panel(self,parent):
         """Keep everyday controls on one page; tuck optional controls away."""
@@ -264,6 +269,46 @@ class PersonaResponderMixin:
                       anchor='w',pady=(5,0))
         self._responder_update_target_controls()
 
+        ttk.Label(frame,text='TEMPORARY INSTRUCTIONS',
+                  style='Panel.TLabel').pack(anchor='w',pady=(11,5))
+        ttk.Label(frame,text='Add a temporary direction that overrides the '
+                  'persona while active. One instruction per line.',
+                  style='Panel.TLabel',wraplength=640).pack(
+                      anchor='w',pady=(0,5))
+        self.responder_instruction_input=tk.Text(
+            frame,height=2,wrap='word',font=('Segoe UI',10),
+            bg=p['field'],fg=p['text'],insertbackground=p['text'],
+            relief='flat')
+        self.responder_instruction_input.pack(fill='x',pady=(0,6))
+        directive_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        directive_buttons.pack(fill='x',pady=(0,5))
+        ttk.Button(directive_buttons,text='Add instruction',
+                   command=self._responder_add_instructions).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(directive_buttons,text='Remove selected',
+                   command=self._responder_remove_instruction).pack(
+                       side='left',padx=(0,7))
+        ttk.Button(directive_buttons,text='Clear all',
+                   command=self._responder_clear_instructions).pack(side='left')
+        self._responder_instruction_list_area=ttk.Frame(
+            frame,style='Panel.TFrame')
+        self._responder_instruction_list_area.pack(fill='x')
+        self.responder_instruction_list=tk.Listbox(
+            self._responder_instruction_list_area,
+            height=3,exportselection=False,selectmode='browse',
+            font=('Segoe UI',10),bg=p['field'],fg=p['text'],
+            selectbackground=p['accent'],selectforeground=p['background'],
+            borderwidth=0,highlightthickness=1,relief='flat')
+        ttk.Label(frame,textvariable=self.responder_instruction_status_var,
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(4,5))
+        ttk.Label(frame,text='Examples: be mean to Marc for 10mins '
+                  '(playful teasing), type slow (adds a 10-second send delay), '
+                  'pretend to go afk for 2mins (no replies). Timers start '
+                  'when added; instructions are not saved after restarting.',
+                  style='Panel.TLabel',wraplength=650).pack(
+                      anchor='w',pady=(0,7))
+
         actions=ttk.Frame(frame,style='Panel.TFrame')
         actions.pack(fill='x',pady=(12,13))
         ttk.Button(actions,text='Save changes',
@@ -283,9 +328,10 @@ class PersonaResponderMixin:
         row.pack(fill='x',pady=(0,8))
         ttk.Label(row,text='Reply frequency',style='Panel.TLabel').pack(
             side='left',padx=(0,8))
-        ttk.Combobox(row,textvariable=self.responder_responsiveness_var,
-                     values=('Natural','Chatty'),state='readonly',
-                     width=13).pack(side='left',padx=(0,16))
+        self.responder_responsiveness_combo=ttk.Combobox(
+            row,textvariable=self.responder_responsiveness_var,
+            values=('Natural','Chatty'),state='readonly',width=13)
+        self.responder_responsiveness_combo.pack(side='left',padx=(0,16))
         ttk.Label(row,text='Model',style='Panel.TLabel').pack(
             side='left',padx=(0,8))
         ttk.Entry(row,textvariable=self.responder_model_var,width=17).pack(side='left')
@@ -293,23 +339,29 @@ class PersonaResponderMixin:
         row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
         row.pack(fill='x',pady=(0,8))
         ttk.Label(row,text='Tone',style='Panel.TLabel').pack(side='left',padx=(0,8))
-        ttk.Combobox(row,textvariable=self.responder_tone_var,state='readonly',
-                     values=('Casual','Friendly','Playful','Dry','Sarcastic','Serious'),
-                     width=15).pack(side='left',padx=(0,15))
+        self.responder_tone_combo=ttk.Combobox(
+            row,textvariable=self.responder_tone_var,state='readonly',
+            values=('Casual','Friendly','Playful','Dry','Sarcastic','Serious'),
+            width=15)
+        self.responder_tone_combo.pack(side='left',padx=(0,15))
         ttk.Label(row,text='Humour',style='Panel.TLabel').pack(
             side='left',padx=(0,8))
-        ttk.Combobox(row,textvariable=self.responder_humour_var,
-                     state='readonly',values=('0','1','2','3','4','5'),
-                     width=5).pack(side='left')
+        self.responder_humour_combo=ttk.Combobox(
+            row,textvariable=self.responder_humour_var,
+            state='readonly',values=('0','1','2','3','4','5'),
+            width=5)
+        self.responder_humour_combo.pack(side='left')
 
         self._responder_logs_frame=ttk.Frame(
             self._responder_advanced_frame,style='Panel.TFrame')
         ttk.Label(self._responder_logs_frame,
                   text='Saved chat-log preferences',style='Panel.TLabel').pack(
                       anchor='w',pady=(4,5))
-        ttk.Checkbutton(self._responder_logs_frame,
-                        text='Rotate through other logged styles every 5 minutes',
-                        variable=self.responder_rotation_var).pack(anchor='w',pady=3)
+        self.responder_rotation_check=ttk.Checkbutton(
+            self._responder_logs_frame,
+            text='Rotate through other logged styles every 5 minutes',
+            variable=self.responder_rotation_var)
+        self.responder_rotation_check.pack(anchor='w',pady=3)
         ttk.Checkbutton(self._responder_logs_frame,
                         text='Save public room chat in background (even when AI is off)',
                         variable=self.responder_capture_var,
@@ -365,13 +417,19 @@ class PersonaResponderMixin:
         return '1 reply at most every '+readable
 
     def _responder_reply_speed_changed(self,value):
-        """Apply slider changes live; persist on release or Save changes."""
+        """Apply slider only to a custom personality, not copied personas."""
+        if self.responder_style_mode_var.get()=='Chat-log style':
+            self.responder_reply_interval_text.set(
+                'Persona mode: automatic 30s anti-spam gap')
+            return
         seconds=clamp_reply_interval(value)
         self.responder.reply_cooldown_seconds=seconds
         self.responder_reply_interval_text.set(
             self._responder_reply_speed_label(seconds))
 
     def _responder_commit_reply_speed(self,event=None):
+        if self.responder_style_mode_var.get()=='Chat-log style':
+            return
         seconds=clamp_reply_interval(self.responder_reply_interval_var.get())
         self.responder_reply_interval_var.set(seconds)
         self._responder_reply_speed_changed(seconds)
@@ -487,6 +545,23 @@ class PersonaResponderMixin:
         copying=(mode=='Chat-log style')
         self.responder_personality_entry.configure(
             state='disabled' if copying else 'normal')
+        # A recreated persona must not inherit generic personality, tone,
+        # humour, Chatty/Natural, or the custom Reply Speed slider.
+        for combo in (self.responder_tone_combo,self.responder_humour_combo,
+                      self.responder_responsiveness_combo):
+            combo.configure(state='disabled' if copying else 'readonly')
+        if copying:
+            self.responder_reply_interval_scale.state(['disabled'])
+            self.responder_rotation_check.state(['disabled'])
+            self.responder_reply_interval_text.set(
+                'Persona mode: automatic 30s anti-spam gap')
+            self.responder_rotation_var.set(False)
+        else:
+            self.responder_reply_interval_scale.state(['!disabled'])
+            self.responder_rotation_check.state(['!disabled'])
+            self.responder_reply_interval_text.set(
+                self._responder_reply_speed_label(
+                    self.responder.reply_cooldown_seconds))
         if copying:
             reference=self.responder.persona_reference()
             count=(reference or {}).get(
@@ -593,8 +668,10 @@ class PersonaResponderMixin:
         self.responder_style_mode_var.set('Chat-log style')
         # Selecting a specific user must not rotate away to someone else.
         self.responder_rotation_var.set(False)
-        self._responder_update_style_controls()
         self._responder_apply()
+        # Apply the widget states after the model/config change as well; this
+        # ensures no save-time UI redraw restores generic settings.
+        self._responder_update_style_controls()
         sample_count=reference['evidence_messages_in_recent_log_window']
         confidence=('Limited evidence; gather more messages for a closer match.'
                     if sample_count<60 else
@@ -611,6 +688,101 @@ class PersonaResponderMixin:
         self._responder_hide_style_matches()
         self._responder_update_style_controls()
         self._responder_apply()
+
+    def _responder_instruction_changed(self):
+        """Invalidate any in-flight or scheduled chat using outdated rules."""
+        self._responder_generation+=1
+        self.responder.running=False
+        self._responder_scheduled_send=None
+        self.responder.pending.clear()
+        self.responder.pending_since=None
+        self.responder.has_trigger=False
+
+    def _responder_add_instructions(self):
+        lines=self.responder_instruction_input.get('1.0','end-1c').splitlines()
+        added=[]
+        errors=[]
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                added.append(self.responder.add_temporary_instruction(line))
+            except ValueError as exc:
+                errors.append(str(exc))
+        if added:
+            self._responder_instruction_changed()
+            self.responder_instruction_input.delete('1.0','end')
+            for rule in added:
+                self._responder_log('Temporary instruction added: '+rule['label'])
+            if any(rule['kind']=='afk' for rule in added):
+                self._responder_log(
+                    'AFK active: live AI drafts and outgoing messages paused.')
+        if errors:
+            self.responder_instruction_status_var.set('; '.join(errors)[:230])
+            self._responder_log('Instruction error: '+'; '.join(errors)[:200])
+        self._responder_refresh_instructions(force=bool(added))
+
+    def _responder_remove_instruction(self):
+        selection=self.responder_instruction_list.curselection()
+        if not selection or selection[0]>=len(self._responder_instruction_rows):
+            self.responder_instruction_status_var.set(
+                'Select an active instruction to remove.')
+            return
+        rule_id=self._responder_instruction_rows[selection[0]]
+        if self.responder.remove_temporary_instruction(rule_id):
+            self._responder_instruction_changed()
+            self._responder_log('Temporary instruction removed.')
+        self._responder_refresh_instructions(force=True)
+
+    def _responder_clear_instructions(self):
+        if self.responder.temporary_instructions:
+            self.responder.temporary_instructions.clear()
+            self._responder_instruction_changed()
+            self._responder_log('All temporary instructions cleared.')
+        self._responder_refresh_instructions(force=True)
+
+    def _responder_refresh_instructions(self,force=False):
+        rules=self.responder.active_temporary_instructions()
+        now=time.monotonic()
+        labels=[]
+        for rule in rules:
+            expiry=rule['expires_at']
+            if expiry is None:
+                suffix='until removed'
+            else:
+                remaining=max(0,int(expiry-now+0.999))
+                suffix=(f'{remaining//60}m {remaining%60:02d}s'
+                        if remaining>=60 else f'{remaining}s')
+            labels.append(f"{rule['label']}  •  {suffix}")
+        view=tuple((rule['id'],label) for rule,label in zip(rules,labels))
+        if not force and view==self._responder_instruction_display:
+            return
+        self._responder_instruction_display=view
+        box=self.responder_instruction_list
+        selected=box.curselection()
+        old_selected=(self._responder_instruction_rows[selected[0]]
+                      if selected and selected[0]<len(self._responder_instruction_rows)
+                      else None)
+        self._responder_instruction_rows=[rule['id'] for rule in rules]
+        box.delete(0,'end')
+        for label in labels:
+            box.insert('end',label)
+        if labels:
+            box.configure(height=min(4,len(labels)))
+            if not box.winfo_manager():
+                box.pack(fill='x',pady=(2,5))
+            if old_selected in self._responder_instruction_rows:
+                box.selection_set(self._responder_instruction_rows.index(
+                    old_selected))
+        else:
+            box.pack_forget()
+        if rules:
+            self.responder_instruction_status_var.set(
+                f"{len(rules)} active instruction(s). "
+                "Expired instructions disappear automatically.")
+        else:
+            self.responder_instruction_status_var.set(
+                'No temporary instructions active.')
 
     def _responder_change_logging(self):
         """Apply the logging switch without resetting any AI conversation."""
@@ -671,7 +843,9 @@ class PersonaResponderMixin:
         self.responder.humour=int(self.responder_humour_var.get())
         self.responder.responsiveness=self.responder_responsiveness_var.get()
         self.responder.persona=self.responder_persona_var.get().strip()[:80] or 'Mario35'
-        self.responder.auto_rotate=bool(self.responder_rotation_var.get())
+        self.responder.auto_rotate=(bool(self.responder_rotation_var.get())
+                                   if self.responder.style_mode!='Chat-log style'
+                                   else False)
         # Keep background archival independent of personality source.
         self.responder.save_history=bool(self.responder_capture_var.get())
         self.responder.log_dir=Path(
@@ -679,6 +853,7 @@ class PersonaResponderMixin:
 
     def _responder_apply(self):
         self._responder_generation+=1
+        self._responder_scheduled_send=None
         self.responder.running=False
         self._responder_test_running=False
         self._responder_read_personality()
@@ -804,6 +979,10 @@ class PersonaResponderMixin:
             self._responder_results.put((generation,None,str(exc)[:200],test))
 
     def _responder_tick(self):
+        self._responder_refresh_instructions()
+        if self.responder.is_temporarily_afk() and self._responder_scheduled_send:
+            self._responder_scheduled_send=None
+            self._responder_log('Delayed AI send cancelled because AFK is active.')
         for _ in range(6):
             try:
                 generation,reply,error,test=self._responder_results.get_nowait()
@@ -820,11 +999,9 @@ class PersonaResponderMixin:
                     text=reply or '(AI returned SKIP)'
                     self.responder_status_var.set('Test preview complete. Nothing was sent.')
                     self._responder_log('TEST PREVIEW '+text)
-                # Test replies are never remembered or sent, regardless
-                # of Auto-send or the active live-room status.
                 continue
             self.responder.running=False
-            if not self.responder.enabled:
+            if not self.responder.enabled or self.responder.is_temporarily_afk():
                 continue
             if error:
                 self.responder_status_var.set('AI error: '+error)
@@ -839,12 +1016,36 @@ class PersonaResponderMixin:
                 self._responder_last_draft=reply
                 self._responder_log('LIVE DRAFT '+reply)
                 if self.responder_send_var.get():
+                    delay=self.responder.temporary_send_delay()
+                    if delay:
+                        self._responder_scheduled_send=(
+                            time.monotonic()+delay,reply,generation)
+                        self.responder_status_var.set(
+                            f'Slow typing active: sending after {int(delay)}s '
+                            '(one full G-Earth chat packet).')
+                        self._responder_log(
+                            f'Slow-send scheduled: {int(delay)} second delay.')
+                    else:
+                        outcome=self._responder_send(reply)
+                        self.responder_status_var.set(outcome)
+                        self._responder_log(outcome)
+                else:
+                    self.responder_status_var.set('Live draft ready (preview mode).')
+        if self._responder_scheduled_send:
+            due,reply,generation=self._responder_scheduled_send
+            if time.monotonic()>=due:
+                self._responder_scheduled_send=None
+                if (generation==self._responder_generation and
+                        self.responder.enabled and
+                        self.responder_send_var.get() and
+                        not self.responder.is_temporarily_afk()):
                     outcome=self._responder_send(reply)
                     self.responder_status_var.set(outcome)
                     self._responder_log(outcome)
-                else:
-                    self.responder_status_var.set('Live draft ready (preview mode).')
-        if not self.responder.enabled:
+            else:
+                # Prevent overlapping requests from stacking multiple sends.
+                return
+        if not self.responder.enabled or self.responder.is_temporarily_afk():
             return
         payload=self.responder.pop_ready()
         if not payload:
