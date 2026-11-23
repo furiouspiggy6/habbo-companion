@@ -43,6 +43,45 @@ try:
     assert app.responder_log_text.winfo_exists(), 'AI Responder log failed to build'
     assert not app.responder.enabled, 'AI must start disabled'
     assert not app.responder_send_var.get(), 'Auto-send must start disabled'
+    # Simplified single-screen responder: advanced controls remain available
+    # but hidden; switching targets must reveal the username field in place.
+    assert not app._responder_advanced_open, 'Advanced must start collapsed'
+    assert not app._responder_advanced_frame.winfo_manager(), (
+        'Advanced settings should be hidden initially')
+    assert app.responder_personality_entry.winfo_exists(), (
+        'Main personality editor missing')
+    assert app.responder_target_selector.winfo_exists(), (
+        'Main targeting selector missing')
+    assert not app._responder_targets_frame.winfo_manager(), (
+        'Usernames should be hidden when targeting Everyone')
+    app.responder_target_mode_var.set('Selected users')
+    app._responder_update_target_controls()
+    assert app._responder_targets_frame.winfo_manager()=='pack', (
+        'Selected users input did not appear')
+    assert app._responder_targets_frame.master==app._responder_targets_area, (
+        'Selected users input moved out of its reserved layout')
+    app.responder_target_mode_var.set('Everyone')
+    app._responder_update_target_controls()
+    assert not app._responder_targets_frame.winfo_manager(), (
+        'Selected users input did not hide')
+    app._responder_toggle_advanced()
+    assert app._responder_advanced_open
+    assert app._responder_advanced_frame.winfo_manager()=='pack', (
+        'Advanced settings did not expand')
+    app.responder_style_mode_var.set('Chat-log style')
+    app._responder_update_style_controls()
+    assert app._responder_logs_frame.winfo_manager()=='pack', (
+        'Optional chat-log controls are inaccessible')
+    app.responder_style_mode_var.set('Custom personality')
+    app._responder_update_style_controls()
+    assert not app._responder_logs_frame.winfo_manager(), (
+        'Legacy style fields should hide in custom mode')
+    app._responder_toggle_advanced()
+    assert not app._responder_advanced_open
+    assert not app._responder_advanced_frame.winfo_manager(), (
+        'Advanced settings did not collapse')
+    assert not app.responder.enabled and not app.responder_send_var.get(), (
+        'Navigating UI controls should never enable chat or sending')
     assert app._ui_scroll_canvases.keys()>=PAGES, 'Scrollable page missing'
     for page in PAGES:
         app._ui_show_page(page)
