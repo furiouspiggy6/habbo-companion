@@ -13,7 +13,7 @@ sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
-PAGES={'overview','accounts','tcp','chat','packet','fuzz','manip',
+PAGES={'overview','accounts','tcp','chat','responder','packet','fuzz','manip',
        'classic','headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
@@ -40,6 +40,9 @@ try:
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.rules_tree.winfo_exists(), 'Packet Manipulator failed to build'
     assert app.tcp_log.winfo_exists(), 'Server log failed to build'
+    assert app.responder_log_text.winfo_exists(), 'AI Responder log failed to build'
+    assert not app.responder.enabled, 'AI must start disabled'
+    assert not app.responder_send_var.get(), 'Auto-send must start disabled'
     assert app._ui_scroll_canvases.keys()>=PAGES, 'Scrollable page missing'
     for page in PAGES:
         app._ui_show_page(page)
@@ -53,6 +56,6 @@ try:
     app._ui_refresh_dashboard()
     assert app._ui_dashboard_vars['accounts'].get().isdigit()
     assert root.winfo_width()>=940, 'Workspace width collapsed'
-    print('Modern-dark Tkinter workspace and all ten navigation pages: PASS')
+    print('Modern-dark Tkinter workspace and all eleven navigation pages: PASS')
 finally:
     root.destroy()

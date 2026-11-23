@@ -30,17 +30,22 @@ class LegacyUpdaterCompatibilityTests(unittest.TestCase):
         self.assertIn("def launch_local_classic(", text)
         self.assertIn("def parse_classic_ticket(", text)
         self.assertIn("class HabboTcpSession:", text)
+        self.assertIn("class PersonaResponder:", text)
+        self.assertIn("class PersonaResponderMixin:", text)
         self.assertIn("HEADLESS_TEST_MAX_ACCOUNTS = MAX_ACCOUNTS", text)
         self.assertNotIn("from headless_transport import",text)
         self.assertNotIn("from local_classic_launch import",text)
         self.assertNotIn("from habbo_tcp import",text)
+        self.assertNotIn("from persona_responder import",text)
+        self.assertNotIn("from persona_responder_ui import",text)
 
     def test_zip_is_accepted_by_legacy_allowlist_and_current_verifier(self):
         with tempfile.TemporaryDirectory() as tmp:
             target=Path(tmp)
             for path in ("VERSION", "README.txt", "Habbo_Companion.pyw",
                          "Habbo_Update_Helper.py", "headless_transport.py",
-                         "local_classic_launch.py", "habbo_tcp.py"):
+                         "local_classic_launch.py", "habbo_tcp.py",
+                         "persona_responder.py", "persona_responder_ui.py"):
                 shutil.copy2(ROOT/path,target/path)
             build(target)
             version=(target/"VERSION").read_text(encoding="utf-8").strip()

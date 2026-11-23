@@ -1,5 +1,40 @@
 # Habbo Companion
 
+## v1.1.73 — Optional AI Responder
+
+The **AI Responder** has its own sidebar workspace. It listens to **new** public
+room messages through Companion's existing Habbo AIR chat feed; the older
+`Responder_Single.py`/ `capture.py` pair and hard-coded chat coordinates are
+not needed. It can load style examples from your old `chat_logs/users` folder,
+lock onto the first eligible speaker for 60 seconds (or use a named target),
+rotate styles every five minutes, generate short replies and choose `SKIP`.
+The name filter containing `dan`, repeated-question checks, and four-second
+minimum reply interval are retained. Whisper messages are never triggers.
+
+**Setup:** Install the optional API client with `py -m pip install openai`
+using the Python interpreter that runs Companion. In PowerShell, set
+`$env:OPENAI_API_KEY = "<your-key>"` before launching Companion from that
+same shell (or configure a secure user environment variable). Your key is
+not written to Companion settings. Open **AI Responder**, select the style
+log folder, click **Apply settings**, then enable the responder. AI is **OFF
+by default**, and automatic in-game sending is **separately OFF by default**.
+While enabled, the selected historical chat samples and recent room context
+are sent to the OpenAI API for generation. Leave disabled if you do not want
+chat content sent to a third-party service.
+
+For automatic sending, attach **Packet Viewer → G-Earth** to the Habbo AIR
+session and type one ordinary public chat message yourself. The Companion
+learns that live session's outgoing Chat packet expression and changes only
+its message-text field; it will **not** invent packet IDs or use screen
+coordinates. With automatic sending off, you can inspect drafts and send the
+latest one manually. This path requires a working G-Earth session and needs
+live Windows verification; Direct TCP connections are not a chat-send backend.
+
+The update ZIP still contains only the three application files accepted by
+older Companion update helpers. Both responder modules are bundled into the
+application at release-build time. No additional network traffic is generated
+until you enable AI.
+
 ## Protocol Lab connected server status (read-only)
 
 Protocol Lab displays an authenticated Direct TCP socket's observed peer IP/port,
