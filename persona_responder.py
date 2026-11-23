@@ -18,7 +18,23 @@ import time
 BLOCKED_NAME_PARTS = ("dan",)
 MAX_REPLY_CHARS = 140
 OBSERVATION_SECONDS = 0.7
-REPLY_COOLDOWN_SECONDS = 4.0
+MIN_REPLY_INTERVAL_SECONDS = 5
+MAX_REPLY_INTERVAL_SECONDS = 120
+DEFAULT_REPLY_INTERVAL_SECONDS = 30
+
+
+def clamp_reply_interval(seconds):
+    """Snap the reply-rate slider to five-second steps and safe bounds."""
+    try:
+        value = float(seconds)
+        if not value == value or abs(value) == float("inf"):
+            raise ValueError("nonfinite")
+        rounded = int((value + 2.5) // 5) * 5
+    except (TypeError, ValueError, OverflowError):
+        rounded = DEFAULT_REPLY_INTERVAL_SECONDS
+    return max(MIN_REPLY_INTERVAL_SECONDS,
+               min(MAX_REPLY_INTERVAL_SECONDS, rounded))
+
 TARGET_LOCK_SECONDS = 60.0
 PERSONA_ROTATION_SECONDS = 300.0
 ACTIVE_ROOM_SECONDS = 600.0
@@ -203,6 +219,7 @@ class PersonaResponder:
         self.target_seen_at = 0.0
         self.last_rotation_at = time.monotonic()
         self.last_reply_at = 0.0
+        self.reply_cooldown_seconds = DEFAULT_REPLY_INTERVAL_SECONDS
         self.room_users = {}
         self.context = deque(maxlen=18)
         self.pending = deque(maxlen=25)
@@ -369,7 +386,9 @@ class PersonaResponder:
         self.pending_since = None
         triggered = self.has_trigger
         self.has_trigger = False
-        if not triggered or now - self.last_reply_at < REPLY_COOLDOWN_SECONDS:
+        if (not triggered or
+                (self.last_reply_at > 0 and
+                 now - self.last_reply_at < self.reply_cooldown_seconds)):
             return None
         profile = self._personality_payload()
         if "error" in profile:

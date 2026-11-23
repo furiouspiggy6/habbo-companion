@@ -14,7 +14,7 @@ from tkinter import ttk, filedialog
 
 from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
-    list_style_usernames, matching_style_usernames,
+    list_style_usernames, matching_style_usernames, clamp_reply_interval,
 )
 
 
@@ -25,6 +25,8 @@ class PersonaResponderMixin:
         chosen=str(self.config.get('responder_log_dir','')).strip()
         self._responder_default_logs=default_logs
         self.responder=PersonaResponder(chosen or default_logs)
+        self.responder.reply_cooldown_seconds=clamp_reply_interval(
+            self.config.get('responder_reply_interval',30))
         # Always save fresh messages in Companion's own per-user archive,
         # even if the user browses a different historical style source.
         self.responder.archive_dir=self._responder_app_dir/'persona_logs'/'users'
@@ -53,6 +55,11 @@ class PersonaResponderMixin:
         self.responder.fixed_target=''
         self.responder_enabled_var=tk.BooleanVar(value=False)
         self.responder_send_var=tk.BooleanVar(value=False)
+        self.responder_reply_interval_var=tk.DoubleVar(
+            value=self.responder.reply_cooldown_seconds)
+        self.responder_reply_interval_text=tk.StringVar(
+            value=self._responder_reply_speed_label(
+                self.responder.reply_cooldown_seconds))
         self.responder_rotation_var=tk.BooleanVar(value=self.responder.auto_rotate)
         self.responder_capture_var=tk.BooleanVar(value=self.responder.save_history)
         self.responder_log_saving_var=tk.StringVar(value='')
@@ -113,6 +120,30 @@ class PersonaResponderMixin:
                         variable=self.responder_send_var).pack(anchor='w')
         ttk.Label(switches,text='Turn off sending to preview live replies without posting.',
                   style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,0))
+
+        speed=ttk.Frame(frame,style='Panel.TFrame')
+        speed.pack(fill='x',pady=(0,12))
+        title_row=ttk.Frame(speed,style='Panel.TFrame')
+        title_row.pack(fill='x',pady=(0,4))
+        ttk.Label(title_row,text='REPLY SPEED',style='Panel.TLabel').pack(
+            side='left')
+        ttk.Label(title_row,textvariable=self.responder_reply_interval_text,
+                  style='Panel.TLabel').pack(side='right')
+        self.responder_reply_interval_scale=ttk.Scale(
+            speed,from_=5,to=120,orient='horizontal',
+            variable=self.responder_reply_interval_var,
+            command=self._responder_reply_speed_changed)
+        self.responder_reply_interval_scale.pack(fill='x',pady=(0,2))
+        self.responder_reply_interval_scale.bind(
+            '<ButtonRelease-1>',self._responder_commit_reply_speed)
+        caption=ttk.Frame(speed,style='Panel.TFrame')
+        caption.pack(fill='x')
+        ttk.Label(caption,text='Faster (5s)',style='Panel.TLabel').pack(side='left')
+        ttk.Label(caption,text='Slower (2 min)',style='Panel.TLabel').pack(side='right')
+        ttk.Label(speed,text='Minimum time between AI replies. '
+                  'Slide right for less frequent responses.',
+                  style='Panel.TLabel',wraplength=630).pack(
+                      anchor='w',pady=(4,0))
 
         ttk.Label(frame,text='PERSONALITY',style='Panel.TLabel').pack(
             anchor='w',pady=(0,5))
@@ -322,6 +353,30 @@ class PersonaResponderMixin:
         else:
             self._responder_advanced_frame.pack_forget()
             self._responder_advanced_button.configure(text='Advanced options ▸')
+
+    @staticmethod
+    def _responder_reply_speed_label(seconds):
+        interval=clamp_reply_interval(seconds)
+        if interval>=60:
+            mins,rem=divmod(interval,60)
+            readable=(f'{mins} min' if not rem else f'{mins} min {rem} sec')
+        else:
+            readable=f'{interval} sec'
+        return '1 reply at most every '+readable
+
+    def _responder_reply_speed_changed(self,value):
+        """Apply slider changes live; persist on release or Save changes."""
+        seconds=clamp_reply_interval(value)
+        self.responder.reply_cooldown_seconds=seconds
+        self.responder_reply_interval_text.set(
+            self._responder_reply_speed_label(seconds))
+
+    def _responder_commit_reply_speed(self,event=None):
+        seconds=clamp_reply_interval(self.responder_reply_interval_var.get())
+        self.responder_reply_interval_var.set(seconds)
+        self._responder_reply_speed_changed(seconds)
+        self.config['responder_reply_interval']=seconds
+        self.save()
 
     def _responder_update_target_controls(self):
         if self.responder_target_mode_var.get()=='Selected users':
@@ -608,6 +663,7 @@ class PersonaResponderMixin:
         self.responder.running=False
         self._responder_test_running=False
         self._responder_read_personality()
+        self._responder_commit_reply_speed()
         self.responder.fixed_target=''
         self.responder.target_mode=self.responder_target_mode_var.get()
         self.responder.selected_users=self.responder_target_var.get().strip()
@@ -634,6 +690,7 @@ class PersonaResponderMixin:
             background_public_chat_logging=self.responder.save_history,
             responder_log_dir=str(self.responder.log_dir),
             responder_model=self.responder_model_var.get().strip() or 'gpt-5-mini',
+            responder_reply_interval=self.responder.reply_cooldown_seconds,
         )
         self.save()
         if valid_selection:
