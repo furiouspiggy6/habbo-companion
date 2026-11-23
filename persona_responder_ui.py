@@ -136,7 +136,7 @@ class PersonaResponderMixin:
             self._responder_suggestions_area,height=6,exportselection=False,
             selectmode='browse',font=('Segoe UI',10),
             bg=p['field'],fg=p['text'],
-            selectbackground=p['accent'],selectforeground=p['text'],
+            selectbackground=p['accent'],selectforeground=p['background'],
             borderwidth=0,highlightthickness=1,relief='flat')
         self.responder_style_matches_list.bind(
             '<<ListboxSelect>>',self._responder_select_style_user)
@@ -354,6 +354,7 @@ class PersonaResponderMixin:
         if not selected:
             return
         name=self.responder_style_matches_list.get(selected[0])
+        self.responder_style_matches_list.selection_clear(0,'end')
         if name not in self._responder_style_users:
             return
         directory=self._responder_style_directory()
@@ -373,7 +374,7 @@ class PersonaResponderMixin:
         self._responder_update_style_controls()
         self._responder_apply()
         self.responder_style_status_var.set(
-            f'Copying {name} writing style from {len(examples)} saved messages.')
+            f"Using {name}'s writing style ({len(examples)} message examples)."
         self._responder_log(
             f'Style changed to {name} ({len(examples)} saved message examples).')
 
