@@ -67,6 +67,7 @@ class PersonaResponderMixin:
         self._responder_results=queue.Queue()
         self._responder_generation=0
         self._responder_chat_template=None
+        self._responder_outgoing_seen=False
         self._responder_last_draft=None
         self._responder_test_running=False
 
@@ -206,6 +207,8 @@ class PersonaResponderMixin:
         ttk.Button(actions,text='Send latest LIVE draft manually',
                    command=self._responder_send_latest).pack(side='left',padx=(0,7))
         ttk.Button(actions,text='Stop',command=self._responder_stop).pack(side='left')
+        ttk.Button(frame,text='Check G-Earth chat capture',
+                   command=self._responder_check_capture).pack(anchor='w',pady=(0,6))
         ttk.Label(frame,textvariable=self.responder_status_var,
                   style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(5,9))
         ttk.Label(frame,text='RECENT DECISIONS / TEST PREVIEWS',
@@ -322,6 +325,25 @@ class PersonaResponderMixin:
                          args=(payload,model,self._responder_generation,True),
                          daemon=True).start()
 
+    def _responder_check_capture(self):
+        """Explain the live Chat capture status without sending any packets."""
+        if not self.packet_started or not self._habbo_session_connected:
+            result=('G-Earth game session is not connected. '
+                    'Connect Habbo AIR through Packet Viewer first.')
+        elif self._responder_chat_template is not None:
+            result='READY: the outgoing Chat format was learned from G-Earth.'
+        elif self._responder_outgoing_seen:
+            result=('G-Earth is observing outgoing packets, but has not '
+                    'identified a named public Chat packet. Send an ordinary '
+                    'public message, then check Packet Viewer / G-Earth packet '
+                    'names if it still fails.')
+        else:
+            result=('G-Earth is connected, but no outgoing packet has been '
+                    'observed while AI was enabled. Type a normal public '
+                    'message into Habbo AIR.')
+        self.responder_status_var.set(result)
+        self._responder_log(result)
+
     def _responder_stop(self):
         self.responder_enabled_var.set(False)
         self.responder_send_var.set(False)
@@ -333,6 +355,10 @@ class PersonaResponderMixin:
             return 'Not sent: connect Habbo through G-Earth first.'
         expr=chat_expression_from_template(self._responder_chat_template,reply)
         if expr is None:
+            if self._responder_outgoing_seen:
+                return ('Not sent: outgoing packets were seen, but G-Earth '
+                        'did not identify the public Chat packet. '
+                        'Check G-Earth packet names or click Check G-Earth chat capture.')
             return 'Not sent: type one normal public Habbo chat line to learn its format.'
         try:
             ext=self.packet_extension
