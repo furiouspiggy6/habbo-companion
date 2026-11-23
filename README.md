@@ -1,5 +1,40 @@
 # Habbo Companion
 
+## v1.1.96 — One-click clientless profile launch (AIR-free)
+
+Open **Clientless Bot**, select a saved profile in the dropdown (the
+selection itself starts it), or click **Run selected profile**. The same
+option is on **Accounts → Run selected profile (clientless, no AIR window)**.
+
+Companion first attempts an existing saved website session, and falls back
+to its already-implemented isolated private background browser if needed.
+It requests an official SSO ticket, authenticates an independent Direct TCP
+connection and **requests entry into the last saved numeric room ID** (Coffee
+House **69118545** by default). The user must make the initial profile
+selection; simply opening Companion never triggers an automatic room join.
+Only the requested profile is targeted by the pending join, and stale login
+generations or disconnects cancel it. Existing authenticated profiles skip
+the login stage. Chat commands still have a manual 400ms send cooldown.
+
+**No HabboAIR or G-Earth required for the pinned WIN63-202611041140-327405090
+protocol baseline.** Bundled outgoing Chat, GetGuestRoom, Walk, Shout, Whisper,
+Dance, Sign, Posture, and LookTo IDs (plus incoming chat IDs) come from the
+Nov 7, 2026 source of
+[Volt-Renderer](https://github.com/plus-emulator/Volt-Renderer/tree/c8f74ffdd9c3eeb27a532a705e09b665b76e67a1).
+These are community source-derived compatibility mappings, **not confirmation
+that Habbo's current live server uses them**. Unknown AIR releases fail
+closed, with the older optional manual capture path retained. Leave room
+is not included in the pinned map because its ID was not verified.
+
+**Clientless-only mode** defaults ON, suppressing G-Earth automatic startup
+and attachment. It does not uninstall G-Earth; turn the mode off to use
+the advanced packet engine manually.
+
+Manual official sign-in may still be required if session login expires,
+CAPTCHA, MFA, or email verification is presented. A successful packet send
+only confirms local socket transmission, not actual room entry or chat
+display. Validate with a second account before relying on it.
+
 ## v1.1.95 — Saved Coffee House room shortcut
 
 **Clientless Bot → Saved Room** now always shows **Coffee House**
