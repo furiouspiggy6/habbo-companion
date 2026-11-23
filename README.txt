@@ -1,5 +1,22 @@
-HABBO COMPANION v1.1.68 — MODERN DARK WORKSPACE
+HABBO COMPANION v1.1.73 — AI RESPONDER + MODERN DARK WORKSPACE
 =================================================
+
+NEW IN v1.1.73: AI Responder is a separate, optional sidebar page. It reads the
+existing Habbo AIR public chat feed and can reuse legacy chat_logs/users style
+logs. Configure a style source and target (or automatic first-speaker lock),
+enable the responder, then inspect SKIP/draft decisions. Style rotation, question
+memory, cooldowns and blocked "dan" names are retained.
+
+The OpenAI Python package is optional: py -m pip install openai. Set the
+OPENAI_API_KEY environment variable before starting Companion. Enabling AI
+sends selected historical style samples and recent public room chat to OpenAI.
+AI starts OFF. Automatic sending starts OFF as a separate checkbox.
+
+For automatic sending, connect the G-Earth Packet Viewer and type one ordinary
+public chat message in the room first. The responder learns the actual outgoing
+Chat packet shape for that session; it never guesses packet IDs, drives the
+mouse, or uses Direct TCP sessions to send chat. Sending needs Windows/G-Earth
+verification. Whispers never trigger public replies.
 
 The Companion control window has been reorganised as a modern dark desktop
 workspace. The original Habbo client overlays and bubble artwork are unchanged.
