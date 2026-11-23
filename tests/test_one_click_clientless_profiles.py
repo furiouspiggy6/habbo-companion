@@ -39,6 +39,7 @@ def fake_app(connected=False):
                                                    if connected else {}),
         _tcp_inflight=set(),_tcp_generation={},_tcp_states={},
         _bot_pending_room={},_bot_walk_plans={},
+        _bot_run_room_targets={},_bot_multi_direct_ids=set(),
         bot_room_var=Var("69118545"),
         bot_status_var=Var(""),bot_account_var=Var(""),
         bot_gearth_var=Var(False),bot_gearth_status_var=Var(""),
@@ -48,6 +49,7 @@ def fake_app(connected=False):
         _tcp_render=lambda:None,
         _bot_send_action=lambda **kwargs:messages.append(kwargs),
         _bot_anti_afk_load_selected=lambda:None,
+        _bot_load_walk_preset=lambda:None,
     )
     def connect(account,auto_capture=False):
         connect_calls.append(auto_capture)
