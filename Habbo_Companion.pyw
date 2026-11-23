@@ -359,9 +359,19 @@ DEFAULT = dict(
     tcp_auto_connect=False,
     responder_persona='Mario35',
     responder_target='',
-    responder_rotation=True,
+    responder_rotation=False,
     responder_capture=False,
     responder_log_dir='',
+    responder_style_mode='Custom personality',
+    responder_personality=('A friendly, conversational Habbo player. Keep things '
+                           'casual and genuine, use natural short replies, and '
+                           'avoid sounding like a customer support bot.'),
+    responder_tone='Casual',
+    responder_humour=2,
+    responder_responsiveness='Natural',
+    responder_target_mode='Everyone',
+    responder_targets='',
+    responder_model='gpt-5-mini',
     update_manifest_url='https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json',
 )
 
