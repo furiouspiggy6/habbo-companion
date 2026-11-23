@@ -6548,6 +6548,61 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('Automatic walking ON.' if self.bot_auto_walk_var.get()
              else 'Automatic walking OFF.'))
 
+    def _bot_save_account_walk_preset(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_walk_status_var.set(
+                'Select an account in Connected account first.')
+            return
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        if str(self.bot_room_var.get()).strip()!=room:
+            self.bot_walk_status_var.set('Enter a valid Room ID first.')
+            return
+        try:
+            positions=clientless_walk_positions(
+                self.bot_walk_primary_var.get(),
+                self.bot_walk_backups_var.get())
+        except (ClientlessBotError,ValueError,TypeError) as exc:
+            self.bot_walk_status_var.set('Cannot save: '+str(exc)[:155])
+            return
+        if not positions:
+            self.bot_walk_status_var.set(
+                'Enter a primary X,Y. To remove an override use '
+                'Clear account override.')
+            return
+        all_presets=self.config.get('clientless_account_walk_presets',{})
+        all_presets=dict(all_presets) if isinstance(all_presets,dict) else {}
+        own=all_presets.get(account['id'],{})
+        own=dict(own) if isinstance(own,dict) else {}
+        own[room]=[list(point) for point in positions]
+        all_presets[account['id']]=own
+        self.config['clientless_account_walk_presets']=all_presets
+        self.save()
+        self.bot_walk_status_var.set(
+            account['label']+': '+str(len(positions))+
+            ' personal walking tile(s) saved for room '+room+'. '+
+            ('Automatic walking ON.' if self.bot_auto_walk_var.get()
+             else 'Enable Walk automatically after room entry to use them.'))
+
+    def _bot_clear_account_walk_preset(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_walk_status_var.set('Select an account first.')
+            return
+        room=clientless_saved_room_value(self.bot_room_var.get())
+        own_all=self.config.get('clientless_account_walk_presets',{})
+        own_all=dict(own_all) if isinstance(own_all,dict) else {}
+        own=own_all.get(account['id'],{})
+        own=dict(own) if isinstance(own,dict) else {}
+        own.pop(room,None)
+        if own:
+            own_all[account['id']]=own
+        else:
+            own_all.pop(account['id'],None)
+        self.config['clientless_account_walk_presets']=own_all
+        self.save()
+        self._bot_load_walk_preset()
+
     def _bot_arm_walk(self,ident,generation,session,room):
         """Arm only a saved, user-enabled route for the requested room."""
         self._bot_walk_plans.pop(ident,None)
