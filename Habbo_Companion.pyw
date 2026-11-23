@@ -5278,6 +5278,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_last_action_at={}
         # Pending one-click room entries are tied to the exact account generation.
         self._bot_pending_room={}
+        self._bot_run_room_targets={}
+        self._bot_multi_start_generation=0
+        self._bot_multi_ui_generation=0
+        self.bot_multi_status_var=tk.StringVar(
+            value='Select multiple profiles below and choose Run highlighted.')
         self._bot_gearth_bridges={}
         self._bot_walk_plans={}
         self._bot_self_ids={}
@@ -6213,6 +6218,42 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_run_selected).pack(side='left',padx=(0,7))
         ttk.Button(commands,text='Disconnect',
                    command=self._bot_disconnect_selected).pack(side='left')
+        ttk.Label(frame,text='MULTI-ACCOUNT CLIENTLESS',
+                  style='Section.TLabel').pack(anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Select multiple saved accounts using Ctrl/Shift '
+                  'or Select all. Run highlighted opens an independent '
+                  'session for each account and joins the Room ID below. '
+                  'Their auto-walk and anti-AFK run separately. '
+                  'G-Earth interception currently supports only one '
+                  'clientless session; turn G-Earth OFF for multi-account mode.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
+        table=ttk.Treeview(
+            frame,columns=('connection','room'),show='tree headings',
+            selectmode='extended',height=5)
+        table.heading('#0',text='Saved account')
+        table.heading('connection',text='Connection')
+        table.heading('room',text='Target room')
+        table.column('#0',width=180,minwidth=110,stretch=True)
+        table.column('connection',width=210,minwidth=130,stretch=True)
+        table.column('room',width=100,minwidth=80,stretch=False)
+        table.pack(fill='x',pady=(0,6))
+        self.bot_multi_tree=table
+        multi_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        multi_buttons.pack(fill='x',pady=(0,5))
+        ttk.Button(multi_buttons,text='Select all',
+                   command=self._bot_multi_select_all).pack(side='left',padx=(0,6))
+        ttk.Button(multi_buttons,text='Run highlighted',
+                   command=self._bot_multi_run_selected,
+                   style='Primary.TButton').pack(side='left',padx=(0,6))
+        ttk.Button(multi_buttons,text='Disconnect highlighted',
+                   command=self._bot_multi_disconnect_selected).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_multi_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(
+                      anchor='w',pady=(0,12))
+        self._bot_multi_ui_generation+=1
+        self._bot_multi_refresh()
+        self.root.after(2500,lambda generation=self._bot_multi_ui_generation:
+                        self._bot_multi_tick(generation))
         ttk.Checkbutton(
             frame,text='Clientless-only mode: never auto-start G-Earth',
             variable=self.bot_standalone_var,
@@ -6331,6 +6372,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if current not in items:
             self.bot_account_var.set(items[0] if items else '')
         self._bot_anti_afk_load_selected()
+        if hasattr(self,'bot_multi_tree'):
+            self._bot_multi_refresh()
 
     def _bot_selected_profile(self):
         selected=self.bot_account_var.get()
@@ -6789,7 +6832,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         self._bot_run_account(account)
 
-    def _bot_run_account(self,account):
+    def _bot_run_account(self,account,room_override=None):
         """One click: user-selected profile, optional G-Earth gameplay MITM.
 
         Login and RC4 remain in Companion. With G-Earth ON, post-auth gameplay
@@ -6810,11 +6853,17 @@ class ChatOverlayApp(PersonaResponderMixin):
             if not self._bot_start_gearth_bridge(ident):
                 self.bot_status_var.set(self.bot_gearth_status_var.get())
                 return
-        room=int(clientless_saved_room_value(self.bot_room_var.get()))
-        self.bot_room_var.set(str(room))
-        # A subsequent selection cancels unfinished joins and walking.
-        self._bot_pending_room.clear()
-        self._bot_walk_plans.clear()
+        room=(int(room_override) if room_override is not None else
+              int(clientless_saved_room_value(self.bot_room_var.get())))
+        if not 1<=room<=2147483647:
+            self.bot_status_var.set('Invalid clientless Room ID.')
+            return
+        if room_override is None:
+            self.bot_room_var.set(str(room))
+        # Crucial: never cancel another live profile's room join or walking.
+        self._bot_pending_room.pop(ident,None)
+        self._bot_walk_plans.pop(ident,None)
+        self._bot_run_room_targets[ident]=room
         session=self._tcp_sessions.get(ident)
         if session and session.authenticated and not session.stop.is_set():
             self._bot_send_action(account_override=account,
@@ -6865,6 +6914,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans.pop(account['id'],None)
         self._tcp_disconnect_one(account['id'])
         self._tcp_render()
+        self._bot_multi_refresh()
         self.bot_status_var.set('Disconnected '+account['label']+'.')
 
     def _bot_join_coffee_house(self):
@@ -7315,6 +7365,7 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_disconnect_one(self,ident):
         self._bot_pending_room.pop(ident,None)
+        self._bot_run_room_targets.pop(ident,None)
         bridge=self._bot_gearth_bridges.pop(ident,None)
         if bridge is not None:bridge.close()
         self._bot_walk_plans.pop(ident,None)
