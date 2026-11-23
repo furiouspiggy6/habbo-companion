@@ -287,8 +287,8 @@ class PersonaResponder:
         if len(unique) <= 80:
             return unique
         older = unique[:-40]
-        step = max(1, (len(older) + 39) // 40)
-        return older[::step][-40:] + unique[-40:]
+        indices = [i * (len(older) - 1) // 39 for i in range(40)]
+        return [older[i] for i in indices] + unique[-40:]
 
     def persona_reference(self):
         """Bounded chronological evidence for simulating a complete chat persona.
