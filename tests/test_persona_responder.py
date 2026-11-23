@@ -78,7 +78,7 @@ class PersonaResponderTests(unittest.TestCase):
         (folder/'invalid.name.txt').write_text("ignore",encoding='utf-8')
         (folder/'empty_dir.txt').mkdir()
         names=list_style_usernames(folder)
-        self.assertEqual(names,['alice','MaraGene','marioboy','Mario35'])
+        self.assertEqual(names,['alice','MaraGene','Mario35','marioboy'])
         self.assertEqual(matching_style_usernames(names,'MARA'),['MaraGene'])
         self.assertEqual(matching_style_usernames(names,'ar'),
                          ['MaraGene','Mario35','marioboy'])
@@ -178,7 +178,7 @@ class PersonaResponderTests(unittest.TestCase):
                 reply=generate_persona_reply(self.bot.test_payload("a","hi"))
         self.assertEqual(reply,"hey there!")
         self.assertIn("test_mode",responses.last["input"][0]["content"])
-        self.assertIn("DO NOT imitate",responses.last["input"][0]["content"])
+        self.assertIn("do not imitate anyone",responses.last["input"][0]["content"])
 
     def test_actual_g_earth_expression_is_used_for_capture(self):
         # G-Python's g_string is the legacy/raw representation: it cannot
