@@ -109,13 +109,18 @@ def blocked_name(username):
     return any(part in name for part in BLOCKED_NAME_PARTS)
 
 
-def parse_style_message(raw):
-    """Support legacy capture.py logs and newly captured Companion logs."""
+def parse_style_message(raw, expected_username=None):
+    """Parse original chat text without discarding speech before a colon.
+
+    Per-user logs use "[timestamp] Name: message" but somebody can also
+    write "my take: ..." or "today: ..." as part of their actual message.
+    Only strip the source username when it matches the selected file.
+    """
     value = raw.strip()
     value = re.sub(r"^\[[^\]]+\]\s*", "", value)
-    if ":" in value:
+    if expected_username and ":" in value:
         prefix, rest = value.split(":", 1)
-        if prefix and len(prefix) <= 80 and rest.strip():
+        if prefix.strip().casefold() == str(expected_username).strip().casefold():
             value = rest.strip()
     return value.replace("\r", " ").replace("\n", " ").strip()
 
@@ -274,14 +279,16 @@ class PersonaResponder:
             return []
         unique, seen = [], set()
         for line in lines:
-            value = parse_style_message(line)
+            value = parse_style_message(line, self.persona)
             if not value or value.casefold() in seen:
                 continue
             seen.add(value.casefold())
             unique.append(value[:300])
         if len(unique) <= 80:
             return unique
-        return random.sample(unique[:-40], 40) + unique[-40:]
+        older = unique[:-40]
+        step = max(1, (len(older) + 39) // 40)
+        return older[::step][-40:] + unique[-40:]
 
     def persona_reference(self):
         """Bounded chronological evidence for simulating a complete chat persona.
@@ -299,7 +306,7 @@ class PersonaResponder:
             return None
         messages = []
         for line in raw:
-            text = parse_style_message(line)
+            text = parse_style_message(line, self.persona)
             if text:
                 messages.append(text[:250])
         if not messages:
