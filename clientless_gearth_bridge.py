@@ -178,11 +178,13 @@ class ClientlessGearthBridge:
                 raise GearthBridgeError(
                     "G-Earth accepted the client side, but its local upstream "
                     "was never connected. Interception is NOT active.")
-            upstream.settimeout(None)
+            upstream.settimeout(max(0.5,min(8,deadline-time.monotonic())))
             front.settimeout(None)
             self.upstream=upstream
-            # The synthetic greeting is passed to G-Earth's local upstream.
+            # The synthetic greeting must be forwarded quickly. Never let
+            # a half-open local process strand the bot's SSO worker forever.
             head,payload=_read_frame(upstream)
+            upstream.settimeout(None)
             if head!=4000 or not payload.startswith(_text(release)):
                 raise GearthBridgeError(
                     "G-Earth bridge did not forward the expected AIR greeting.")
@@ -234,7 +236,7 @@ class ClientlessGearthBridge:
                     continue
                 session._send(packet_id,payload,via_gearth=True)
                 self.delivered_out+=1
-        except (OSError,ValueError,GearthBridgeError):
+        except (OSError,ValueError,GearthBridgeError,RuntimeError):
             if not self.stop.is_set():
                 self.status("G-Earth gameplay modification path disconnected")
                 self.close()
@@ -252,7 +254,7 @@ class ClientlessGearthBridge:
                 if session.on_content is not None:
                     session.on_content(packet_id,payload)
                 self.delivered_in+=1
-        except (OSError,ValueError,GearthBridgeError):
+        except (OSError,ValueError,GearthBridgeError,RuntimeError):
             if not self.stop.is_set():
                 self.status("G-Earth gameplay observation path disconnected")
                 self.close()
