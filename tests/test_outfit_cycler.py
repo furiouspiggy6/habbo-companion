@@ -18,7 +18,7 @@ APP=next(node for node in TREE.body if isinstance(node,ast.ClassDef)
          and node.name=='ChatOverlayApp')
 
 HELPERS=('parse_outfit_update_expression','outfit_update_expression',
-         'sanitize_outfit_presets')
+         'sanitize_outfit_presets','initial_outfit_delay_ms')
 METHODS=('_arm_outfit_capture','_outfit_capture_timeout',
          '_receive_outfit_capture','_remove_outfit',
          '_start_outfit_cycle','_outfit_tick','_stop_outfit_cycle')
@@ -89,7 +89,7 @@ def fake_app():
     app=SimpleNamespace(
         root=root,packet_started=True,
         packet_extension=extension,_habbo_session_connected=True,
-        outfit_status_var=Var(),outfit_delay_var=Var('0.3'),
+        outfit_status_var=Var(),outfit_delay_var=Var('300'),
         outfit_presets=[
             {'gender':'M','figure':FIGURE_A},
             {'gender':'M','figure':FIGURE_B}],
@@ -97,7 +97,7 @@ def fake_app():
         _outfit_capture_pending=False,_outfit_capture_generation=0,
         _outfit_running=False,_outfit_generation=0,
         _outfit_after_id=None,_outfit_index=0,_outfit_sent=0,
-        _outfit_interval=0.3,
+        _outfit_interval_ms=300.0,
         save=lambda:None,_render_outfit_presets=lambda:None,
         _packet_put=lambda item:app.packets.append(item))
     for name in METHODS:
@@ -144,12 +144,40 @@ class OutfitCyclerTests(unittest.TestCase):
         self.assertFalse(app._outfit_running)
 
     def test_invalid_delay_rejected(self):
-        for delay in ('0','0.01','nan','infinity','-1','20','not-a-number'):
+        for delay in ('-1','-0.0001','nan','infinity','-infinity','not-a-number',''):
             with self.subTest(delay=delay):
                 app=fake_app()
                 app.outfit_delay_var.set(delay)
                 app._start_outfit_cycle()
                 self.assertFalse(app._outfit_running)
+
+    def test_migrate_saved_seconds_to_ms_without_changing_rate(self):
+        migrate=NAMESPACE['initial_outfit_delay_ms']
+        self.assertEqual(migrate({}), '300')
+        self.assertEqual(migrate({'outfit_delay':'0.1'}),'100')
+        self.assertEqual(migrate({'outfit_delay':'1.25'}),'1250')
+        self.assertEqual(migrate({'outfit_delay':'bad'}),'300')
+        self.assertEqual(migrate({'outfit_delay':'nan'}),'300')
+        self.assertEqual(migrate({'outfit_delay_ms':'0.0001',
+                                  'outfit_delay':'1.25'}),'0.0001')
+
+    def test_zero_and_fractional_milliseconds_have_no_added_floor(self):
+        # A sub-millisecond request rounds to zero for Tk's ms scheduler;
+        # this must not be clamped back to the old 100 ms minimum.
+        for raw,scheduled in (
+                ('0',0),('0.00001',0),('0.1',0),('0.5',0),
+                ('0.9',1),('1',1),('1.5',2),('10',10),('100',100),
+                ('250',250),('5000',5000)):
+            with self.subTest(ms=raw):
+                app=fake_app()
+                app.outfit_delay_var.set(raw)
+                app._start_outfit_cycle()
+                self.assertTrue(app._outfit_running)
+                self.assertEqual(app.config['outfit_delay_ms'],str(float(raw)))
+                app._outfit_tick(app._outfit_generation)
+                self.assertEqual(app.root.tasks[app._outfit_after_id][0],
+                                 scheduled)
+                self.assertEqual(app._outfit_sent,1)
 
     def test_cycles_without_guessing_numeric_header_and_records_local_requests(self):
         app=fake_app()
@@ -169,7 +197,7 @@ class OutfitCyclerTests(unittest.TestCase):
             [NAMESPACE['outfit_update_expression']('M',FIGURE_A),
              NAMESPACE['outfit_update_expression']('M',FIGURE_B),
              NAMESPACE['outfit_update_expression']('M',FIGURE_A)])
-        self.assertEqual(app.root.tasks[app._outfit_after_id][0],100)
+        self.assertEqual(app.root.tasks[app._outfit_after_id][0],0)
 
     def test_no_autocycle_and_stop_cancels_pending_callback(self):
         app=fake_app()
