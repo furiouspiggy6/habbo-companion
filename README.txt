@@ -1,3 +1,31 @@
+HABBO COMPANION v1.1.81 — FULLER CHAT PERSONA SIMULATION
+==========================================================
+
+The former "COPY WRITING STYLE FROM SAVED CHAT LOGS" now appears as
+"RECREATE A CHAT PERSONA FROM SAVED LOGS".
+
+Selecting a username makes the responder model more than surface writing:
+- Typical conversational reactions and emotional tone
+- Recurring humour, teasing, bluntness, warmth and sarcasm
+- Question and response patterns, topics discussed and stated opinions
+- Slang, grammar, punctuation, sentence length and distinctive expressions
+
+The system uses a stable selection of up to 120 public messages across
+historical and recent chats in the selected user's log, with observed
+chat-habit statistics. Untrusted log text cannot change system instructions.
+The source file's messages are parsed without discarding text before colons.
+The screen warns when few messages are available.
+
+IMPORTANT: This is a simulation based on observed public-room speech.
+It cannot literally become the real person, infer unknown memories,
+relationships or personal details, or truthfully claim to be that player.
+The responder keeps the bot's own Habbo account/session.
+
+"REPLY TO" is unchanged and continues to choose which CURRENT room users
+can trigger replies. The G-Earth sender, chat recorder, rate slider and
+independent AI/auto-send switches are unchanged.
+
+
 HABBO COMPANION v1.1.80 — ADJUSTABLE AI REPLY SPEED
 ======================================================
 

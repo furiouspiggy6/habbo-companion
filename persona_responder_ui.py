@@ -68,7 +68,7 @@ class PersonaResponderMixin:
         self.responder_style_search_var=tk.StringVar(
             value=self.responder.persona if self.responder.style_mode=='Chat-log style' else '')
         self.responder_style_status_var=tk.StringVar(
-            value='Using your own personality.')
+            value='Using your custom personality.')
         self._responder_style_users=[]
         self._responder_style_matches=[]
         self.responder_personality_text=self.responder.personality
@@ -163,9 +163,9 @@ class PersonaResponderMixin:
 
         style_row=ttk.Frame(frame,style='Panel.TFrame')
         style_row.pack(fill='x',pady=(0,5))
-        ttk.Label(style_row,text='COPY WRITING STYLE FROM SAVED CHAT LOGS',
+        ttk.Label(style_row,text='RECREATE A CHAT PERSONA FROM SAVED LOGS',
                   style='Panel.TLabel').pack(side='left')
-        ttk.Button(style_row,text='Use my own style',
+        ttk.Button(style_row,text='Use custom personality',
                    command=self._responder_use_custom_style).pack(side='right')
         search_row=ttk.Frame(frame,style='Panel.TFrame')
         search_row.pack(fill='x',pady=(0,4))
@@ -477,18 +477,30 @@ class PersonaResponderMixin:
         self._responder_hide_target_matches()
         self._responder_apply()
 
+    def _responder_mode_display(self):
+        return ('Chat persona simulation' if
+                self.responder.style_mode=='Chat-log style' else
+                self.responder.style_mode)
+
     def _responder_update_style_controls(self):
         mode=self.responder_style_mode_var.get()
         copying=(mode=='Chat-log style')
         self.responder_personality_entry.configure(
             state='disabled' if copying else 'normal')
         if copying:
+            reference=self.responder.persona_reference()
+            count=(reference or {}).get(
+                'evidence_messages_in_recent_log_window',0)
+            caution=(' Limited evidence—more messages give a better simulation.'
+                     if count<60 else
+                     ' Based on observed chat behaviour, not their actual identity.')
             self.responder_style_status_var.set(
-                'Using saved writing style: '+self.responder_persona_var.get()+
-                '. Select another username to change it.')
+                f"Simulating {self.responder.persona}'s conversational persona "
+                f"from {count} public messages."+caution)
         else:
             self.responder_style_status_var.set(
-                'Using your own personality. Choose a logged username to switch.')
+                'Using your custom personality. Select a logged player '
+                'to simulate their conversation habits and reactions.')
 
     def _responder_style_directory(self):
         path=Path(self.responder_log_dir_var.get().strip() or
@@ -524,7 +536,8 @@ class PersonaResponderMixin:
                 '. Click Choose log folder and select chat_logs/users.')
         elif self.responder_style_mode_var.get()=='Custom personality':
             self.responder_style_status_var.set(
-                f'{len(names)} usernames found. Search to copy one, or keep your own style.')
+                f'{len(names)} usernames found. Search to simulate a chat persona, '
+                'or keep your custom personality.')
         else:
             self._responder_update_style_controls()
 
@@ -569,9 +582,9 @@ class PersonaResponderMixin:
         directory=self._responder_style_directory()
         profile=PersonaResponder(directory)
         profile.persona=name
-        examples=profile.style_examples()
+        reference=profile.persona_reference()
         self._responder_hide_style_matches()
-        if not examples:
+        if not reference:
             self.responder_style_status_var.set(
                 'No usable messages found for '+name+'. Select another user.')
             return
@@ -582,10 +595,16 @@ class PersonaResponderMixin:
         self.responder_rotation_var.set(False)
         self._responder_update_style_controls()
         self._responder_apply()
+        sample_count=reference['evidence_messages_in_recent_log_window']
+        confidence=('Limited evidence; gather more messages for a closer match.'
+                    if sample_count<60 else
+                    'Behaviour based on saved public messages.')
         self.responder_style_status_var.set(
-            f"Using {name}'s writing style ({len(examples)} message examples).")
+            f"Simulating {name}'s chat persona using {sample_count} logged "
+            f"messages. {confidence}")
         self._responder_log(
-            f'Style changed to {name} ({len(examples)} saved message examples).')
+            f'Chat persona set to {name}: {sample_count} messages examined; '
+            'using their observed conversation habits, humour and reactions.')
 
     def _responder_use_custom_style(self):
         self.responder_style_mode_var.set('Custom personality')
@@ -696,7 +715,7 @@ class PersonaResponderMixin:
         if valid_selection:
             state='ON' if self.responder.enabled else 'OFF'
             self.responder_status_var.set(
-                f'AI {state} | {self.responder.style_mode} | '
+                f'AI {state} | {self._responder_mode_display()} | '
                 f'{self.responder.target_mode}: '
                 f'{self.responder.selected_users if self.responder.target_mode=="Selected users" else "active room"}')
         self._responder_log('Settings applied. AI '+(
@@ -836,6 +855,8 @@ class PersonaResponderMixin:
         generation=self._responder_generation
         model=self.responder_model_var.get().strip() or 'gpt-5-mini'
         self._responder_log('Live decision for '+payload['target']+
-                            ' | '+payload['style_mode'])
+                            ' | '+('Chat persona simulation' if
+                                   payload['style_mode']=='Chat-log style'
+                                   else payload['style_mode']))
         threading.Thread(target=self._responder_worker,
                          args=(payload,model,generation,False),daemon=True).start()

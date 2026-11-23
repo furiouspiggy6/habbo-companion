@@ -1,5 +1,41 @@
 # Habbo Companion
 
+## v1.1.81 — Recreate a fuller conversational persona from chat logs
+
+In **AI Responder**, the saved-user selector is now called **Recreate a chat
+persona from saved logs** instead of Copy writing style. Selecting a username
+now asks the AI to simulate a coherent *chat character* built from that
+player's observed public messages, not just to copy their spelling.
+
+The responder considers recurring patterns in the chosen player's:
+
+- Conversational habits: typical replies, follow-up questions, conversation
+  starters, messages where they simply ignore or dismiss a topic
+- Humour, teasing, sarcasm, bluntness, warmth and social reactions
+- Repeatedly mentioned interests or opinions **only when they appear in logs**
+- Short versus long messages, laughter, slang, grammar, capitalization and
+  punctuation
+
+To improve consistency, it uses **up to 120 sampled messages** from recent
+and older portions of the last **1,600 messages** for that selected player.
+Unlike the previous random example selection, the same logs produce stable
+references. A concise summary of observable length, question and laughter
+habits accompanies the samples. Message text containing colons is preserved.
+
+The status area explains when the evidence is limited. For example, five
+recorded messages cannot reveal someone's full personality; capturing more
+public chat will improve the *approximation*. The AI does **not** gain the
+real player's identity, memories, private facts or ability to authenticate
+as that person. It will not claim to literally *be* the selected player.
+
+**Reply to** still independently controls which live room speakers can
+trigger the bot. Existing G-Earth sending, reply-rate slider, background
+logging and opt-in enable/auto-send controls are unchanged.
+
+When AI is enabled, selected public chat history is sent to the configured
+OpenAI API to generate responses, as with the previous chat-log mode.
+Using more chat samples may increase input token usage.
+
 ## v1.1.80 — Adjustable AI reply speed
 
 AI Responder now has a **Reply speed** slider on the main page. Drag toward
