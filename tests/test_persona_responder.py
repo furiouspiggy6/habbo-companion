@@ -8,7 +8,7 @@ import time
 import unittest
 from persona_responder import (
     PersonaResponder, chat_expression_from_template,
-    clean_model_reply, safe_persona_filename,
+    clean_model_reply, safe_persona_filename, parse_style_message,
     selected_usernames, DEFAULT_PERSONALITY, generate_persona_reply,
     list_style_usernames, matching_style_usernames,
     clamp_reply_interval, DEFAULT_REPLY_INTERVAL_SECONDS,
@@ -313,6 +313,32 @@ class PersonaResponderTests(unittest.TestCase):
         submitted=responses.last['input'][1]['content']
         self.assertIn('"persona_reference"',submitted)
         self.assertIn('"persona_simulation": true',submitted)
+
+    def test_chat_log_parsing_preserves_persona_speech_before_colons(self):
+        self.assertEqual(
+            parse_style_message('[13:01] MaraGene: my take: nah lol','MaraGene'),
+            'my take: nah lol')
+        self.assertEqual(
+            parse_style_message('[13:01] my take: nah lol','MaraGene'),
+            'my take: nah lol')
+        self.assertEqual(
+            parse_style_message('[13:01] Mario35: hi there','Mario35'),
+            'hi there')
+
+    def test_persona_selection_deterministic_between_generated_replies(self):
+        folder=Path(self.temp.name)
+        with (folder/'MaraGene.txt').open('w',encoding='utf-8') as stream:
+            for i in range(180):
+                stream.write(f'[13:01] MaraGene: message{i:03d} with: punctuation\n')
+        self.bot.persona='MaraGene'
+        self.bot.style_mode='Chat-log style'
+        first=self.bot.style_examples()
+        self.assertEqual(first,self.bot.style_examples())
+        self.assertEqual(len(first),80)
+        self.assertEqual(first[-1],'message179 with: punctuation')
+        self.assertEqual(
+            self.bot.persona_reference()['sample_messages_in_chronological_order'][-1],
+            'message179 with: punctuation')
 
     def test_custom_personality_requires_no_logs(self):
         self.bot.enabled=True
