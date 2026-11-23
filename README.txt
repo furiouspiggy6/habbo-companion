@@ -1,3 +1,13 @@
+v1.1.96: One-click clientless profile selection. Choose a saved account from
+Clientless Bot or click Run selected profile in Accounts; Companion reuses
+Windows-vault login or an isolated background Habbo browser, retrieves an
+official SSO ticket, authenticates Direct TCP and requests the saved room
+(default Coffee House 69118545). No HabboAIR / G-Earth launch is needed for
+the exact pinned November 4 WIN63 release. For newer server releases,
+source-derived header IDs must be verified first; there is no packet guessing
+or CAPTCHA bypass. Automatic G-Earth startup is OFF in clientless-only mode.
+No account automatically joins a room on Companion startup. See README.md.
+
 v1.1.95: Added a permanent Coffee House (room 69118545) quick-join button to Clientless Bot, with the last entered Room ID saved across restarts. Saved named AIR packet headers now persist too. No automatic join or new authentication workflow.
 
 v1.1.94: Fixed Clientless Bot Say packet to send the third AIR chat tracking integer (-1). Shout and Whisper packets unchanged. Local send accepted still does not confirm server display.
