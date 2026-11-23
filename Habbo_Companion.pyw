@@ -6321,8 +6321,11 @@ class ChatOverlayApp(PersonaResponderMixin):
                     self.config.get('clientless_gearth_intercept',False)))
                 self.bot_gearth_status_var.set(
                     'Disconnect the selected profile before changing '
-                    'its connection mode. This session remains Direct TCP.')
+                    'its connection mode. Its existing routing is unchanged.')
                 return
+        if selected is not None:
+            bridge=self._bot_gearth_bridges.pop(selected['id'],None)
+            if bridge is not None:bridge.close()
         enabled=bool(self.bot_gearth_var.get())
         self.config['clientless_gearth_intercept']=enabled
         self.save()
@@ -6388,9 +6391,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.config['clientless_standalone']=enabled
         self.save()
         self.bot_status_var.set(
-            'Clientless-only mode '+('enabled: G-Earth startup is disabled.'
-                                     if enabled else
-                                     'disabled: advanced G-Earth tools remain available.'))
+            'Legacy G-Earth packet-tool auto-start '+
+            ('disabled.' if enabled else 'allowed.')+
+            ' The explicit G-Earth ON clientless bridge is independent.')
 
     def _bot_load_walk_preset(self):
         room=clientless_saved_room_value(self.bot_room_var.get())
@@ -11806,8 +11809,14 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._tcp_sessions[ident]=item[3]
                     self._tcp_inflight.discard(ident)
                     if item[3].authenticated:
-                        self._tcp_states[ident]='Authenticated (direct TCP)'
+                        bridge=self._bot_gearth_bridges.get(ident)
+                        self._tcp_states[ident]=(
+                            'Authenticated (G-Earth gameplay proxy)'
+                            if bridge is not None and bridge.ready else
+                            'Authenticated (direct TCP)')
                         self.tcp_status_var.set(
+                            'Habbo authenticated; clientless gameplay routed '
+                            'through G-Earth.' if bridge is not None else
                             'Habbo sent AuthenticationOK; session is active.')
                     else:
                         self._tcp_states[ident]='Authentication succeeded, '
@@ -11823,8 +11832,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 self._bot_dispatch_pending_room(uid,gen))
                     else:
                         self._bot_pending_room.pop(ident,None)
+                        bridge=self._bot_gearth_bridges.pop(ident,None)
+                        if bridge:bridge.close()
                 elif event=='tcp_failed':
                     self._tcp_inflight.discard(ident)
+                    bridge=self._bot_gearth_bridges.pop(ident,None)
+                    if bridge:bridge.close()
                     pending=self._bot_pending_room.pop(ident,None)
                     if pending and pending[0]==generation:
                         self.bot_status_var.set(
