@@ -343,7 +343,7 @@ def _walk_user_roster(payload):
             _,at=_walk_int(payload,at) # owner
             _,at=_walk_string(payload,at)
             _,at=_walk_int(payload,at) # rarity
-            for _ in range(5):
+            for _ in range(6):
                 _,at=_walk_byte(payload,at)
             _,at=_walk_int(payload,at)
             _,at=_walk_string(payload,at)
