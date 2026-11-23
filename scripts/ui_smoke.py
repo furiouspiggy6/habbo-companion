@@ -15,7 +15,7 @@ sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
-PAGES={'overview','accounts','tcp','chat','responder','packet','outfits','face','fuzz','manip',
+PAGES={'overview','accounts','tcp','chat','responder','packet','outfits','face','dance','fuzz','manip',
        'classic','headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
@@ -46,6 +46,11 @@ try:
     assert app._face_tile is None, 'Face Rotator must require a fresh standing tile'
     assert app.face_delay_var.get()=='350', 'Incorrect default face turn interval'
     assert app.face_direction_var.get()=='Clockwise', 'Incorrect default direction'
+    assert not app._dance_running, 'Dance Controller must start OFF'
+    assert app.dance_style_var.get()=='Hab-Hop (everyone)'
+    assert app.dance_delay_var.get()=='3000'
+    assert app.dance_style_picker.winfo_exists(), 'Dance selector did not render'
+    assert len(app.dance_enabled_vars)==4, 'Missing dance-cycle choices'
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.arcturus_header_var.get()=='', (
         'Arcturus header must be supplied by the emulator owner, never guessed')
