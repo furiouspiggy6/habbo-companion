@@ -72,6 +72,8 @@ class PersonaResponderMixin:
         self._responder_wire_template=None
         self._responder_probe_token=None
         self._responder_probe_started=0.0
+        self._responder_probe_recent_phrase=None
+        self._responder_probe_recent_started=0.0
         self._responder_probe_phrase_var=tk.StringVar(value='')
         self._responder_outgoing_seen=False
         self._responder_last_draft=None
@@ -350,6 +352,8 @@ class PersonaResponderMixin:
         self._responder_wire_template=None
         self._responder_probe_token='hc-'+secrets.token_hex(6)
         self._responder_probe_started=time.monotonic()
+        self._responder_probe_recent_phrase=self._responder_probe_token
+        self._responder_probe_recent_started=self._responder_probe_started
         self._responder_probe_phrase_var.set(self._responder_probe_token)
         result=('Copy the phrase and type it EXACTLY once in Habbo public chat '
                 'within 90 seconds. The AI will not send it automatically.')
