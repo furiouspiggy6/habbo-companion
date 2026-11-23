@@ -176,6 +176,56 @@ def matching_style_usernames(usernames, search="", limit=80):
         not name.casefold().startswith(query), name.casefold()))
     return matches[:max(1, min(int(limit), 200))]
 
+# Names confirmed by a room-indexed Users packet remain until UserRemove.
+# Old AIR chat and unindexed Users fallback entries are not authoritative:
+# they expire unless refreshed by new public room chat / Users evidence.
+ROOM_FALLBACK_PRESENCE_SECONDS = 90.0
+
+
+def current_room_player_names(room_users, room_roster_seen_at,
+                              recent_room_speakers, own_name="",
+                              now=None, fallback_seconds=ROOM_FALLBACK_PRESENCE_SECONDS):
+    """Return names with CURRENT room-presence evidence.
+
+    A known room index is matched to Habbo's UserRemove departure event.
+    An unindexed roster entry or speaker-only name expires after a bounded
+    time because we cannot reliably match a departure event to that name.
+    Saved persona chat logs are deliberately never consulted.
+    """
+    current = time.time() if now is None else float(now)
+    grace = max(1.0, float(fallback_seconds))
+    owner = str(own_name or "").casefold()
+    found = {}
+    speakers = recent_room_speakers if isinstance(recent_room_speakers, dict) else {}
+
+    def recent(timestamp):
+        return (isinstance(timestamp, (int, float))
+                and 0 <= current - timestamp <= grace)
+
+    for key, record in (room_users or {}).items():
+        if not isinstance(record, (tuple, list)) or not record:
+            continue
+        name = str(record[0]).strip()
+        if not name or name.casefold() == owner:
+            continue
+        known_index = len(record) > 2 and isinstance(record[2], int)
+        speaker = speakers.get(name.casefold())
+        active_speaker = (isinstance(speaker, (tuple, list))
+                          and len(speaker) > 1 and recent(speaker[1]))
+        seen = (room_roster_seen_at or {}).get(name.casefold())
+        if known_index or recent(seen) or active_speaker:
+            found[name.casefold()] = name
+
+    for speaker in speakers.values():
+        if not isinstance(speaker, (tuple, list)) or len(speaker) < 2:
+            continue
+        name, when = speaker[0], speaker[1]
+        if isinstance(name, str) and name.strip() and recent(when):
+            if name.casefold() != owner:
+                found.setdefault(name.casefold(), name.strip())
+    return sorted(found.values(), key=str.casefold)
+
+
 def blocked_name(username):
     name = str(username).strip().casefold()
     return any(part in name for part in BLOCKED_NAME_PARTS)
