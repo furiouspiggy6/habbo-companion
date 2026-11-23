@@ -5,6 +5,7 @@ never starts G-Earth, a browser, the real Habbo client, or a network request.
 """
 from pathlib import Path
 import tempfile
+import time
 import runpy
 import sys
 import tkinter as tk
@@ -87,7 +88,7 @@ try:
         'cheesecake':('Cheesecake',56789,6),
         'ownavatar':('ownAvatar',111,1),
     }
-    app._responder_room_speakers={'popbrocks':('popbrocks',123456.0)}
+    app._responder_room_speakers={'popbrocks':('popbrocks',time.time())}
     app._responder_refresh_room_users()
     assert app._responder_room_names==[
         'Cheesecake','MaraGene','popbrocks']
@@ -134,6 +135,24 @@ try:
         assert app.responder.target_mode=='Selected users'
         assert 'maragene' not in app.responder.selected_users.casefold()
         assert 'NewPlayer' in app.responder.selected_users
+        # G-Earth confirms an indexed avatar has left: remove their checkbox,
+        # selected target and any pending work for the departed player.
+        app._room_users.pop('newplayer')
+        app._responder_remove_departed_targets(('newplayer',))
+        assert 'newplayer' not in app._responder_target_checkboxes
+        assert 'newplayer' not in app.responder.selected_users.casefold()
+        assert app.responder.target_mode=='Selected users'
+        # A player only inferred from AIR chat must disappear after silence.
+        app._responder_room_speakers['popbrocks']=('popbrocks',time.time()-100)
+        app._responder_refresh_room_users()
+        assert 'popbrocks' not in app._responder_target_checkboxes
+        assert 'popbrocks' not in app._responder_room_names
+        # Unindexed Users packet names also expire if no newer chat or
+        # roster evidence confirms that the player remains here.
+        app._room_users['unknown-index']=('UnknownIndex',123456,None)
+        app._responder_room_roster_seen_at['unknown-index']=time.time()-100
+        app._responder_refresh_room_users()
+        assert 'unknown-index' not in app._responder_target_checkboxes
         assert app.responder.save_history
 
         # Selecting a saved persona hides unrelated custom options but keeps

@@ -1,5 +1,37 @@
 # Habbo Companion
 
+## v1.1.85 — Remove departed Habbo players from AI Reply To
+
+The **AI Responder → Reply To** checklist no longer grows indefinitely
+with usernames from earlier conversations in the room. It now combines
+server-observed room members with **time-limited fallback evidence**:
+
+- A player with a verified room index stays listed until Habbo's
+  `UserRemove` packet confirms their departure. Departure packets are
+  decoded from their raw packet string or G-Earth named expression, and
+  confirmed departures immediately remove the checkbox and any explicit
+  AI reply selection.
+- A player seen **only in public AIR chat** or in a partially decoded
+  `Users` packet with no room index is displayed for **up to 90 seconds
+  after the last room-presence evidence**. A new public message or Users
+  event refreshes that timestamp; an old chat message is not proof the
+  speaker is still present. These fallback names can temporarily disappear
+  while a quiet player is still in the room if their roster index was not
+  decoded; this avoids showing departed players forever.
+- Valid room indexes are preserved if a subsequent incomplete Users packet
+  reports the same account ID with an unknown index. This makes future
+  departure packets easier to match without affecting G-Earth sending.
+- On confirmed room changes or disconnects, the room roster and any
+  room-specific selected targets are cleared. The AI will not silently
+  switch to Everyone or send to targets left over from a previous room.
+- The list refreshes automatically while Companion is running; the
+  **Refresh room** button also refreshes the displayed current roster.
+  This does not erase saved persona chat histories or affect background
+  public chat recording.
+
+Your existing single shared application, auto-updates, AI personas and
+G-Earth sender are unchanged. All users receive the same update.
+
 ## v1.1.84 — Persona-first AI Responder, fewer controls
 
 AI Responder now prioritises **recreating a chat persona from saved room logs**.

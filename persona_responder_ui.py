@@ -15,7 +15,8 @@ from tkinter import ttk, filedialog
 from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
     list_style_usernames, matching_style_usernames, clamp_reply_interval,
-    selected_usernames,
+    selected_usernames, current_room_player_names,
+    ROOM_FALLBACK_PRESENCE_SECONDS,
 )
 
 
@@ -94,6 +95,7 @@ class PersonaResponderMixin:
         self._responder_room_names=[]
         self._responder_target_matches=[]
         self._responder_room_speakers={}
+        self._responder_room_roster_seen_at={}
         self.responder_log_dir_var=tk.StringVar(value=str(self.responder.log_dir))
         self.responder_model_var=tk.StringVar(value=str(
             self.config.get('responder_model','gpt-5-mini')))
@@ -323,23 +325,54 @@ class PersonaResponderMixin:
         self.save()
 
     def _responder_refresh_room_users(self):
-        """Show current room roster; never offer stale historical chat usernames."""
-        found={}
-        own=str(getattr(self,'_own_name','') or '').casefold()
-        for user in getattr(self,'_room_users',{}).values():
-            if isinstance(user,(tuple,list)) and user:
-                name=str(user[0]).strip()
-                if name and name.casefold()!=own:
-                    found[name.casefold()]=name
-        for name,_stamp in getattr(self,'_responder_room_speakers',{}).values():
-            if name and name.casefold()!=own:
-                found.setdefault(name.casefold(),name)
-        names=sorted(found.values(),key=str.casefold)
+        """Reconcile server-indexed roster with recent fallback observations."""
+        now=time.time()
+        cutoff=now-ROOM_FALLBACK_PRESENCE_SECONDS
+        # These speaker-only records were the source of ever-growing lists:
+        # once they go quiet they are NOT proof they are still in the room.
+        for key,(_name,seen_at) in list(self._responder_room_speakers.items()):
+            if not isinstance(seen_at,(int,float)) or seen_at<cutoff or seen_at>now:
+                self._responder_room_speakers.pop(key,None)
+        names=current_room_player_names(
+            getattr(self,'_room_users',{}),
+            self._responder_room_roster_seen_at,
+            self._responder_room_speakers,
+            own_name=getattr(self,'_own_name',''),now=now)
         previous=self._responder_room_names
         self._responder_room_names=names
         if names!=previous or not self.responder_room_status_var.get().startswith(
                 (str(len(names))+' players detected.', 'No room players detected')):
             self._responder_render_target_checklist()
+
+    def _responder_remove_departed_targets(self,departed):
+        """Uncheck users after an actual Habbo departure, not just silence."""
+        removed={str(name).casefold() for name in departed}
+        if not removed:
+            return
+        if self.responder_target_mode_var.get()=='Selected users':
+            current=selected_usernames(self.responder_target_var.get())
+            retained=current-removed
+            if retained!=current:
+                display={name.casefold():name
+                         for name in self._responder_room_names}
+                self.responder_target_var.set(', '.join(
+                    display.get(key,key) for key in sorted(retained)))
+                # Invalidate drafts for a departed target so G-Earth cannot
+                # transmit a delayed reply after that person has left.
+                self._responder_apply()
+        self._responder_refresh_room_users()
+
+    def _responder_reset_room_targets(self):
+        """New room/session: remove room-specific target selections."""
+        self._responder_room_roster_seen_at.clear()
+        self._responder_room_speakers.clear()
+        if self.responder_target_mode_var.get()=='Selected users':
+            if self.responder_target_var.get().strip():
+                self.responder_target_var.set('')
+                # Leave Selected users mode selected instead of silently
+                # broadening to Everyone. AI will stop until a user is chosen.
+                self._responder_apply()
+        self._responder_refresh_room_users()
 
     def _responder_render_target_checklist(self):
         """Draw actual checkboxes in a compact grid (not an editable name list)."""

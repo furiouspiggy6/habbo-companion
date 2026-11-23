@@ -35,7 +35,8 @@ PERSONA_UI_ENGINE_IMPORT = (
     "from persona_responder import (\n"
     "    PersonaResponder, chat_expression_from_template, generate_persona_reply,\n"
     "    list_style_usernames, matching_style_usernames, clamp_reply_interval,\n"
-    "    selected_usernames,\n"
+    "    selected_usernames, current_room_player_names,\n"
+    "    ROOM_FALLBACK_PRESENCE_SECONDS,\n"
     ")\n"
 )
 APP_ANCHOR = "\nAPP_NAME = 'Habbo View Chat'\n"

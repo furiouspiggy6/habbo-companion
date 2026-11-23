@@ -4084,6 +4084,27 @@ def profile_recipient_from_packet(packet):
         return None
 
 
+def merge_room_user_records(existing,incoming):
+    """Do not erase a verified room index with an incomplete Users update.
+
+    G-Earth may decode an entity's ID/name while missing its optional
+    2026 room-index fields. The old code overwrote the earlier index with
+    None, making a later UserRemove impossible to match by avatar index.
+    """
+    merged=dict(existing)
+    for key,record in incoming.items():
+        previous=merged.get(key)
+        if (previous is not None and isinstance(record,(tuple,list))
+            and len(record)>2 and record[2] is None
+            and isinstance(previous,(tuple,list)) and len(previous)>2
+            and isinstance(previous[2],int)
+            and record[1]==previous[1]):
+            merged[key]=(record[0],record[1],previous[2])
+        else:
+            merged[key]=record
+    return merged
+
+
 def remove_room_user_by_index(users,index):
     """Keep unaffected entries when an entity leaves, even if indexes are unknown."""
     if not isinstance(index,int) or index<0:
@@ -9569,6 +9590,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             if room_index is None:
                                 try:room_index=int(msg.packet.read_string(6))
                                 except (IndexError,ValueError,TypeError,AttributeError):pass
+                            if room_index is None:
+                                try:
+                                    room_index=removed_room_user_index(
+                                        msg.packet.g_expression(ext))
+                                except (ValueError,TypeError,AttributeError):
+                                    pass
                             self._packet_put(('room_user_removed',room_index))
                         elif kind=='UserObject':
                             identity=own_identity_from_packet(msg.packet)
@@ -9884,6 +9911,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._room_chat_names.clear()
                 self._responder_room_speakers.clear()
                 self._room_profile_cache.clear()
+                self._responder_reset_room_targets()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
                 self._coffee_target_room_index=None
@@ -9908,7 +9936,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         'This may be a new Habbo packet layout.')
                 continue
             if item[0]=='room_users':
-                self._room_users.update(item[1])
+                self._room_users=merge_room_user_records(
+                    self._room_users,item[1])
+                observed_at=time.time()
+                for user_key in item[1]:
+                    self._responder_room_roster_seen_at[user_key]=observed_at
+                self._responder_refresh_room_users()
                 if self._own_account_id is not None:
                     own=next((user for user in item[1].values()
                               if user[1]==self._own_account_id
@@ -9939,7 +9972,9 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 for name in removed:
                     self._room_chat_names.discard(name)
                     self._responder_room_speakers.pop(name,None)
+                    self._responder_room_roster_seen_at.pop(name,None)
                     self._room_profile_cache.pop(name,None)
+                self._responder_remove_departed_targets(removed)
                 if self._coffee_running and self._coffee_group_active:
                     # A server-confirmed departure is an automatic exclusion,
                     # not evidence of a block. Never retry that recipient.
@@ -9987,6 +10022,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._room_chat_names.clear()
                     self._responder_room_speakers.clear()
                     self._room_profile_cache.clear()
+                    self._responder_reset_room_targets()
                     self._coffee_profile_pending=None
                     self._coffee_profile_generation+=1
                     self._room_lookup_pending=False
@@ -10320,6 +10356,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._room_chat_names.clear()
                 self._responder_room_speakers.clear()
                 self._room_profile_cache.clear()
+                self._responder_reset_room_targets()
                 self._coffee_profile_pending=None
                 self._coffee_profile_generation+=1
                 self.coffee_users_status_var.set('Room changed. Waiting for player IDs...')

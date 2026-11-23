@@ -1,3 +1,23 @@
+HABBO COMPANION v1.1.85 — ROOM USER CHECKLIST CLEANUP
+==========================================================
+
+FIXED: People who have left the Habbo room no longer stay in AI Responder
+Reply To forever just because they spoke earlier.
+
+- Habbo UserRemove packets immediately remove players with known room
+  avatar indexes from the live room list and selected reply targets.
+- A later partially decoded Users packet can no longer overwrite a known
+  room index with None, avoiding lost departure tracking.
+- AIR-chat-only players and Users records without a known room index
+  expire after 90 seconds without fresh room evidence. New chat or room
+  updates refresh this expiry. A quiet member with an undecodable index
+  might temporarily disappear until they speak again.
+- Room changes and disconnects clear prior room targets. The bot never
+  quietly changes a Selected users target list to Everyone.
+- No changes to AI persona generation, G-Earth Chat packets, installer,
+  local per-user public chat recording or update workflow.
+
+
 HABBO COMPANION v1.1.84 — PERSONA-FIRST AI RESPONDER
 =======================================================
 
