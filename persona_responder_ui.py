@@ -70,166 +70,195 @@ class PersonaResponderMixin:
         self._responder_outgoing_seen=False
         self._responder_last_draft=None
         self._responder_test_running=False
+        self._responder_advanced_open=False
 
     def _make_responder_panel(self,parent):
+        """Keep everyday controls on one page; tuck optional controls away."""
         p=self._responder_palette
         frame=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
         frame.pack(fill='both',expand=True)
+
         tk.Label(frame,text='AI RESPONDER',font=('Segoe UI Semibold',18),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
-        ttk.Label(frame,text='Your own personality, live Habbo AIR chat, '
-                  'and targeted replies. No chat-history imitation required.',
-                  style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(3,12))
-        ttk.Checkbutton(frame,text='Enable AI for new public room messages',
-                        variable=self.responder_enabled_var,
-                        command=self._responder_apply).pack(anchor='w',pady=(1,5))
-        ttk.Checkbutton(frame,text='Auto-send through G-Earth (OFF by default)',
-                        variable=self.responder_send_var).pack(anchor='w',pady=(0,9))
-        tabs=ttk.Notebook(frame)
-        tabs.pack(fill='x',pady=(2,9))
-        personality_tab=ttk.Frame(tabs,style='Panel.TFrame',padding=12)
-        targets_tab=ttk.Frame(tabs,style='Panel.TFrame',padding=12)
-        test_tab=ttk.Frame(tabs,style='Panel.TFrame',padding=12)
-        tabs.add(personality_tab,text='  Personality  ')
-        tabs.add(targets_tab,text='  Who to reply to  ')
-        tabs.add(test_tab,text='  Test without sending  ')
-        self.responder_tabs=tabs
+        ttk.Label(frame,text='Choose how it talks and who it responds to.',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,12))
 
-        choose=ttk.Frame(personality_tab,style='Panel.TFrame')
-        choose.pack(fill='x',pady=(0,8))
-        ttk.Label(choose,text='Personality source',style='Panel.TLabel').pack(
+        switches=ttk.Frame(frame,style='Panel.TFrame')
+        switches.pack(fill='x',pady=(0,12))
+        ttk.Checkbutton(switches,text='Enable AI responder',
+                        variable=self.responder_enabled_var,
+                        command=self._responder_apply).pack(anchor='w',pady=(0,5))
+        ttk.Checkbutton(switches,text='Send replies in Habbo (G-Earth)',
+                        variable=self.responder_send_var).pack(anchor='w')
+        ttk.Label(switches,text='Turn off sending to preview live replies without posting.',
+                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,0))
+
+        ttk.Label(frame,text='PERSONALITY',style='Panel.TLabel').pack(
+            anchor='w',pady=(0,5))
+        self._responder_custom_frame=ttk.Frame(frame,style='Panel.TFrame')
+        self._responder_custom_frame.pack(fill='x')
+        self.responder_personality_entry=tk.Text(
+            self._responder_custom_frame,height=4,wrap='word',
+            font=('Segoe UI',10),bg=p['field'],fg=p['text'],
+            insertbackground=p['text'],relief='flat')
+        self.responder_personality_entry.pack(fill='x')
+        self.responder_personality_entry.insert('1.0',self.responder_personality_text)
+        ttk.Label(frame,text='Describe its tone, humour and behaviour in plain language.',
+                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,12))
+
+        audience=ttk.Frame(frame,style='Panel.TFrame')
+        audience.pack(fill='x',pady=(0,4))
+        ttk.Label(audience,text='REPLY TO',style='Panel.TLabel').pack(
+            side='left',padx=(0,12))
+        self.responder_target_selector=ttk.Combobox(
+            audience,textvariable=self.responder_target_mode_var,
+            values=('Everyone','Selected users','First active speaker'),
+            state='readonly',width=22)
+        self.responder_target_selector.pack(side='left')
+        self.responder_target_selector.bind(
+            '<<ComboboxSelected>>',lambda event:self._responder_update_target_controls())
+        # Permanent layout slot: switching Everyone / Selected users must not
+        # move the username input below the activity log.
+        self._responder_targets_area=ttk.Frame(frame,style='Panel.TFrame')
+        self._responder_targets_area.pack(fill='x')
+        self._responder_targets_frame=ttk.Frame(
+            self._responder_targets_area,style='Panel.TFrame')
+        ttk.Label(self._responder_targets_frame,
+                  text='Usernames (separate with commas)',style='Panel.TLabel').pack(
+                      anchor='w',pady=(3,4))
+        self.responder_target_entry=ttk.Entry(
+            self._responder_targets_frame,textvariable=self.responder_target_var)
+        self.responder_target_entry.pack(fill='x')
+        self._responder_update_target_controls()
+
+        actions=ttk.Frame(frame,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(12,13))
+        ttk.Button(actions,text='Save changes',
+                   command=self._responder_apply).pack(side='left',padx=(0,8))
+        ttk.Button(actions,text='Stop',
+                   command=self._responder_stop).pack(side='left')
+
+        ttk.Label(frame,text='TRY A REPLY (PREVIEW ONLY)',
+                  style='Panel.TLabel').pack(anchor='w',pady=(0,5))
+        preview=ttk.Frame(frame,style='Panel.TFrame')
+        preview.pack(fill='x',pady=(0,10))
+        ttk.Entry(preview,textvariable=self.responder_test_message_var).pack(
+            side='left',fill='x',expand=True,padx=(0,8))
+        ttk.Button(preview,text='Test reply',
+                   command=self._responder_test_reply).pack(side='left')
+        ttk.Label(frame,text='Tests never send to Habbo, even when live sending is enabled.',
+                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(0,12))
+
+        self._responder_advanced_button=ttk.Button(
+            frame,text='Advanced options ▸',command=self._responder_toggle_advanced)
+        self._responder_advanced_button.pack(anchor='w',pady=(0,5))
+        self._responder_advanced_area=ttk.Frame(frame,style='Panel.TFrame')
+        self._responder_advanced_area.pack(fill='x')
+        self._responder_advanced_frame=ttk.Frame(
+            self._responder_advanced_area,style='Panel.TFrame',padding=(10,8))
+
+        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,8))
+        ttk.Label(row,text='Reply frequency',style='Panel.TLabel').pack(
+            side='left',padx=(0,8))
+        ttk.Combobox(row,textvariable=self.responder_responsiveness_var,
+                     values=('Natural','Chatty'),state='readonly',
+                     width=13).pack(side='left',padx=(0,16))
+        ttk.Label(row,text='Model',style='Panel.TLabel').pack(
+            side='left',padx=(0,8))
+        ttk.Entry(row,textvariable=self.responder_model_var,width=17).pack(side='left')
+
+        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,8))
+        ttk.Label(row,text='Tone',style='Panel.TLabel').pack(side='left',padx=(0,8))
+        ttk.Combobox(row,textvariable=self.responder_tone_var,state='readonly',
+                     values=('Casual','Friendly','Playful','Dry','Sarcastic','Serious'),
+                     width=15).pack(side='left',padx=(0,15))
+        ttk.Label(row,text='Humour',style='Panel.TLabel').pack(
+            side='left',padx=(0,8))
+        ttk.Combobox(row,textvariable=self.responder_humour_var,
+                     state='readonly',values=('0','1','2','3','4','5'),
+                     width=5).pack(side='left')
+
+        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
+        row.pack(fill='x',pady=(0,7))
+        ttk.Label(row,text='Style source',style='Panel.TLabel').pack(
             side='left',padx=(0,9))
-        mode=ttk.Combobox(choose,textvariable=self.responder_style_mode_var,
+        mode=ttk.Combobox(row,textvariable=self.responder_style_mode_var,
                           values=('Custom personality','Chat-log style'),
-                          state='readonly',width=24)
+                          state='readonly',width=21)
         mode.pack(side='left')
         mode.bind('<<ComboboxSelected>>',
                   lambda event:self._responder_update_style_controls())
 
-        self._responder_custom_frame=ttk.Frame(personality_tab,style='Panel.TFrame')
-        ttk.Label(self._responder_custom_frame,
-                  text='Describe how the bot should behave and speak',
-                  style='Panel.TLabel').pack(anchor='w',pady=(2,3))
-        self.responder_personality_entry=tk.Text(
-            self._responder_custom_frame,height=5,wrap='word',
-            font=('Segoe UI',10),bg=p['field'],fg=p['text'],
-            insertbackground=p['text'],relief='flat')
-        self.responder_personality_entry.pack(fill='x',pady=(0,5))
-        self.responder_personality_entry.insert('1.0',self.responder_personality_text)
-        ttk.Label(self._responder_custom_frame,
-            text='Example: A laid-back gamer who jokes often, never sounds robotic, '
-                 'and usually uses lowercase short replies.',
-            style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
-
-        tone_row=ttk.Frame(personality_tab,style='Panel.TFrame')
-        tone_row.pack(fill='x',pady=4)
-        ttk.Label(tone_row,text='Tone',style='Panel.TLabel').pack(side='left',padx=(0,7))
-        ttk.Combobox(tone_row,textvariable=self.responder_tone_var,state='readonly',
-                     values=('Casual','Friendly','Playful','Dry','Sarcastic','Serious'),
-                     width=14).pack(side='left',padx=(0,16))
-        ttk.Label(tone_row,text='Humour 0–5',style='Panel.TLabel').pack(
-            side='left',padx=(0,7))
-        ttk.Combobox(tone_row,textvariable=self.responder_humour_var,
-                     state='readonly',values=('0','1','2','3','4','5'),
-                     width=5).pack(side='left')
-        model_row=ttk.Frame(personality_tab,style='Panel.TFrame')
-        model_row.pack(fill='x',pady=(7,4))
-        ttk.Label(model_row,text='OpenAI model',style='Panel.TLabel').pack(
-            side='left',padx=(0,8))
-        ttk.Entry(model_row,textvariable=self.responder_model_var,
-                  width=20).pack(side='left')
-        ttk.Label(personality_tab,
-            text='No example user or chat history is required in Custom personality mode.',
-            style='Panel.TLabel',wraplength=610).pack(anchor='w',pady=(4,5))
-        self._responder_logs_frame=ttk.Frame(personality_tab,style='Panel.TFrame')
-        ttk.Label(self._responder_logs_frame,text='Optional historical style source',
+        self._responder_logs_frame=ttk.Frame(
+            self._responder_advanced_frame,style='Panel.TFrame')
+        ttk.Label(self._responder_logs_frame,text='Chat-log source username',
                   style='Panel.TLabel').pack(anchor='w',pady=(5,4))
         ttk.Entry(self._responder_logs_frame,
-                  textvariable=self.responder_persona_var,width=28).pack(
-                      anchor='w',fill='x',pady=(0,5))
-        ttk.Checkbutton(self._responder_logs_frame,text='Rotate copied style every 5 minutes',
+                  textvariable=self.responder_persona_var).pack(fill='x',pady=(0,5))
+        ttk.Checkbutton(self._responder_logs_frame,
+                        text='Rotate logged style every 5 minutes',
                         variable=self.responder_rotation_var).pack(anchor='w',pady=3)
-        ttk.Checkbutton(self._responder_logs_frame,text='Capture new public room chat locally',
+        ttk.Checkbutton(self._responder_logs_frame,
+                        text='Capture new public chat into local style logs',
                         variable=self.responder_capture_var).pack(anchor='w',pady=3)
         dir_row=ttk.Frame(self._responder_logs_frame,style='Panel.TFrame')
-        dir_row.pack(fill='x',pady=(4,4))
+        dir_row.pack(fill='x',pady=(4,6))
         ttk.Entry(dir_row,textvariable=self.responder_log_dir_var).pack(
             side='left',fill='x',expand=True)
         ttk.Button(dir_row,text='Browse logs',command=self._responder_browse).pack(
             side='left',padx=(6,0))
         self._responder_update_style_controls()
 
-        ttk.Label(targets_tab,text='Which speakers are allowed to trigger replies?',
-                  style='Panel.TLabel').pack(anchor='w',pady=(0,6))
-        ttk.Combobox(targets_tab,textvariable=self.responder_target_mode_var,
-                     values=('Everyone','Selected users','First active speaker'),
-                     state='readonly',width=28).pack(anchor='w',pady=(0,10))
-        ttk.Label(targets_tab,text='Allowed usernames (separate multiple names with commas)',
-                  style='Panel.TLabel').pack(anchor='w',pady=(0,4))
-        self.responder_target_entry=ttk.Entry(
-            targets_tab,textvariable=self.responder_target_var)
-        self.responder_target_entry.pack(fill='x',pady=(0,8))
-        ttk.Label(targets_tab,
-            text='Everyone: all eligible public speakers. Selected users: only names '
-                 'in the list. First active speaker: lock to one person until '
-                 'they are quiet for 60 seconds. Other room chat is context only.',
-            style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,9))
-        ttk.Label(targets_tab,text='Reply behaviour',style='Panel.TLabel').pack(
-            anchor='w',pady=(2,4))
-        ttk.Combobox(targets_tab,textvariable=self.responder_responsiveness_var,
-                     values=('Natural','Chatty'),state='readonly',
-                     width=20).pack(anchor='w')
-        ttk.Label(targets_tab,
-            text='Natural replies only when it makes sense. Chatty responds more often, '
-                 'still respecting cooldowns. Whispers and own messages do not trigger '
-                 'public replies; existing blocked names containing "dan" stay blocked.',
-            style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(8,3))
+        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
+        row.pack(fill='x',pady=(8,7))
+        ttk.Label(row,text='Preview as username',style='Panel.TLabel').pack(
+            side='left',padx=(0,8))
+        ttk.Entry(row,textvariable=self.responder_test_user_var,width=20).pack(
+            side='left')
+        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
+        row.pack(fill='x',pady=(3,6))
+        ttk.Button(row,text='Check G-Earth chat capture',
+                   command=self._responder_check_capture).pack(
+                       side='left',padx=(0,8))
+        ttk.Button(row,text='Send latest live draft manually',
+                   command=self._responder_send_latest).pack(side='left')
+        ttk.Label(self._responder_advanced_frame,
+                  text='To send live replies, connect Habbo AIR through G-Earth and '
+                  'send one ordinary public chat message to learn its packet format. '
+                  'An OpenAI API key must already be configured.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,7))
 
-        ttk.Label(test_tab,text='Type a pretend room message. The bot generates a '
-                  'preview using your personality. It will NOT send anything to Habbo.',
-                  style='Panel.TLabel',wraplength=610).pack(anchor='w',pady=(0,9))
-        ttk.Label(test_tab,text='Test speaker',style='Panel.TLabel').pack(anchor='w')
-        ttk.Entry(test_tab,textvariable=self.responder_test_user_var,
-                  width=25).pack(anchor='w',pady=(3,7))
-        ttk.Label(test_tab,text='Test message',style='Panel.TLabel').pack(anchor='w')
-        ttk.Entry(test_tab,textvariable=self.responder_test_message_var).pack(
-            fill='x',pady=(3,10))
-        ttk.Button(test_tab,text='Test AI reply (preview only)',
-                   command=self._responder_test_reply).pack(anchor='w',pady=(0,7))
-        ttk.Label(test_tab,text='Testing requires the OpenAI Python package '
-                  'and OPENAI_API_KEY. It does not need Habbo or G-Earth to be connected.',
-                  style='Panel.TLabel',wraplength=610).pack(anchor='w')
-
-        actions=ttk.Frame(frame,style='Panel.TFrame')
-        actions.pack(fill='x',pady=(0,8))
-        ttk.Button(actions,text='Apply settings',command=self._responder_apply).pack(
-            side='left',padx=(0,7))
-        ttk.Button(actions,text='Send latest LIVE draft manually',
-                   command=self._responder_send_latest).pack(side='left',padx=(0,7))
-        ttk.Button(actions,text='Stop',command=self._responder_stop).pack(side='left')
-        ttk.Button(frame,text='Check G-Earth chat capture',
-                   command=self._responder_check_capture).pack(anchor='w',pady=(0,6))
         ttk.Label(frame,textvariable=self.responder_status_var,
                   style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(5,9))
-        ttk.Label(frame,text='RECENT DECISIONS / TEST PREVIEWS',
+        ttk.Label(frame,text='RECENT ACTIVITY',
                   style='Panel.TLabel').pack(anchor='w')
-        self.responder_log_text=tk.Text(frame,height=8,wrap='word',state='disabled',
+        self.responder_log_text=tk.Text(frame,height=7,wrap='word',state='disabled',
             font=('Consolas',9),bg=p['field'],fg=p['text'],
             insertbackground=p['text'],relief='flat')
         self.responder_log_text.pack(fill='both',expand=True,pady=(5,7))
-        ttk.Label(frame,text='To send live messages, connect Packet Viewer → G-Earth '
-                  'and type one public message manually in Habbo first. '
-                  'The bot learns that session’s outgoing Chat packet shape. '
-                  'No browser automation or mouse coordinates.',
-                  style='Panel.TLabel',wraplength=650).pack(anchor='w')
+
+    def _responder_toggle_advanced(self):
+        self._responder_advanced_open=not self._responder_advanced_open
+        if self._responder_advanced_open:
+            self._responder_advanced_frame.pack(fill='x')
+            self._responder_advanced_button.configure(text='Advanced options ▾')
+        else:
+            self._responder_advanced_frame.pack_forget()
+            self._responder_advanced_button.configure(text='Advanced options ▸')
+
+    def _responder_update_target_controls(self):
+        if self.responder_target_mode_var.get()=='Selected users':
+            self._responder_targets_frame.pack(fill='x',pady=(0,3))
+        else:
+            self._responder_targets_frame.pack_forget()
 
     def _responder_update_style_controls(self):
         if self.responder_style_mode_var.get()=='Chat-log style':
-            self._responder_custom_frame.pack_forget()
-            self._responder_logs_frame.pack(fill='x',pady=5)
+            self._responder_logs_frame.pack(fill='x',pady=(4,7))
         else:
             self._responder_logs_frame.pack_forget()
-            self._responder_custom_frame.pack(fill='x',pady=(0,5))
 
     def _responder_browse(self):
         folder=filedialog.askdirectory(
