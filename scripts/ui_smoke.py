@@ -205,6 +205,13 @@ try:
             assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
                 'Changing style sample folder must not move the background archive')
             assert app.responder.style_examples()==['heyyy lol','wbuuu']
+            evidence=app.responder.persona_reference()
+            assert evidence['sample_message_count']==2, (
+                'Selected chat persona must retain behavioural evidence')
+            assert 'Simulating MaraGene' in app.responder_style_status_var.get(), (
+                'UI should describe the full conversational persona simulation')
+            assert 'Limited evidence' in app.responder_style_status_var.get(), (
+                'UI should warn when a persona is built from a tiny chat history')
             assert app.responder_personality_entry.cget('state')=='disabled'
             assert not app.responder.auto_rotate, (
                 'Single-user style must not rotate unexpectedly')
