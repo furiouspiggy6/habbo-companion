@@ -229,8 +229,8 @@ class PersonaResponderMixin:
                   text='Search uses the folder chosen above.',
                   style='Panel.TLabel').pack(anchor='w',pady=(3,6))
         self._responder_logs_frame.pack(fill='x',pady=(3,8))
-        self._responder_refresh_style_users()
         self._responder_update_style_controls()
+        self._responder_refresh_style_users()
         row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
         row.pack(fill='x',pady=(3,6))
         ttk.Button(row,text='Check G-Earth chat capture',
@@ -292,7 +292,7 @@ class PersonaResponderMixin:
         """Find matching per-user .txt files without loading whole chat logs."""
         folder=self._responder_style_directory()
         names=list_style_usernames(folder)
-        if not names and not self.responder_log_dir_var.get().strip():
+        if not names and folder==self._responder_default_logs:
             # Fresh installs: find common legacy or Companion log locations.
             candidates=(
                 Path(__file__).resolve().parent/'chat_logs'/'users',
@@ -308,7 +308,7 @@ class PersonaResponderMixin:
                     break
         self.responder_log_dir_var.set(str(folder))
         self._responder_style_users=names
-        self._responder_filter_style_users()
+        self._responder_filter_style_users(show=False)
         if not names:
             self.responder_style_status_var.set(
                 'No user logs found in '+str(folder)+
@@ -319,7 +319,7 @@ class PersonaResponderMixin:
         else:
             self._responder_update_style_controls()
 
-    def _responder_filter_style_users(self,event=None):
+    def _responder_filter_style_users(self,event=None,show=True):
         """Display a dropdown-like list of case-insensitive partial matches."""
         if event is not None and event.keysym in (
             'Up','Down','Return','Escape','Tab','Left','Right'):
@@ -331,7 +331,7 @@ class PersonaResponderMixin:
         box.delete(0,'end')
         for name in names:
             box.insert('end',name)
-        if names:
+        if names and show:
             box.configure(height=min(7,len(names)))
             if not box.winfo_manager():
                 box.pack(fill='x',pady=(0,5))
