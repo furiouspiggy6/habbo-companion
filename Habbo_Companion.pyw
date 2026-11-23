@@ -6530,10 +6530,28 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_receive_walk_observation(self,ident,generation,observation):
         kind,value=observation
-        if kind=='identity':
+        if kind=='ready':
+            # A new room invalidates the previous avatar's room index and tile.
+            self._bot_anti_afk_rooms[ident]=value
+            self._bot_anti_afk_positions.pop(ident,None)
+            self._bot_user_roster.pop(ident,None)
+            self._bot_anti_afk_last[ident]=time.monotonic()
+        elif kind=='identity':
             self._bot_self_ids[ident]=value
         elif kind=='users':
             self._bot_user_roster[ident]=value
+        if kind in ('identity','users'):
+            uid=self._bot_self_ids.get(ident)
+            unit=self._bot_user_roster.get(ident,{}).get(uid)
+            if unit is not None and ident in self._bot_anti_afk_rooms:
+                self._bot_anti_afk_positions[ident]=unit
+        if kind=='status':
+            previous=self._bot_anti_afk_positions.get(ident)
+            if previous is not None:
+                for index,x,y,_movement in value:
+                    if index==previous[0]:
+                        self._bot_anti_afk_positions[ident]=(index,x,y)
+                        break
         plan=self._bot_walk_plans.get(ident)
         if plan is None or plan['generation']!=generation:
             return
@@ -11906,6 +11924,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 _,ident,generation,action,count,error=item
                 self._bot_action_inflight.discard(ident)
                 if generation!=self._tcp_generation.get(ident,0):
+                    continue
+                if error is None and action!='Anti-AFK':
+                    # Ordinary user actions postpone automatic idle refreshes.
+                    self._bot_anti_afk_last[ident]=time.monotonic()
+                if action=='Anti-AFK':
+                    selected=self._bot_selected_profile()
+                    if selected is not None and selected['id']==ident:
+                        self.bot_anti_afk_status_var.set(
+                            'Stationary LookTo sent via game session. '
+                            'Server idle reset not verified.' if error is None
+                            else 'Anti-AFK send failed: '+error)
                     continue
                 if action=='Join room' and error is not None:
                     self._bot_walk_plans.pop(ident,None)
