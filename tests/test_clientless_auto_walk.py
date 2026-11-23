@@ -70,6 +70,8 @@ def fake_app():
         bot_auto_walk_var=Var(True),bot_walk_status_var=Var(""),
         bot_status_var=Var(""),_bot_walk_plans={},_bot_self_ids={},
         _bot_user_roster={},_bot_headers=None,_bot_action_inflight=set(),
+        _bot_anti_afk_rooms={},_bot_anti_afk_positions={},
+        _bot_anti_afk_last={},
         _bot_last_action_at={},_tcp_sessions={account_id:session},
         _tcp_generation={account_id:3},root=Root(),
         _bot_action_worker=lambda *args:None,
