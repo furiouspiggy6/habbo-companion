@@ -41,241 +41,158 @@ try:
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.rules_tree.winfo_exists(), 'Packet Manipulator failed to build'
     assert app.tcp_log.winfo_exists(), 'Server log failed to build'
-    assert app.responder_log_text.winfo_exists(), 'AI Responder log failed to build'
-    assert not app.responder.enabled, 'AI must start disabled'
-    assert not app.responder_send_var.get(), 'Auto-send must start disabled'
-    assert app.responder.reply_cooldown_seconds==30, (
-        'Default reply interval should be a less spammy 30 seconds')
-    assert app.responder_reply_interval_scale.winfo_exists(), (
-        'Main AI Responder reply-speed slider is missing')
-    assert app.responder_instruction_input.winfo_exists(), (
-        'Temporary instruction text area is missing')
-    assert app.responder_instruction_list.winfo_exists(), (
-        'Temporary instruction active list is missing')
-    assert not app.responder_instruction_list.winfo_manager(), (
-        'Empty directive list should collapse to avoid blank gaps')
-    assert app.responder_reply_interval_text.get().endswith('30 sec'), (
-        'Slider must display the current minimum reply interval')
-    app.responder_reply_interval_var.set(95)
-    app._responder_reply_speed_changed(95)
-    assert app.responder.reply_cooldown_seconds==95, (
-        'Dragging speed slider must adjust the live AI throttle')
-    app._responder_commit_reply_speed()
-    assert app.config['responder_reply_interval']==95, (
-        'Reply speed must be persisted for next launch')
-    assert not app.responder.enabled and not app.responder_send_var.get(), (
-        'Moving the slider must not enable the bot or automatic sending')
+    assert app.responder_log_text.winfo_exists(), (
+        'AI Responder activity log missing')
+    assert not app.responder.enabled, 'AI must start OFF'
+    assert not app.responder_send_var.get(), 'Sending must start OFF'
     assert app.responder.save_history, (
-        'Background public chat saving should start ON independently of AI')
-    assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
-        'Background chat should always be archived to Companion persona_logs/users')
-    assert app.responder_capture_var.get(), (
-        'Background logging checkbox must reflect enabled state')
-    assert 'ON' in app.responder_log_saving_var.get(), (
-        'Main responder view should show background logging status')
-    # Simplified single-screen responder: advanced controls remain available
-    # but hidden; switching targets must reveal the username field in place.
-    assert not app._responder_advanced_open, 'Advanced must start collapsed'
-    assert not app._responder_advanced_frame.winfo_manager(), (
-        'Advanced settings should be hidden initially')
-    assert app.responder_personality_entry.winfo_exists(), (
-        'Main personality editor missing')
-    assert app.responder_target_selector.winfo_exists(), (
-        'Main targeting selector missing')
-    assert not app._responder_targets_frame.winfo_manager(), (
-        'Usernames should be hidden when targeting Everyone')
-    app.responder_target_mode_var.set('Selected users')
-    app._responder_update_target_controls()
-    assert app._responder_targets_frame.winfo_manager()=='pack', (
-        'Selected users input did not appear')
-    assert app._responder_targets_frame.master==app._responder_targets_area, (
-        'Selected users input moved out of its reserved layout')
-    assert app.responder_target_search_entry.winfo_exists(), (
-        'Search room-players input must be available')
-    assert app.responder_target_matches_list.winfo_exists(), (
-        'Live room username suggestion list is missing')
-    assert not app.responder_target_matches_list.winfo_manager(), (
-        'Room suggestions must start collapsed')
-    # In-room G-Earth roster can include quiet players; AIR public-chat
-    # speakers are also eligible even if they are outside the view.
+        'Public chat must be archived even with AI disabled')
+    assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users'
+    assert app.responder_instruction_input.winfo_exists()
+    assert app.responder_style_search_entry.winfo_exists()
+    assert app.responder_personality_entry.winfo_exists()
+    assert app.responder_target_search_entry.winfo_exists()
+    assert app.responder_everyone_check.winfo_exists()
+    assert not hasattr(app,'_responder_advanced_button'), (
+        'Redundant Advanced options should be gone')
+    assert not hasattr(app,'responder_target_selector'), (
+        'Old Reply To dropdown should be replaced with checkboxes')
+    assert not hasattr(app,'responder_tone_combo')
+    assert not hasattr(app,'responder_humour_combo')
+    assert not hasattr(app,'responder_responsiveness_combo')
+    assert not hasattr(app,'responder_rotation_check')
+    assert 'ON' not in app.responder_log_saving_var.get() or app.responder.save_history
+
+    # The slider must be usable for both custom personas and saved chat personas.
+    assert app.responder.reply_cooldown_seconds==10
+    assert int(float(app.responder_reply_interval_scale.cget('from')))==0
+    assert int(float(app.responder_reply_interval_scale.cget('to')))==30
+    assert 'disabled' not in app.responder_reply_interval_scale.state()
+    app.responder_reply_interval_var.set(0)
+    app._responder_reply_speed_changed(0)
+    app._responder_commit_reply_speed()
+    assert app.responder.reply_cooldown_seconds==0
+    assert app.config['responder_reply_interval']==0
+    assert 'Immediately' in app.responder_reply_interval_text.get()
+    app.responder_reply_interval_var.set(30)
+    app._responder_reply_speed_changed(30)
+    app._responder_commit_reply_speed()
+    assert app.responder.reply_cooldown_seconds==30
+    assert app.config['responder_reply_interval']==30
+
+    # Current room roster drives visible actual checkboxes—not historical logs.
     app._own_name='ownAvatar'
     app._room_users={
         'maragene':('MaraGene',12345,4),
         'cheesecake':('Cheesecake',56789,6),
         'ownavatar':('ownAvatar',111,1),
     }
-    app._responder_room_speakers={
-        'popbrocks':('popbrocks',123456.0),
-    }
-    app._responder_refresh_room_users(show=False)
+    app._responder_room_speakers={'popbrocks':('popbrocks',123456.0)}
+    app._responder_refresh_room_users()
     assert app._responder_room_names==[
-        'Cheesecake','MaraGene','popbrocks'], (
-        'Room player suggestions must include only this room, not historical logs')
-    assert not app.responder_target_matches_list.winfo_manager()
-    app.responder_target_search_var.set('ARAg')
-    app._responder_refresh_room_users(show=True)
-    assert app._responder_target_matches==['MaraGene'], (
-        'Case-insensitive substring search of current room failed')
-    assert app.responder_target_matches_list.winfo_manager()=='pack'
-    assert app.responder_target_matches_list.size()==1
-    app.responder_target_matches_list.selection_set(0)
+        'Cheesecake','MaraGene','popbrocks']
+    assert app.responder_everyone_var.get(), (
+        'Everyone should be checked by default')
+    assert all(var.get() for _name,var in
+               app._responder_target_checkboxes.values())
     original_save=app.save
     app.save=lambda:None
     try:
-        app._responder_choose_target_user()
-        assert app.responder_target_var.get()=='MaraGene'
-        assert app.responder.target_mode=='Selected users'
+        app.responder_everyone_var.set(False)
+        app._responder_toggle_everyone()
+        assert app.responder_target_mode_var.get()=='Selected users'
+        assert not app.responder_target_var.get()
+        assert all(not var.get() for _name,var in
+                   app._responder_target_checkboxes.values())
+        assert not app.responder.enabled
+        app._responder_target_checkboxes['maragene'][1].set(True)
+        app._responder_target_selection_changed()
         assert app.responder.selected_users=='MaraGene'
-        assert not app.responder_target_matches_list.winfo_manager(), (
-            'Selecting a room suggestion must collapse the dropdown')
-        app.responder_target_search_var.set('BROCK')
-        app._responder_refresh_room_users(show=True)
-        assert app._responder_target_matches==['popbrocks']
-        app.responder_target_matches_list.selection_set(0)
-        app._responder_choose_target_user()
-        assert app.responder.selected_users=='MaraGene, popbrocks', (
-            'Multiple room selections must accumulate without duplicates')
-        app.responder_target_search_var.set('BROCK')
-        app._responder_refresh_room_users(show=True)
-        app.responder_target_matches_list.selection_set(0)
-        app._responder_choose_target_user()
-        assert app.responder.selected_users=='MaraGene, popbrocks', (
-            'Choosing the same user twice must not duplicate targets')
-        app._room_users.clear()
-        app._responder_room_speakers.clear()
-        app._responder_refresh_room_users(show=True)
-        assert not app._responder_room_names, (
-            'Disconnected/cleared room must not offer stale users')
-        assert not app.responder_target_matches_list.winfo_manager()
-    finally:
-        app.save=original_save
-    app.responder_target_mode_var.set('Everyone')
-    app._responder_update_target_controls()
-    assert not app._responder_targets_frame.winfo_manager(), (
-        'Selected users input did not hide')
-    assert app.responder_style_search_entry.winfo_exists(), (
-        'Searchable saved username field is missing')
-    assert app.responder_style_matches_list.winfo_exists(), (
-        'Saved-username suggestions list is missing')
-    assert not app.responder_style_matches_list.winfo_manager(), (
-        'Suggestions should not expand before searching')
-    app._responder_toggle_advanced()
-    assert app._responder_advanced_open
-    assert app._responder_advanced_frame.winfo_manager()=='pack', (
-        'Advanced settings did not expand')
-    assert app._responder_logs_frame.winfo_manager()=='pack', (
-        'Saved chat-log preferences are inaccessible')
-    app._responder_toggle_advanced()
-    assert not app._responder_advanced_open
-    assert not app._responder_advanced_frame.winfo_manager(), (
-        'Advanced settings did not collapse')
-    # Confirm both collapsing panels actually reclaim vertical space.
-    # The old fill=both/expand=True settings created a huge empty gap.
-    app._ui_show_page('responder')
-    root.update_idletasks()
-    assert app.responder_log_text.winfo_manager()=='pack'
-    assert (app.responder_log_text.winfo_y()-
-            app._responder_advanced_button.winfo_y()) < 180, (
-        'Collapsed Advanced left a large empty gap above Recent Activity')
-    assert not app.responder_target_matches_list.winfo_manager()
-    assert not app.responder_style_matches_list.winfo_manager()
-    # Verify filtering and selecting a real per-user file automatically switches
-    # to that specific writing style without enabling any live game sends.
-    with tempfile.TemporaryDirectory() as folder:
-        (Path(folder)/'MaraGene.txt').write_text(
-            '[13:01] MaraGene: heyyy lol\n'
-            '[13:02] MaraGene: wbuuu\n',encoding='utf-8')
-        (Path(folder)/'Mario35.txt').write_text(
-            '[13:03] Mario35: hello\n',encoding='utf-8')
-        app.responder_log_dir_var.set(folder)
-        app._responder_refresh_style_users()
-        assert len(app._responder_style_users)==2, (
-            'User log listing failed')
-        assert not app.responder_style_matches_list.winfo_manager(), (
-            'Search unexpectedly opened the dropdown on refresh')
-        app.responder_style_search_var.set('GeNe')
-        app._responder_filter_style_users()
-        assert app._responder_style_matches==['MaraGene'], (
-            'Partial case-insensitive username search failed')
-        assert app.responder_style_matches_list.winfo_manager()=='pack', (
-            'Search result dropdown did not open')
-        app.responder_style_matches_list.selection_set(0)
-        original_save=app.save
-        app.save=lambda:None
-        try:
+        app._responder_target_checkboxes['popbrocks'][1].set(True)
+        app._responder_target_selection_changed()
+        assert app.responder.selected_users=='MaraGene, popbrocks'
+        app.responder_target_search_var.set('GENE')
+        app._responder_render_target_checklist()
+        assert set(app._responder_target_checkboxes)=={'maragene'}
+        assert app._responder_target_checkboxes['maragene'][1].get()
+        app.responder_target_search_var.set('')
+        app._responder_render_target_checklist()
+        assert app._responder_target_checkboxes['popbrocks'][1].get(), (
+            'Filtering must not lose checked selections')
+        app.responder_everyone_var.set(True)
+        app._responder_toggle_everyone()
+        assert app.responder_target_mode_var.get()=='Everyone'
+        assert all(var.get() for _name,var in
+                   app._responder_target_checkboxes.values())
+        # Live-room user joins while Everyone is ticked.
+        app._room_users['newplayer']=('NewPlayer',556,7)
+        app._responder_refresh_room_users()
+        assert app._responder_target_checkboxes['newplayer'][1].get()
+        # Unchecking an individual switches to selected subset.
+        app._responder_target_checkboxes['maragene'][1].set(False)
+        app._responder_target_selection_changed()
+        assert app.responder.target_mode=='Selected users'
+        assert 'maragene' not in app.responder.selected_users.casefold()
+        assert 'NewPlayer' in app.responder.selected_users
+        assert app.responder.save_history
+
+        # Selecting a saved persona hides unrelated custom options but keeps
+        # the reply-speed slider active.
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder)/'MaraGene.txt').write_text(
+                '[13:01] MaraGene: heyyy lol\n'
+                '[13:02] MaraGene: wbuuu\n',encoding='utf-8')
+            app.responder_log_dir_var.set(folder)
+            app._responder_refresh_style_users()
+            app.responder_style_search_var.set('gene')
+            app._responder_filter_style_users()
+            assert app._responder_style_matches==['MaraGene']
+            app.responder_style_matches_list.selection_set(0)
             app._responder_select_style_user()
             assert app.responder.style_mode=='Chat-log style'
-            assert app.responder.save_history, (
-                'Selecting a style must not disable background logging')
             assert app.responder.persona=='MaraGene'
-            assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
-                'Changing style sample folder must not move the background archive')
-            assert app.responder.style_examples()==['heyyy lol','wbuuu']
-            assert 'disabled' in app.responder_tone_combo.state(), (
-                'Custom tone must be disabled for selected persona')
-            assert 'disabled' in app.responder_humour_combo.state(), (
-                'Custom humour must be disabled for selected persona')
-            assert 'disabled' in app.responder_responsiveness_combo.state(), (
-                'Natural/Chatty must be disabled for selected persona')
-            assert 'disabled' in app.responder_reply_interval_scale.state(), (
-                'Custom reply speed must be disabled for selected persona')
-            assert 'disabled' in app.responder_rotation_check.state(), (
-                'Rotating personas must be disabled for one selected user')
-            assert not {'personality','tone','humour','responsiveness'}.intersection(
-                app.responder.test_payload('Alice','hey')), (
-                'Selected persona must not inherit generic AI characteristics')
-            evidence=app.responder.persona_reference()
-            assert evidence['sample_message_count']==2, (
-                'Selected chat persona must retain behavioural evidence')
-            assert 'Simulating MaraGene' in app.responder_style_status_var.get(), (
-                'UI should describe the full conversational persona simulation')
-            assert 'Limited evidence' in app.responder_style_status_var.get(), (
-                'UI should warn when a persona is built from a tiny chat history')
-            assert app.responder_personality_entry.cget('state')=='disabled'
-            assert not app.responder.auto_rotate, (
-                'Single-user style must not rotate unexpectedly')
-            assert not app.responder.enabled and not app.responder_send_var.get(), (
-                'Selecting a style must not start game messaging')
-            app.responder_instruction_input.insert(
-                '1.0','be mean to Marc for 10mins\n'
-                      'type slow\npretend to go afk for 2mins')
-            app._responder_add_instructions()
-            assert len(app.responder.temporary_instructions)==3, (
-                'All three temporary natural-language directions should apply')
-            assert app.responder.is_temporarily_afk(), (
-                'AFK should immediately pause generated public replies')
-            assert app.responder.temporary_send_delay()==10, (
-                'Type slow should schedule a 10-second G-Earth delay')
-            assert app.responder_instruction_list.winfo_manager()=='pack', (
-                'Active instructions must be visible')
-            assert app.responder_instruction_list.size()==3
-            assert not app.responder.enabled and not app.responder_send_var.get()
-            app.responder_instruction_list.selection_set(0)
-            app._responder_remove_instruction()
-            assert len(app.responder.temporary_instructions)==2
-            app._responder_clear_instructions()
-            assert not app.responder.temporary_instructions
-            assert not app.responder_instruction_list.winfo_manager(), (
-                'Clearing directives must reclaim vertical space')
-            app._responder_use_custom_style()
-            assert app.responder.style_mode=='Custom personality'
-            assert 'disabled' not in app.responder_tone_combo.state()
-            assert 'disabled' not in app.responder_humour_combo.state()
-            assert 'disabled' not in app.responder_responsiveness_combo.state()
+            assert not app._responder_custom_frame.winfo_manager(), (
+                'Custom personality must hide while recreating a saved persona')
             assert 'disabled' not in app.responder_reply_interval_scale.state()
-            assert app.responder.save_history, (
-                'Custom personality must not disable background logging')
+            assert not {'tone','humour','responsiveness','personality'}.intersection(
+                app.responder.test_payload('Alice','hey'))
+            app._responder_use_custom_style()
+            assert app._responder_custom_frame.winfo_manager()=='pack'
             assert app.responder_personality_entry.cget('state')=='normal'
-            app.responder_capture_var.set(False)
-            app._responder_change_logging()
-            assert not app.responder.save_history and not app.responder.enabled
-            app.responder_capture_var.set(True)
-            app._responder_change_logging()
-            assert app.responder.save_history and not app.responder.enabled
-        finally:
-            app.save=original_save
-    assert not app.responder.enabled and not app.responder_send_var.get(), (
-        'Navigating UI controls should never enable chat or sending')
+            app.responder_personality_entry.delete('1.0','end')
+            app.responder_personality_entry.insert(
+                '1.0','A sarcastic, sleepy Habbo visitor.')
+            app._responder_apply()
+            assert app.responder.personality=='A sarcastic, sleepy Habbo visitor.'
+            assert app.responder.test_payload('Alice','hey')['personality']==(
+                'A sarcastic, sleepy Habbo visitor.')
+
+        # One enable control is sufficient: AI-on sends through G-Earth,
+        # AI-off stops both generating and sending.
+        app.responder_everyone_var.set(True)
+        app._responder_toggle_everyone()
+        app.responder_enabled_var.set(True)
+        app._responder_apply()
+        assert app.responder.enabled and app.responder_send_var.get()
+        app._responder_stop()
+        assert not app.responder.enabled and not app.responder_send_var.get()
+        assert app.responder.save_history, 'Logging must remain ON after stopping AI'
+        app.responder_instruction_input.insert(
+            '1.0','type slow\npretend to go afk for 2mins')
+        app._responder_add_instructions()
+        assert len(app.responder.temporary_instructions)==2
+        assert app.responder_instruction_list.winfo_manager()=='pack'
+        app._responder_clear_instructions()
+        assert not app.responder_instruction_list.winfo_manager(), (
+            'Empty instruction list must collapse')
+    finally:
+        app.save=original_save
+    app._room_users.clear()
+    app._responder_room_speakers.clear()
+    app._responder_refresh_room_users()
+    assert not app._responder_room_names
+    assert not app._responder_target_checkboxes
+    assert not app.responder.enabled
     assert app._ui_scroll_canvases.keys()>=PAGES, 'Scrollable page missing'
     for page in PAGES:
         app._ui_show_page(page)
