@@ -1,5 +1,21 @@
-HABBO COMPANION v1.1.73 — AI RESPONDER + MODERN DARK WORKSPACE
-=================================================
+HABBO COMPANION v1.1.74 — CUSTOM AI PERSONALITY AND TARGETING
+==============================================================
+
+AI RESPONDER (NEW)
+- Personality tab: default Custom personality. Write your own personality
+  description, choose tone and humour 0–5. No copied person's chat logs needed.
+- Optional Chat-log style remains available, but is no longer the default.
+- Who to reply to tab: Everyone, Selected users (comma-separated exact usernames),
+  or First active speaker (60-second quiet lock). Natural/Chatty reply behaviour.
+- Test without sending tab: enter a sample speaker + message, then press
+  Test AI reply (preview only). Preview works even when the live bot is OFF;
+  it never sends an in-game packet, even if Auto-send is checked.
+- AI still requires Python package "openai" and environment variable
+  OPENAI_API_KEY; network API usage applies to the test preview.
+- For live messages, use the existing AIR chat feed and optional G-Earth send
+  from an observed outgoing Chat packet. No browser automation involved.
+- Both live responding and auto-send start OFF by default.
+
 
 NEW IN v1.1.73: AI Responder is a separate, optional sidebar page. It reads the
 existing Habbo AIR public chat feed and can reuse legacy chat_logs/users style

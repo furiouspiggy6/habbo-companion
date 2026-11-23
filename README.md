@@ -1,5 +1,36 @@
 # Habbo Companion
 
+## v1.1.74 — Create your own AI personality and test responses safely
+
+The **AI Responder** page has **Personality**, **Who to reply to**, and
+**Test without sending** tabs.
+
+- **Custom personality** is the default: describe how the bot talks and behaves
+  in your own words, select a tone (Casual, Friendly, Playful, Dry, Sarcastic,
+  Serious) and humour from 0–5. No named persona, log file, or captured
+  writing style is needed. The old **Chat-log style** option is still available
+  explicitly if wanted.
+- **Everyone**, **Selected users**, and **First active speaker** target modes.
+  Selected users accepts a comma-separated set of exact usernames (ignoring
+  case); non-selected speakers provide room context but cannot trigger replies.
+  First active speaker locks to one speaker for 60 seconds of silence.
+  **Natural** vs **Chatty** determines how often the AI decides to participate;
+  all modes retain the short anti-spam cooldown and repeated-question checks.
+- **Test AI reply (preview only)** accepts a test speaker and message. It sends
+  that sample to OpenAI and displays a preview under Recent Decisions. It works
+  even when the live responder is OFF and when Habbo/G-Earth are disconnected.
+  Test responses **never** enter auto-send, even if Auto-send is checked. A
+  valid `OPENAI_API_KEY` and the optional `openai` Python package are required.
+- Live reading still uses the AIR chat feed. Auto-send still requires the
+  connected G-Earth session and an observed outgoing public Chat packet.
+  Live responder and automatic sending are both OFF when Companion starts.
+
+To try it: update to **v1.1.74**, open AI Responder → Personality, edit the
+description, open Test without sending, type a sample message and click
+**Test AI reply**. Next, in Who to reply to, choose Everyone or Selected
+users, then Apply settings and enable the live responder. Avoid enabling
+Auto-send until previews and live draft decisions behave as intended.
+
 ## v1.1.73 — Optional AI Responder
 
 The **AI Responder** has its own sidebar workspace. It listens to **new** public

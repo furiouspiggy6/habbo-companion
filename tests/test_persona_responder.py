@@ -1,10 +1,12 @@
 """Offline regression checks for opt-in AI persona responder."""
 from pathlib import Path
+import unittest.mock
 import tempfile
 import unittest
 from persona_responder import (
     PersonaResponder, chat_expression_from_template,
     clean_model_reply, safe_persona_filename,
+    selected_usernames, DEFAULT_PERSONALITY, generate_persona_reply,
 )
 
 class PersonaResponderTests(unittest.TestCase):
@@ -23,6 +25,7 @@ class PersonaResponderTests(unittest.TestCase):
 
     def test_dynamic_target_lock_and_release(self):
         self.bot.enabled=True
+        self.bot.target_mode="First active speaker"
         self.bot.observe("Alice","hi",now=10.0)
         self.bot.observe("Bob","test",now=11.0)
         self.assertEqual(self.bot.active_target,"Alice")
@@ -34,7 +37,8 @@ class PersonaResponderTests(unittest.TestCase):
 
     def test_fixed_target_only(self):
         self.bot.enabled=True
-        self.bot.fixed_target="Alice"
+        self.bot.target_mode="Selected users"
+        self.bot.selected_users="Alice"
         self.bot.observe("Bob","hi",now=10.0)
         self.assertIsNone(self.bot.pop_ready(now=12.0))
         self.bot.observe("Alice","hi",now=13.0)
@@ -63,6 +67,75 @@ class PersonaResponderTests(unittest.TestCase):
     def test_style_files_sanitized_and_parsed(self):
         self.assertEqual(safe_persona_filename("../../secret"),"secret.txt")
         self.assertEqual(self.bot.style_examples(),["hey there","what you up to"])
+
+
+    def test_custom_personality_requires_no_logs(self):
+        self.bot.enabled=True
+        self.bot.persona="no-file-needed"
+        self.bot.style_mode="Custom personality"
+        self.bot.personality="A chill bot that loves puns."
+        self.bot.observe("Alice","hi bot",now=10.0)
+        payload=self.bot.pop_ready(now=11.0)
+        self.assertEqual(payload["personality"],"A chill bot that loves puns.")
+        self.assertNotIn("style_examples",payload)
+        self.assertEqual(payload["target"],"Alice")
+
+    def test_everyone_can_trigger_and_targets_most_recent_speaker(self):
+        self.bot.enabled=True
+        self.bot.target_mode="Everyone"
+        self.bot.observe("Alice","hey",now=10.0)
+        self.bot.observe("Bob","yo",now=10.1)
+        payload=self.bot.pop_ready(now=11.0)
+        self.assertEqual(payload["target"],"Bob")
+        self.assertTrue(payload["new_messages"][1]["reply_eligible"])
+
+    def test_selected_multiple_users_and_non_selected_as_context(self):
+        self.bot.enabled=True
+        self.bot.target_mode="Selected users"
+        self.bot.selected_users=" ALICE, Bob\ncharlie "
+        self.assertEqual(selected_usernames(self.bot.selected_users),
+                         {"alice","bob","charlie"})
+        self.bot.observe("random","no",now=10.0)
+        self.assertIsNone(self.bot.pop_ready(now=11.0))
+        self.bot.observe("ALICE","hello",now=12.0)
+        self.bot.observe("random","hello too",now=12.1)
+        payload=self.bot.pop_ready(now=13.0)
+        self.assertEqual(payload["target"],"ALICE")
+        self.assertTrue(payload["new_messages"][0]["reply_eligible"])
+        self.assertFalse(payload["new_messages"][1]["reply_eligible"])
+
+    def test_test_payload_does_not_need_enabled_or_change_live_state(self):
+        self.assertFalse(self.bot.enabled)
+        payload=self.bot.test_payload("Tester","what's up?")
+        self.assertTrue(payload["test_mode"])
+        self.assertEqual(payload["target"],"Tester")
+        self.assertEqual(payload["personality"],DEFAULT_PERSONALITY)
+        self.assertFalse(self.bot.running)
+        self.assertEqual(list(self.bot.context),[])
+
+    def test_log_style_optional_and_missing_log_reports_error(self):
+        self.bot.style_mode="Chat-log style"
+        self.assertIn("style_examples",self.bot.test_payload("a","hi"))
+        self.bot.persona="Unknown"
+        self.assertIn("error",self.bot.test_payload("a","hi"))
+
+    def test_personality_prompt_and_preview_rule(self):
+        class Stub:
+            output_text="hey there!"
+        class Responses:
+            def create(self,**kwargs):
+                self.last=kwargs
+                return Stub()
+        responses=Responses()
+        class Client:
+            def __init__(self,**kwargs):self.responses=responses
+        import sys
+        with unittest.mock.patch.dict("os.environ",{"OPENAI_API_KEY":"test"}):
+            with unittest.mock.patch.dict(sys.modules,{"openai":unittest.mock.Mock(OpenAI=Client)}):
+                reply=generate_persona_reply(self.bot.test_payload("a","hi"))
+        self.assertEqual(reply,"hey there!")
+        self.assertIn("test_mode",responses.last["input"][0]["content"])
+        self.assertIn("DO NOT imitate",responses.last["input"][0]["content"])
 
     def test_template_uses_real_outgoing_packet_shape(self):
         template='{out:Chat}{s:"hello"}{i:0}{i:0}'
