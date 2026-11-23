@@ -242,6 +242,78 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertEqual(self.bot.style_examples(),["hey there","what you up to"])
 
 
+    def test_persona_reference_uses_behavior_not_just_unique_style(self):
+        folder=Path(self.temp.name)
+        (folder/'MaraGene.txt').write_text(
+            '[13:00] MaraGene: lol nah\n'
+            '[13:01] MaraGene: lol nah\n'
+            '[13:02] MaraGene: you fr?\n'
+            '[13:03] MaraGene: im just here chilling haha\n'
+            '[13:04] MaraGene: bruhh\n',
+            encoding='utf-8')
+        self.bot.persona='MaraGene'
+        self.bot.style_mode='Chat-log style'
+        reference=self.bot.persona_reference()
+        self.assertEqual(reference['reference_username'],'MaraGene')
+        self.assertEqual(reference['evidence_messages_in_recent_log_window'],5)
+        self.assertEqual(reference['sample_message_count'],5)
+        self.assertEqual(reference['sample_messages_in_chronological_order'],
+                         ['lol nah','lol nah','you fr?',
+                          'im just here chilling haha','bruhh'])
+        self.assertEqual(reference['observable_chat_habits'][
+                             'messages_with_questions_percent'],20)
+        self.assertEqual(reference['observable_chat_habits'][
+                             'messages_with_laughter_percent'],60)
+        self.assertIn('limited',reference['evidence_quality'])
+        payload=self.bot.test_payload('Someone','you alright?')
+        self.assertTrue(payload['persona_simulation'])
+        self.assertEqual(payload['persona_reference'],reference)
+        self.assertEqual(payload['style_mode'],'Chat-log style')
+
+    def test_persona_reference_is_bounded_and_uses_older_and_recent_messages(self):
+        folder=Path(self.temp.name)
+        # Bounded processing regardless of how long 24/7 chat logging runs.
+        with (folder/'longhistory.txt').open('w',encoding='utf-8') as stream:
+            for i in range(2100):
+                stream.write(f'[13:00] longhistory: msg{i:04d}\n')
+        self.bot.persona='longhistory'
+        reference=self.bot.persona_reference()
+        self.assertEqual(reference['evidence_messages_in_recent_log_window'],1600)
+        samples=reference['sample_messages_in_chronological_order']
+        self.assertLessEqual(len(samples),120)
+        self.assertEqual(len(samples),120)
+        self.assertEqual(samples[0],'msg0500')
+        self.assertEqual(samples[-1],'msg2099')
+        self.assertIn('msg2010',samples)
+        self.assertEqual(self.bot.persona_reference(),reference,
+                         'Persona evidence should not randomly change every reply')
+
+    def test_persona_prompt_models_habits_and_does_not_claim_real_identity(self):
+        class Stub:
+            output_text='lol nah'
+        class Responses:
+            def create(self,**kwargs):
+                self.last=kwargs
+                return Stub()
+        responses=Responses()
+        class Client:
+            def __init__(self,**kwargs):
+                self.responses=responses
+        import sys
+        self.bot.style_mode='Chat-log style'
+        with unittest.mock.patch.dict('os.environ',{'OPENAI_API_KEY':'test'}):
+            with unittest.mock.patch.dict(
+                sys.modules,{'openai':unittest.mock.Mock(OpenAI=Client)}):
+                reply=generate_persona_reply(self.bot.test_payload('Alice','hey'))
+        self.assertEqual(reply,'lol nah')
+        system=responses.last['input'][0]['content']
+        self.assertIn('coherent conversational',system)
+        self.assertIn('Never claim to literally be that person',system)
+        self.assertIn('never invent private facts',system)
+        submitted=responses.last['input'][1]['content']
+        self.assertIn('"persona_reference"',submitted)
+        self.assertIn('"persona_simulation": true',submitted)
+
     def test_custom_personality_requires_no_logs(self):
         self.bot.enabled=True
         self.bot.persona="no-file-needed"
