@@ -170,9 +170,9 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIn('persona_reference',fields)
         self.bot.style_mode='Custom personality'
         fields=self.bot._personality_payload()
-        self.assertEqual(fields['tone'],'Friendly')
-        self.assertEqual(fields['humour'],5)
-        self.assertEqual(fields['responsiveness'],'Chatty')
+        self.assertNotIn('tone',fields)
+        self.assertNotIn('humour',fields)
+        self.assertNotIn('responsiveness',fields)
         self.assertEqual(fields['personality'],'Helpful cheerful Habbo assistant')
 
     def test_parse_temporary_chat_instructions_and_expiry(self):
@@ -230,7 +230,7 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIsNotNone(self.bot.pop_ready(now=222))
         self.assertEqual(self.bot._temporary_prompt_instructions(now=222),[])
 
-    def test_persona_mode_keeps_anti_spam_interval_when_slider_is_fast(self):
+    def test_persona_uses_same_reply_speed_slider_as_custom_mode(self):
         self.bot.enabled=True
         self.bot.style_mode='Chat-log style'
         self.bot.reply_cooldown_seconds=5
@@ -238,43 +238,46 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertIsNotNone(self.bot.pop_ready(now=11))
         self.bot.running=False
         self.bot.remember_reply('hi',now=11)
-        self.bot.observe('Alice','you there',now=20)
-        self.assertIsNone(self.bot.pop_ready(now=21))
-        self.bot.observe('Alice','you there now',now=40)
-        self.assertIsNotNone(self.bot.pop_ready(now=41))
+        self.bot.observe('Alice','you there',now=12)
+        self.assertIsNone(self.bot.pop_ready(now=13))
+        self.bot.observe('Alice','you there now',now=16)
+        self.assertIsNotNone(self.bot.pop_ready(now=17))
+        self.bot.running=False
+        self.bot.remember_reply('hello',now=17)
+        self.bot.reply_cooldown_seconds=0
+        self.bot.observe('Alice','another message',now=18)
+        self.assertIsNotNone(self.bot.pop_ready(now=19))
 
     def test_slider_interval_limits_and_rounding(self):
-        self.assertEqual(DEFAULT_REPLY_INTERVAL_SECONDS,30)
-        self.assertEqual(clamp_reply_interval(-10),5)
-        self.assertEqual(clamp_reply_interval(0),5)
-        self.assertEqual(clamp_reply_interval(13),15)
-        self.assertEqual(clamp_reply_interval(28),30)
-        self.assertEqual(clamp_reply_interval(61),60)
-        self.assertEqual(clamp_reply_interval(999),120)
-        self.assertEqual(clamp_reply_interval('bad'),30)
-        self.assertEqual(clamp_reply_interval(float('nan')),30)
+        self.assertEqual(DEFAULT_REPLY_INTERVAL_SECONDS,10)
+        self.assertEqual(clamp_reply_interval(-10),0)
+        self.assertEqual(clamp_reply_interval(0),0)
+        self.assertEqual(clamp_reply_interval(0.5),1)
+        self.assertEqual(clamp_reply_interval(13),13)
+        self.assertEqual(clamp_reply_interval(28.2),28)
+        self.assertEqual(clamp_reply_interval(61),30)
+        self.assertEqual(clamp_reply_interval(999),30)
+        self.assertEqual(clamp_reply_interval('bad'),10)
+        self.assertEqual(clamp_reply_interval(float('nan')),10)
 
     def test_adjustable_reply_rate_prevents_back_to_back_drafts(self):
-        self.assertEqual(self.bot.reply_cooldown_seconds,30)
+        self.assertEqual(self.bot.reply_cooldown_seconds,10)
         self.bot.enabled=True
-        # First valid reply is not delayed; the cooldown follows a draft.
         self.bot.observe('Alice','hey',now=10.0)
         self.assertIsNotNone(self.bot.pop_ready(now=11.0))
         self.bot.running=False
         self.bot.remember_reply('hey there',now=11.0)
-        self.bot.observe('Alice','you there',now=20.0)
-        self.assertIsNone(self.bot.pop_ready(now=21.0))
-        # The next eligible message after 30 seconds may get a response.
-        self.bot.observe('Alice','hi again',now=40.0)
-        self.assertIsNotNone(self.bot.pop_ready(now=41.0))
+        self.bot.observe('Alice','you there',now=15.0)
+        self.assertIsNone(self.bot.pop_ready(now=16.0))
+        self.bot.observe('Alice','hi again',now=21.0)
+        self.assertIsNotNone(self.bot.pop_ready(now=22.0))
         self.bot.running=False
-        self.bot.remember_reply('hi again',now=41.0)
-        # Moving the slider right changes rate immediately.
-        self.bot.reply_cooldown_seconds=120
-        self.bot.observe('Alice','one more',now=100.0)
-        self.assertIsNone(self.bot.pop_ready(now=101.0))
-        self.bot.observe('Alice','hello much later',now=161.0)
-        self.assertIsNotNone(self.bot.pop_ready(now=162.0))
+        self.bot.remember_reply('hi again',now=22.0)
+        self.bot.reply_cooldown_seconds=30
+        self.bot.observe('Alice','one more',now=40.0)
+        self.assertIsNone(self.bot.pop_ready(now=41.0))
+        self.bot.observe('Alice','hello much later',now=52.0)
+        self.assertIsNotNone(self.bot.pop_ready(now=53.0))
 
     def test_cooldown_and_questions(self):
         # Previous short-cooldown regression now uses the slider's fast end.
