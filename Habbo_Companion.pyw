@@ -4071,6 +4071,67 @@ def outfit_update_expression(gender,figure):
             '}{s:'+json.dumps(pair[1])+'}')
 
 
+def face_rotation_targets(tile_x,tile_y,clockwise=True):
+    """Eight look-at targets around a stationary avatar (45 degrees apart).
+
+    No MoveAvatar packet is constructed, and the center square is never sent
+    as a movement destination. The LookTo protocol takes absolute target
+    tile coordinates; it does not request a walk to those coordinates.
+    """
+    if (type(tile_x) is not int or type(tile_y) is not int
+        or not 1<=tile_x<=1023 or not 1<=tile_y<=1023):
+        raise ValueError('Capture your standing tile before rotating.')
+    offsets=((0,-1),(1,-1),(1,0),(1,1),
+             (0,1),(-1,1),(-1,0),(-1,-1))
+    if not clockwise:
+        offsets=(offsets[0],)+tuple(reversed(offsets[1:]))
+    return tuple((tile_x+dx,tile_y+dy) for dx,dy in offsets)
+
+
+def face_lookto_expression(tile_x,tile_y):
+    """Only the named turning header and two bounded integer coordinates."""
+    if (type(tile_x) is not int or type(tile_y) is not int
+        or not 0<=tile_x<=1024 or not 0<=tile_y<=1024):
+        raise ValueError('LookTo target must be within the nearby tile grid.')
+    return f'{{out:LookTo}}{{i:{tile_x}}}{{i:{tile_y}}}'
+
+
+def outgoing_face_tile_from_packet(extension,direction,packet):
+    """Capture a human-generated LookTo using the mapped header, not a guess.
+
+    Only a standard 4-byte length, 2-byte header, two-int LookTo packet is
+    accepted; the user is instructed to click their OWN avatar to identify
+    their current standing tile. A generic LookTo target cannot by itself
+    prove the coordinates belong to the user's avatar.
+    """
+    try:
+        infos=(getattr(extension,'packet_infos',None) or {}).get(
+            direction,{}).get(packet.header_id(),())
+        if not any(str(info.get('Name','')).casefold()=='lookto'
+                   for info in infos):
+            return None
+        raw=getattr(packet,'bytearray',None)
+        if (not isinstance(raw,(bytes,bytearray)) or len(raw)!=14
+            or bytes(raw[:4])!=b'\x00\x00\x00\x0a'):
+            return None
+        x,y=packet.read_int(6),packet.read_int(10)
+        face_rotation_targets(x,y)
+        return x,y
+    except (ValueError,TypeError,AttributeError,IndexError,KeyError):
+        return None
+
+
+def outgoing_is_named(extension,direction,packet,name):
+    """Check a named G-Earth outgoing header without hardcoded packet IDs."""
+    try:
+        infos=(getattr(extension,'packet_infos',None) or {}).get(
+            direction,{}).get(packet.header_id(),())
+        return any(str(info.get('Name','')).casefold()==name.casefold()
+                   for info in infos)
+    except (ValueError,TypeError,AttributeError,KeyError):
+        return False
+
+
 def initial_outfit_delay_ms(settings):
     """Migrate v1.1.89's seconds to milliseconds without changing speed."""
     if 'outfit_delay_ms' in settings:
@@ -5302,6 +5363,24 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._outfit_index=0
         self._outfit_sent=0
         self._outfit_interval_ms=300.0
+        # Face Rotator: one deliberately captured standing square per room,
+        # eight LookTo directions, never a MoveAvatar request.
+        self.face_status_var=tk.StringVar(
+            value='Capture your standing tile by clicking your own avatar.')
+        self.face_delay_var=tk.StringVar(
+            value=str(self.config.get('face_delay_ms','350')))
+        self.face_direction_var=tk.StringVar(
+            value=str(self.config.get('face_direction','Clockwise')))
+        self._face_tile=None
+        self._face_capture_pending=False
+        self._face_capture_generation=0
+        self._face_running=False
+        self._face_generation=0
+        self._face_after_id=None
+        self._face_targets=()
+        self._face_step=0
+        self._face_sent=0
+        self._face_interval_ms=350
         self._coffee_queue_after_id=None
         self._coffee_queue_deadline=0.0
         self._habbo_session_connected=False
@@ -5655,6 +5734,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'responder':('AI Responder','Room-aware writing style and target controls'),
             'packet':('Packet Viewer','G-Earth connection, filters and packet traffic'),
             'outfits':('Outfit Cycler','Capture looks and rotate through them'),
+            'face':('Face Rotator','Spin 360° in place without walking'),
             'fuzz':('Protocol Lab','Passive G-Earth AIR reader and local boofuzz tests'),
             'manip':('Packet Manipulator','Advanced packet rules and manual actions'),
             'classic':('Direct Classic','Launch the installed Habbo client'),
@@ -5689,6 +5769,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._ui_add_nav('TOOLS',(
             ('packet','Packet Viewer'),
             ('outfits','Outfit Cycler'),
+            ('face','Face Rotator'),
             ('fuzz','Protocol Lab'),
             ('manip','Packet Manipulator'),
             ('classic','Direct Classic'),
@@ -5733,6 +5814,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['packet'],'packet'))
         self._make_outfit_panel(self._ui_scroll_area(
             self._ui_pages['outfits'],'outfits'))
+        self._make_face_panel(self._ui_scroll_area(
+            self._ui_pages['face'],'face'))
         self._make_fuzz_panel(self._ui_scroll_area(
             self._ui_pages['fuzz'],'fuzz'))
         self._make_responder_panel(self._ui_scroll_area(
@@ -8202,6 +8285,199 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.outfit_status_var.set(
             f'{reason} Local requests sent: {self._outfit_sent}.')
 
+    def _make_face_panel(self,parent):
+        holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        holder.pack(fill='both',expand=True)
+        tk.Label(holder,text='360° FACE ROTATOR',
+                 font=('Segoe UI Semibold',18),
+                 fg=COMPANION_UI['text'],bg=COMPANION_UI['background']).pack(anchor='w')
+        ttk.Label(holder,text='Rotate through all eight facing directions '
+                  'in 45° steps. Only LookTo packets are sent; your avatar '
+                  'is never instructed to walk to another square.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(5,13))
+        ttk.Label(holder,textvariable=self.packet_connection_status,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Button(holder,text='Capture my standing tile',
+                   command=self._arm_face_capture).pack(anchor='w',pady=(0,9))
+        ttk.Label(holder,text='Within 30 seconds, click your OWN avatar '
+                  'once inside Habbo (not the floor or another player). '
+                  'Companion reads the normal LookTo target. '
+                  'You must recapture after moving or changing rooms.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,14))
+        opts=ttk.Frame(holder,style='Panel.TFrame')
+        opts.pack(fill='x',pady=(0,12))
+        ttk.Label(opts,text='Milliseconds per 45° turn',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Entry(opts,textvariable=self.face_delay_var,width=8).pack(
+            side='left',padx=(9,14))
+        ttk.Label(opts,text='150–60000 ms (default 350)',
+                  style='Panel.TLabel').pack(side='left')
+        direction=ttk.Frame(holder,style='Panel.TFrame')
+        direction.pack(fill='x',pady=(0,14))
+        ttk.Label(direction,text='Direction',
+                  style='Panel.TLabel').pack(side='left',padx=(0,13))
+        ttk.Radiobutton(direction,text='Clockwise',
+                        variable=self.face_direction_var,
+                        value='Clockwise').pack(side='left',padx=(0,16))
+        ttk.Radiobutton(direction,text='Counterclockwise',
+                        variable=self.face_direction_var,
+                        value='Counterclockwise').pack(side='left')
+        actions=ttk.Frame(holder,style='Panel.TFrame')
+        actions.pack(fill='x',pady=(0,10))
+        ttk.Button(actions,text='Start 360° rotation',
+                   style='Primary.TButton',
+                   command=self._start_face_rotator).pack(side='left',padx=(0,10))
+        ttk.Button(actions,text='STOP',
+                   command=self._stop_face_rotator).pack(side='left')
+        ttk.Label(holder,textvariable=self.face_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
+        ttk.Label(holder,text='Stops on manual movement, room change, '
+                  'game disconnect or packet error. Sends are local G-Earth '
+                  'requests; Habbo may rate-limit or ignore fast turns.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w')
+
+    def _arm_face_capture(self):
+        if self._face_running:
+            self.face_status_var.set('Press STOP before capturing a new tile.')
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.face_status_var.set('Connect Habbo through G-Earth first.')
+            return
+        self._face_tile=None
+        self._face_capture_pending=True
+        self._face_capture_generation+=1
+        self.face_status_var.set('Capture armed: click your OWN avatar in Habbo '
+                                 'within 30 seconds, not an empty square.')
+        self.root.after(30000,
+                        lambda gen=self._face_capture_generation:
+                        self._face_capture_timeout(gen))
+
+    def _face_capture_timeout(self,generation):
+        if generation!=self._face_capture_generation or not self._face_capture_pending:
+            return
+        self._face_capture_pending=False
+        self.face_status_var.set('No LookTo packet captured. Click Capture '
+                                 'and click your own avatar again.')
+
+    def _accept_face_tile(self,x,y):
+        if not self._face_capture_pending:
+            return
+        self._face_capture_pending=False
+        try:
+            face_rotation_targets(x,y)
+        except ValueError as exc:
+            self.face_status_var.set('Invalid tile: '+str(exc))
+            return
+        self._face_tile=(x,y)
+        self.face_status_var.set(
+            f'Captured LookTo target ({x},{y}). If you clicked your own avatar, '
+            'this is your standing square. Press Start to rotate without walking.')
+
+    def _start_face_rotator(self):
+        if self._face_running:
+            self.face_status_var.set('Already rotating; press STOP first.')
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self.face_status_var.set('Connect Habbo through G-Earth first.')
+            return
+        if self._face_tile is None:
+            self.face_status_var.set('Capture your standing tile by clicking '
+                                     'your own avatar before starting.')
+            return
+        try:
+            delay=int(self.face_delay_var.get().strip())
+            if not 150<=delay<=60000:
+                raise ValueError('Enter 150–60000 milliseconds.')
+            direction=self.face_direction_var.get()
+            if direction not in ('Clockwise','Counterclockwise'):
+                raise ValueError('Choose clockwise or counterclockwise.')
+            targets=face_rotation_targets(*self._face_tile,
+                                          clockwise=(direction=='Clockwise'))
+            # Prevalidate every named LookTo command. Do not send movement.
+            for x,y in targets:
+                face_lookto_expression(x,y)
+        except (ValueError,TypeError) as exc:
+            self.face_status_var.set('Cannot start: '+str(exc))
+            return
+        self.config['face_delay_ms']=str(delay)
+        self.config['face_direction']=direction
+        self.save()
+        self._face_capture_pending=False
+        self._face_generation+=1
+        self._face_running=True
+        self._face_targets=targets
+        self._face_interval_ms=delay
+        self._face_step=0
+        self._face_sent=0
+        self.face_status_var.set(
+            f'Rotating {direction.lower()} every {delay} ms '
+            f'around ({self._face_tile[0]},{self._face_tile[1]}). '
+            'Only named LookTo actions; no walking.')
+        self._face_after_id=self.root.after(
+            0,lambda gen=self._face_generation:self._face_tick(gen))
+
+    def _face_tick(self,generation):
+        self._face_after_id=None
+        if not self._face_running or generation!=self._face_generation:
+            return
+        if not self.packet_started or self.packet_extension is None or not self._habbo_session_connected:
+            self._stop_face_rotator('G-Earth or Habbo disconnected.')
+            self._face_tile=None
+            return
+        if len(self._face_targets)!=8:
+            self._stop_face_rotator('Rotation targets unavailable.')
+            return
+        index=self._face_step%8
+        x,y=self._face_targets[index]
+        try:
+            expression=face_lookto_expression(x,y)
+            ext=self.packet_extension
+            packet=ext.string_to_packet(expression)
+            if packet is None or packet.is_incomplete_packet() or packet.is_corrupted():
+                raise ValueError('G-Earth could not construct the named LookTo packet.')
+            if ext.send_to_server(packet) is False:
+                raise RuntimeError('G-Earth rejected the LookTo request.')
+        except Exception as exc:
+            self._stop_face_rotator('Rotation stopped: '+str(exc)[:130])
+            return
+        self._face_sent+=1
+        self._face_step=(index+1)%8
+        if self.packet_active:
+            self._packet_put((
+                'face_local',datetime.now().strftime('%H:%M:%S'),
+                'Outgoing',f'[Face Rotator] LookTo target ({x},{y}), '
+                f'45° step {index+1}/8 | local send accepted; facing unverified'))
+        self.face_status_var.set(
+            f'Rotating in place — step {index+1}/8, '
+            f'{self._face_sent} local LookTo requests, '
+            f'{self._face_sent//8} complete 360° cycles attempted. '
+            'Server-facing updates unverified.')
+        if self._face_running and generation==self._face_generation:
+            self._face_after_id=self.root.after(
+                self._face_interval_ms,
+                lambda gen=generation:self._face_tick(gen))
+
+    def _stop_face_rotator(self,reason=None):
+        self._face_running=False
+        self._face_generation+=1
+        self._face_capture_pending=False
+        after_id=self._face_after_id
+        self._face_after_id=None
+        if after_id is not None:
+            try:self.root.after_cancel(after_id)
+            except (tk.TclError,AttributeError):pass
+        if reason is None:
+            reason='Face rotation stopped.'
+        self.face_status_var.set(
+            f'{reason} {self._face_sent} local LookTo requests attempted.')
+
+    def _face_position_invalidated(self,reason):
+        if self._face_running:
+            self._stop_face_rotator(reason)
+        self._face_capture_pending=False
+        self._face_tile=None
+        self.face_status_var.set(reason+' Capture your standing tile again.')
+
     def _make_coffee_loop_panel(self,parent):
         holder=ttk.Frame(parent,style='Panel.TFrame',padding=16)
         holder.pack(fill='both',expand=True)
@@ -10187,7 +10463,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                             pass
                     if not (self.packet_active or self.manipulation_enabled or
                             self.config.get('whispers_right',True) or direction=='Incoming'
-                            or self._outfit_capture_pending
+                            or self._outfit_capture_pending or self._face_capture_pending
+                            or self._face_tile is not None
                             or (self.responder.enabled and self._responder_chat_template is None)):
                         return
                     try:detail=str(msg.packet.g_string(ext))
@@ -10224,6 +10501,18 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                 self._packet_put(('outfit_captured',*parsed))
                         except (ValueError,TypeError,AttributeError,IndexError):
                             pass
+                    if direction=='Outgoing' and self._face_capture_pending:
+                        # The user must click their own avatar to make this
+                        # target their current position. We verify packet
+                        # name/shape but cannot infer who the user clicked.
+                        coords=outgoing_face_tile_from_packet(
+                            ext,Direction.TO_SERVER,msg.packet)
+                        if coords is not None:
+                            self._packet_put(('face_tile_captured',*coords))
+                    if direction=='Outgoing' and self._face_tile is not None:
+                        if outgoing_is_named(
+                                ext,Direction.TO_SERVER,msg.packet,'MoveAvatar'):
+                            self._packet_put(('face_movement',))
                     if direction=='Outgoing' and self._coffee_furniture_capture_pending:
                         captured=outgoing_furniture_id_from_packet(
                             ext,Direction.TO_SERVER,msg.packet)
@@ -10565,6 +10854,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self._coffee_target_room_index))
                 continue
             if item[0]=='room_users_reset':
+                self._face_position_invalidated('Room changed; rotation stopped.')
                 self._own_room_index=None
                 self._last_room_users_binary=None
                 self.coffee_own_status_var.set(
@@ -10659,6 +10949,13 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='outfit_captured':
                 self._receive_outfit_capture(item[1],item[2])
                 continue
+            if item[0]=='face_tile_captured':
+                self._accept_face_tile(item[1],item[2])
+                continue
+            if item[0]=='face_movement':
+                self._face_position_invalidated(
+                    'Manual walk requested; rotation stopped.')
+                continue
             if item[0]=='session_connection':
                 self._fuzz_refresh_connected_server()
                 self.packet_connection_status.set(
@@ -10699,18 +10996,21 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._stop_packet_replay('Habbo connection ended. Repeat stopped.')
                     self._stop_coffee_loop('Habbo connection ended. Coffee loop stopped.')
                     self._stop_outfit_cycle('Habbo disconnected; cycling stopped.')
+                    self._face_position_invalidated(
+                        'Habbo disconnected; face rotation stopped.')
                 continue
             if item[0]=='manip_status':
                 self.manipulator_status.set(item[1]);continue
             if item[0]=='manip_off':
                 self.manipulation_enable_var.set(False);continue
-            if item[0] not in ('packet','packet_local','outfit_local'):
+            if item[0] not in ('packet','packet_local','outfit_local','face_local'):
                 continue
-            if item[0] in ('packet_local','outfit_local') and not self.packet_active:
+            if item[0] in ('packet_local','outfit_local','face_local') and not self.packet_active:
                 continue  # Pause also pauses locally generated-request entries.
             _,timestamp,direction,detail=item
             source=({'packet':'G-Earth','packet_local':'Coffee Pass Loop',
-                     'outfit_local':'Outfit Cycler'}[item[0]])
+                     'outfit_local':'Outfit Cycler',
+                     'face_local':'Face Rotator'}[item[0]])
             self.packet_data.append((timestamp,direction,detail))
             if len(self.packet_data)>500:self.packet_data.pop(0)
             needle=self.packet_filter_var.get().lower().strip()
@@ -11364,6 +11664,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
         self._stop_packet_replay('Companion closed. Repeat stopped.')
         self._stop_coffee_loop('Companion closed. Coffee loop stopped.')
         self._stop_outfit_cycle('Companion closed. Outfit cycling stopped.')
+        self._stop_face_rotator('Companion closed. Face rotation stopped.')
         if self.wheel_hook and os.name=='nt':
             try:
                 u=self.tracker.user32

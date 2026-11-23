@@ -1,5 +1,38 @@
 # Habbo Companion
 
+## v1.1.91 — Stationary 360° Face Rotator (eight LookTo directions)
+
+A separate **Face Rotator** sidebar page rotates your avatar in place through
+all eight facing directions (45° steps), clockwise or counterclockwise.
+It uses **only named `LookTo` packets** with two tile-coordinate integers,
+never `MoveAvatar` or any other walking packet. The outgoing header is
+resolved from G-Earth's current mappings, rather than guessed from a fixed
+numeric ID. The rotation runs only on explicit **Start 360° rotation**, with
+an accessible **STOP** button.
+
+**First use:** connect Habbo AIR through G-Earth, go to **Face Rotator**,
+press **Capture my standing tile**, and click **your own avatar** in Habbo
+within 30 seconds. The normal `LookTo` packet identifies its target tile;
+clicking your own avatar is required so this target is your current square.
+Companion verifies the mapped header and exact two-int packet shape but
+cannot independently verify that the clicked avatar was yours. Never capture
+by clicking a different player or floor square. If no `LookTo` packet is
+produced, capture fails safely without sending anything.
+
+Choose **Clockwise** or **Counterclockwise** and **150–60,000 milliseconds
+per 45° step** (default **350 ms**). One full cycle is eight LookTo requests.
+The rotation keeps your walking position unchanged; manual walking,
+room changes, connection loss, and failed sends stop the loop. The captured
+standing square is discarded when you move, change rooms or disconnect;
+recapture in the new location. Neither the tile nor sending auto-starts
+on application launch.
+
+Packet Viewer labels local requests **Face Rotator**, and the page displays
+local steps and completed eight-step cycles attempted. Local G-Earth sends
+are *not* independently confirmed visible server-side rotations; the server
+can rate-limit or ignore turns. The minimum interval avoids accidental
+high-volume flooding of the official Habbo connection.
+
 ## v1.1.90 — Outfit Cycler speed in milliseconds, no artificial minimum
 
 **Outfit Cycler → Milliseconds per outfit** replaces seconds.
