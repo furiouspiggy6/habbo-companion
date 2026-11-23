@@ -12,6 +12,9 @@ from local_classic_launch import (parse_classic_ticket, official_local_executabl
                                   launch_local_classic)
 from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,
                        probe_classic_websocket, TCP_FALLBACK_RELEASE)
+from clientless_gearth_bridge import (
+    ClientlessGearthBridge, GearthBridgeError, DEFAULT_BRIDGE_PORT,
+    DEFAULT_BRIDGE_HOST, verify_bridge_alias)
 from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
     encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,
@@ -5274,6 +5277,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_last_action_at={}
         # Pending one-click room entries are tied to the exact account generation.
         self._bot_pending_room={}
+        self._bot_gearth_bridges={}
         self._bot_walk_plans={}
         self._bot_self_ids={}
         self._bot_user_roster={}
@@ -5290,8 +5294,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_gearth_status_var=tk.StringVar(value=(
             'G-Earth OFF: normal Direct TCP will be used.'
             if not self.bot_gearth_var.get() else
-            'G-Earth ON (preview): interception bridge not implemented; '
-            'clientless start is disabled to prevent bypass.'))
+            'G-Earth ON: gameplay will use the local plaintext G-Earth relay. '
+            'Connection setup and SSO stay inside Companion.'))
         self.bot_account_var=tk.StringVar(value='')
         self.bot_action_var=tk.StringVar(value='Say')
         self.bot_message_var=tk.StringVar(value='')
@@ -6171,14 +6175,16 @@ class ChatOverlayApp(PersonaResponderMixin):
             variable=self.bot_gearth_var,
             command=self._bot_gearth_changed,
             style='Panel.TCheckbutton').pack(anchor='w',pady=(0,5))
-        ttk.Label(frame,text='OFF: existing Direct TCP bot works normally. '
-                  'ON: preview only; start is blocked until a verified G-Earth '
-                  'packet interception bridge is available. G-Python extension '
-                  'port 9092 is NOT the game proxy. No hidden direct fallback.',
+        ttk.Label(frame,text='OFF: original Direct TCP bot. ON: starts G-Earth '
+                  'in Flash proxy mode and routes decrypted gameplay through '
+                  'its packet interception/modification path. Authentication '
+                  'and cipher keys stay in Companion. Close any existing '
+                  'G-Earth window before running ON. This uses local game '
+                  'proxy port 31451, not extension port 9092.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         probe=ttk.Frame(frame,style='Panel.TFrame')
         probe.pack(fill='x',pady=(0,6))
-        ttk.Button(probe,text='Check G-Earth extension port',
+        ttk.Button(probe,text='Check bridge hostname',
                    command=self._bot_gearth_probe).pack(side='left')
         ttk.Label(frame,textvariable=self.bot_gearth_status_var,
                   style='Panel.TLabel',wraplength=620).pack(
@@ -6321,30 +6327,61 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.config['clientless_gearth_intercept']=enabled
         self.save()
         self.bot_gearth_status_var.set(
-            'G-Earth ON (preview): the intercept/modify bridge is NOT '
-            'implemented. Clientless start will be blocked; disable this '
-            'option to run Direct TCP.' if enabled else
+            'G-Earth ON: selecting an account prepares the local gameplay '
+            'relay, launches G-Earth and waits for its Flash packet proxy. '
+            'Direct Habbo authentication remains inside Companion.' if enabled else
             'G-Earth OFF: the selected bot will use Direct TCP. '
             'Clientless packets will not route through G-Earth.')
 
     def _bot_gearth_probe(self):
-        """Read-only local extension port check, never proxy verification."""
+        """Validate upstream DNS before G-Earth redirects its own hostname."""
         try:
-            port=int(self.gearth_port_var.get())
-            if not 1<=port<=65535:
-                raise ValueError()
-        except (ValueError,TypeError):
+            verify_bridge_alias(DEFAULT_BRIDGE_HOST)
             self.bot_gearth_status_var.set(
-                'Invalid local G-Earth extension port; check Packet Tools.')
-            return
-        ready=self._gearth_extension_port_responds(port)
+                'Bridge hostname resolves locally to 127.0.0.2. '
+                'Ready to start G-Earth and its game packet relay; '
+                'no Habbo account has been connected by this check.')
+        except GearthBridgeError as exc:
+            self.bot_gearth_status_var.set(
+                'Bridge hostname unavailable: '+str(exc)[:210])
+
+    def _bot_start_gearth_bridge(self,ident):
+        """Explicit single-profile G-Earth game-packet route, no AIR required."""
+        if self._bot_gearth_bridges:
+            self.bot_gearth_status_var.set(
+                'A G-Earth bot relay is already active. Disconnect it first.')
+            return False
+        if self._find_gearth_window():
+            self.bot_gearth_status_var.set(
+                'Close the existing G-Earth window first. The clientless '
+                'mode must launch its OWN Flash proxy on game port 31451; '
+                'an extension connected on 9092 is not enough.')
+            return False
+        try:
+            verify_bridge_alias(DEFAULT_BRIDGE_HOST)
+            bridge=ClientlessGearthBridge(
+                ident,status=lambda msg:self._packet_put(
+                    ('bot_gearth_status',ident,msg)),
+                port=DEFAULT_BRIDGE_PORT)
+            bridge.prepare()
+        except (GearthBridgeError,OSError,ValueError) as exc:
+            self.bot_gearth_status_var.set(
+                'G-Earth local relay setup failed: '+str(exc)[:220])
+            return False
+        if not self._launch_gearth(
+                auto_connect=True,select_if_missing=False,
+                target_override=(DEFAULT_BRIDGE_HOST,DEFAULT_BRIDGE_PORT)):
+            bridge.close()
+            self.bot_gearth_status_var.set(
+                'Could not start G-Earth Flash proxy. Check the Packet Tools '
+                'G-Earth executable path, permissions, and diagnostic status.')
+            return False
+        self._bot_gearth_bridges[ident]=bridge
         self.bot_gearth_status_var.set(
-            ('G-Earth local extension port '+str(port)+' is reachable. '
-             'This does NOT mean clientless traffic is intercepted; '
-             'the game proxy bridge is still missing.' if ready else
-             'No G-Earth extension listener detected on 127.0.0.1:'+
-             str(port)+'. Open G-Earth and check its Extensions port. '
-             'This check will not start the bot.'))
+            'G-Earth starting for '+ident[:6]+'. '
+            'Waiting for the localhost gameplay proxy. '
+            'No SSO ticket or DH keys will pass through G-Earth.')
+        return True
 
     def _bot_standalone_changed(self):
         enabled=bool(self.bot_standalone_var.get())
@@ -6602,26 +6639,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_run_account(account)
 
     def _bot_run_account(self,account):
-        """One click: use a saved session, otherwise private login, then room.
+        """One click: user-selected profile, optional G-Earth gameplay MITM.
 
-        Runs only for a user-selected profile. The session worker handles
-        official SSO, MFA/CAPTCHA stops, socket authentication and isolation.
-        No Habbo.exe, HabboAIR, G-Earth or G-Python process is launched.
+        Login and RC4 remain in Companion. With G-Earth ON, post-auth gameplay
+        is routed through a separate loopback-only plaintext Flash proxy.
         """
         ident=account['id']
         if not any(p['id']==ident for p in self._account_profiles):
             self.bot_status_var.set('This account profile has been removed.')
             return
         if self.bot_gearth_var.get():
-            # Not a working G-Earth bridge: do not silently bypass the
-            # requested interception and log into the game by direct TCP.
-            message=(
-                'G-Earth interception is ON (preview), but no verified '
-                'clientless-to-G-Earth MITM bridge exists yet. Bot NOT started. '
-                'Turn G-Earth OFF above to use Direct TCP.')
-            self.bot_gearth_status_var.set(message)
-            self.bot_status_var.set(message)
-            return
+            session=self._tcp_sessions.get(ident)
+            if ident in self._tcp_inflight or (
+                session is not None and session.authenticated):
+                self.bot_status_var.set(
+                    'Disconnect this account before starting its G-Earth '
+                    'interception session; existing Direct TCP stays unchanged.')
+                return
+            if not self._bot_start_gearth_bridge(ident):
+                self.bot_status_var.set(self.bot_gearth_status_var.get())
+                return
         room=int(clientless_saved_room_value(self.bot_room_var.get()))
         self.bot_room_var.set(str(room))
         # A subsequent selection cancels unfinished joins and walking.
@@ -6640,8 +6677,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                 # Missing cookies: import via the profile's isolated browser.
                 self._tcp_connect_one(account,auto_capture=True)
         if ident not in self._tcp_inflight:
+            bridge=self._bot_gearth_bridges.pop(ident,None)
+            if bridge:bridge.close()
             self.bot_status_var.set(
-                'Could not start Direct TCP for '+account['label']+': '+
+                'Could not start game TCP for '+account['label']+': '+
                 self._tcp_states.get(ident,'no valid saved session.'))
             return
         self._bot_pending_room[ident]=(
@@ -6685,10 +6724,8 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_connect_selected(self):
         account=self._bot_selected_profile()
-        if self.bot_gearth_var.get():
-            self.bot_status_var.set(
-                'G-Earth interception ON (preview): direct login blocked '
-                'until the packet-routing bridge is available.')
+        if self.bot_gearth_var.get() and account is not None:
+            self._bot_run_account(account)
             return
         if account is None:
             self.bot_status_var.set('Add and select an account in Accounts first.')
@@ -6732,11 +6769,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         # mode even if a socket was established through the separate TCP tab.
         bridge_choice=getattr(self,'bot_gearth_var',None)
         if bridge_choice is not None and bridge_choice.get():
-            self.bot_status_var.set(
-                'G-Earth interception ON (preview): actions are blocked '
-                'until the packet-routing bridge is available. '
-                'Turn OFF and disconnect/restart for normal Direct TCP.')
-            return
+            account=(account_override if account_override is not None
+                     else self._bot_selected_profile())
+            ident=account['id'] if account is not None else ''
+            bridge=self._bot_gearth_bridges.get(ident)
+            if bridge is None or not bridge.ready:
+                self.bot_status_var.set(
+                    'G-Earth interception ON, but the local packet relay '
+                    'is not ready. Actions cannot bypass it.')
+                return
         account=(account_override if account_override is not None
                  else self._bot_selected_profile())
         if account is None:
