@@ -31,7 +31,7 @@ class PersonaResponderMixin:
         # even if the user browses a different historical style source.
         self.responder.archive_dir=self._responder_app_dir/'persona_logs'/'users'
         self.responder.persona=str(self.config.get('responder_persona','Mario35'))
-        self.responder.auto_rotate=bool(self.config.get('responder_rotation',False))
+        self.responder.auto_rotate=False  # One selected persona only.
         # Independent, default-on background archive: older versions kept
         # responder_capture=False and accidentally disabled it in custom mode.
         self.responder.save_history=True  # Always archive public chat, even with AI OFF.
@@ -46,6 +46,10 @@ class PersonaResponderMixin:
         self.responder.selected_users=str(
             self.config.get('responder_targets','') or previous_target)
         current_mode=str(self.config.get('responder_target_mode','Everyone'))
+        if current_mode not in ('Everyone','Selected users'):
+            # Old First active speaker has no equivalent checkbox: keep
+            # targeting restricted, never silently broaden to Everyone.
+            current_mode='Selected users'
         # On upgrade, preserve an older single-user target instead of silently
         # switching a previously targeted bot to Everyone.
         if previous_target and not self.config.get('responder_targets'):
@@ -367,7 +371,9 @@ class PersonaResponderMixin:
 
     def _responder_target_selection_changed(self):
         # Reconcile only VISIBLE checkboxes into the remembered selection.
-        selected=selected_usernames(self.responder_target_var.get())
+        selected=(set(name.casefold() for name in self._responder_room_names)
+                  if self.responder_everyone_var.get() else
+                  selected_usernames(self.responder_target_var.get()))
         for key,(_name,var) in self._responder_target_checkboxes.items():
             if var.get():
                 selected.add(key)
@@ -628,44 +634,17 @@ class PersonaResponderMixin:
             self.responder_instruction_status_var.set(
                 'No temporary instructions active.')
 
-    def _responder_change_logging(self):
-        """Apply the logging switch without resetting any AI conversation."""
-        self.responder.save_history=bool(self.responder_capture_var.get())
-        self.config['background_public_chat_logging']=self.responder.save_history
-        self.config['responder_capture']=self.responder.save_history
-        self.save()
-        self._responder_update_logging_status()
-        self._responder_log(
-            'Background public chat logging '+(
-                'ON.' if self.responder.save_history else 'OFF.'))
-
     def _responder_update_logging_status(self):
         if not hasattr(self,'responder_log_saving_var'):
             return
-        if not self.responder.save_history:
-            self.responder_log_saving_var.set(
-                'Public chat auto-save: OFF (turn it on under Advanced options).')
-        elif self.responder.log_error:
+        self.responder.save_history=True
+        if self.responder.log_error:
             self.responder_log_saving_var.set(self.responder.log_error)
         else:
             self.responder_log_saving_var.set(
-                'Public chat auto-save: ON — '+
+                'Public room chat automatically saved: '+
                 str(self.responder.logged_messages)+
-                ' saved this session to persona_logs/users. Works even with '
-                'AI OFF while Habbo AIR and Companion are running.')
-
-    def _responder_browse(self):
-        folder=filedialog.askdirectory(
-            title='Choose folder containing username.txt chat logs',
-            initialdir=str(self._responder_style_directory()))
-        if folder:
-            path=Path(folder)
-            if (path/'users').is_dir():
-                path=path/'users'
-            self.responder_log_dir_var.set(str(path))
-            self.responder_style_search_var.set('')
-            self._responder_refresh_style_users()
-
+                ' messages this session (even with AI OFF).')
 
     def _responder_log(self,detail):
         if not hasattr(self,'responder_log_text'):
@@ -679,21 +658,17 @@ class PersonaResponderMixin:
         widget.configure(state='disabled')
 
     def _responder_read_personality(self):
-        """Synchronize custom settings without automatically enabling the bot."""
+        """Keep custom description separate from a recreated logged persona."""
         self.responder.style_mode=self.responder_style_mode_var.get()
-        self.responder.personality=self.responder_personality_entry.get(
-            '1.0','end-1c').strip()[:1500] or self.responder.personality
-        self.responder.tone=self.responder_tone_var.get()
-        self.responder.humour=int(self.responder_humour_var.get())
-        self.responder.responsiveness=self.responder_responsiveness_var.get()
-        self.responder.persona=self.responder_persona_var.get().strip()[:80] or 'Mario35'
-        self.responder.auto_rotate=(bool(self.responder_rotation_var.get())
-                                   if self.responder.style_mode!='Chat-log style'
-                                   else False)
-        # Keep background archival independent of personality source.
-        self.responder.save_history=bool(self.responder_capture_var.get())
-        self.responder.log_dir=Path(
-            self.responder_log_dir_var.get().strip() or self._responder_default_logs)
+        custom=self.responder_personality_entry.get('1.0','end-1c').strip()
+        if custom:
+            self.responder.personality=custom[:1500]
+        self.responder.persona=(
+            self.responder_persona_var.get().strip()[:80] or 'Mario35')
+        self.responder.auto_rotate=False
+        # Recording public chat is always on, independent of AI status.
+        self.responder.save_history=True
+        self.responder.log_dir=self._responder_style_directory()
 
     def _responder_apply(self):
         self._responder_generation+=1
@@ -707,38 +682,39 @@ class PersonaResponderMixin:
         self.responder.selected_users=self.responder_target_var.get().strip()
         self.responder.reset_room()
         valid_selection=(self.responder.target_mode!='Selected users'
-                         or bool(self.responder.selected_users.strip(' ,\n\t')))
-        self.responder.enabled=bool(self.responder_enabled_var.get()) and valid_selection
+                         or bool(selected_usernames(self.responder.selected_users)))
+        self.responder.enabled=(
+            bool(self.responder_enabled_var.get()) and valid_selection)
+        # Enabling the responder means replying through G-Earth—no separate
+        # auto-send switch that could silently leave it in preview mode.
+        self.responder_send_var.set(self.responder.enabled)
         if not valid_selection:
             self.responder_enabled_var.set(False)
             self.responder_status_var.set(
-                'Select at least one username before enabling Selected users mode.')
+                'Tick at least one room player, or choose Everyone.')
         self.config.update(
             responder_persona=self.responder.persona,
             responder_style_mode=self.responder.style_mode,
             responder_personality=self.responder.personality,
-            responder_tone=self.responder.tone,
-            responder_humour=self.responder.humour,
-            responder_responsiveness=self.responder.responsiveness,
             responder_target_mode=self.responder.target_mode,
             responder_targets=self.responder.selected_users,
-            responder_target='',  # clear old single-target configuration
-            responder_rotation=self.responder.auto_rotate,
-            responder_capture=self.responder.save_history,
-            background_public_chat_logging=self.responder.save_history,
+            responder_target='',
+            responder_rotation=False,
+            responder_capture=True,
+            background_public_chat_logging=True,
             responder_log_dir=str(self.responder.log_dir),
-            responder_model=self.responder_model_var.get().strip() or 'gpt-5-mini',
             responder_reply_interval=self.responder.reply_cooldown_seconds,
         )
         self.save()
         if valid_selection:
             state='ON' if self.responder.enabled else 'OFF'
             self.responder_status_var.set(
-                f'AI {state} | {self._responder_mode_display()} | '
-                f'{self.responder.target_mode}: '
-                f'{self.responder.selected_users if self.responder.target_mode=="Selected users" else "active room"}')
+                f'AI {state} | {self._responder_mode_display()} | '+
+                ('Everyone in room' if self.responder.target_mode=='Everyone'
+                 else self.responder.selected_users))
         self._responder_log('Settings applied. AI '+(
-            'ON' if self.responder.enabled else 'OFF')+'.')
+            'ON (sending through G-Earth)' if self.responder.enabled
+            else 'OFF')+'.')
         self._responder_update_logging_status()
 
     def _responder_test_reply(self):
