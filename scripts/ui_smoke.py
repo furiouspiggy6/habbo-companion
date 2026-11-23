@@ -40,6 +40,23 @@ try:
     assert app.tcp_table.winfo_exists(), 'Direct TCP list failed to build'
     assert app.packet_tree.winfo_exists(), 'Packet Viewer failed to build'
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
+    assert app.arcturus_header_var.get()=='', (
+        'Arcturus header must be supplied by the emulator owner, never guessed')
+    assert app.arcturus_cases_var.get()=='20'
+    assert '127.0.0.1:30000' in app.arcturus_status_var.get()
+    app._fuzz_preview_arcturus()
+    assert 'Enter a known Arcturus header ID' in app.arcturus_status_var.get(), (
+        'Empty header must fail safely without connecting to any server')
+    app.arcturus_header_var.set('not-a-number')
+    app._fuzz_preview_arcturus()
+    assert 'Preview error:' in app.arcturus_status_var.get()
+    app.arcturus_header_var.set('896')
+    assert app._fuzz_arcturus_header_id()==896
+    app.arcturus_cases_var.set('1000')
+    app._fuzz_start_arcturus()
+    assert 'Invalid Arcturus test' in app.arcturus_status_var.get(), (
+        'Too many cases must be rejected without opening a socket')
+    app.arcturus_cases_var.set('20')
     assert app.rules_tree.winfo_exists(), 'Packet Manipulator failed to build'
     assert app.tcp_log.winfo_exists(), 'Server log failed to build'
     assert app.responder_log_text.winfo_exists(), (
