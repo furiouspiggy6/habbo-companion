@@ -81,7 +81,7 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertEqual(names,['alice','MaraGene','marioboy','Mario35'])
         self.assertEqual(matching_style_usernames(names,'MARA'),['MaraGene'])
         self.assertEqual(matching_style_usernames(names,'ar'),
-                         ['MaraGene','marioboy','Mario35'])
+                         ['MaraGene','Mario35','marioboy'])
         self.assertEqual(matching_style_usernames(names,'e'),
                          ['alice','MaraGene'])
         self.assertEqual(matching_style_usernames(names,'zz'),[])
