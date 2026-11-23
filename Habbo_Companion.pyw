@@ -10282,8 +10282,13 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                          style_id,chat_type,forced_color,image_path,
                                          chat_type_explicit))
             self._trim_history()
-            self.responder.observe(name,body,own_name=self._own_name,
-                                   chat_type=chat_type)
+            # Never feed Companion's own one-time capture phrase into the AI
+            # as a normal participant message, even if self identity is unknown.
+            training=(body==self._responder_probe_recent_phrase and
+                      time.monotonic()-self._responder_probe_recent_started<120)
+            if not training:
+                self.responder.observe(name,body,own_name=self._own_name,
+                                       chat_type=chat_type)
             if image_path:
                 self.native_image_count+=1
                 if self.native_image_count==1:
