@@ -43,6 +43,19 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertEqual(self.bot.logged_messages,3)
         self.assertFalse(self.bot.running)
 
+    def test_archive_directory_independent_from_style_source(self):
+        with tempfile.TemporaryDirectory() as storage:
+            archive=Path(storage)/'persona_logs'/'users'
+            self.bot.archive_dir=archive
+            self.bot.log_dir=Path(storage)/'old_logs'/'users'
+            self.bot.log_dir.mkdir(parents=True)
+            self.bot.style_mode='Custom personality'
+            self.assertTrue(self.bot.record_public_message(
+                'Cheesecake','hello room',now=1700000003))
+            self.assertTrue((archive/'Cheesecake.txt').is_file())
+            self.assertFalse((self.bot.log_dir/'Cheesecake.txt').exists())
+            self.assertEqual(self.bot.log_dir.name,'users')
+
     def test_chat_logging_keeps_owners_public_chat_and_ignores_whispers(self):
         folder=Path(self.temp.name)
         self.assertTrue(self.bot.record_public_message(
