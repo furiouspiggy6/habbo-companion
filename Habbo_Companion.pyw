@@ -6324,8 +6324,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             'G-Earth ON (preview): the intercept/modify bridge is NOT '
             'implemented. Clientless start will be blocked; disable this '
             'option to run Direct TCP.' if enabled else
-            'G-Earth OFF: normal Direct TCP is selected. '
-            'No G-Earth launch or interception will occur.')
+            'G-Earth OFF: the selected bot will use Direct TCP. '
+            'Clientless packets will not route through G-Earth.')
 
     def _bot_gearth_probe(self):
         """Read-only local extension port check, never proxy verification."""
