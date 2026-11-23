@@ -579,7 +579,7 @@ class PersonaResponder:
         self._rotate(now)
         if not self.enabled or is_self or is_blocked:
             return
-        if self.is_temporarily_afk():
+        if self.is_temporarily_afk(now):
             return
         triggered = self._reply_target(username, now)
         if triggered:
