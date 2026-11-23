@@ -2,6 +2,7 @@
 import ast
 import queue
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,8 +27,8 @@ def extract_function(name):
 def extract_method(name):
     node = next(n for n in APP.body if isinstance(n, ast.FunctionDef)
                 and n.name == name)
-    scope = {"re": re, "datetime": datetime,
-             "format_coffee_packet_viewer_event":
+    scope = {"re": re, "datetime": datetime, "time": time,
+             "queue": queue, "format_coffee_packet_viewer_event":
                  extract_function("format_coffee_packet_viewer_event"),
              "coffee_delay_ms": lambda interval: 50,
              "coffee_delivery_text": lambda *args: "request sent"}
@@ -77,7 +78,7 @@ def fake_viewer(*events, active=True, needle=""):
         packet_active=active,
         packet_data=[],
         packet_filter_var=SimpleNamespace(get=lambda: needle),
-        packet_tree=tree,
+        packet_tree=tree, _pump_packets=lambda: None,
         manipulator_status=status)
     return app
 
@@ -185,7 +186,8 @@ class CoffeeViewerTests(TestCase):
             _coffee_carry_observations=0, _coffee_last_pass_at=0.0,
             coffee_status_var=Mock(), coffee_delivery_var=Mock(),
             root=SimpleNamespace(after=lambda *args: 5),
-            _packet_put=lambda item: captured.append(item))
+            _packet_put=lambda item: captured.append(item),
+            _stop_coffee_loop=lambda reason: None)
         method(app, 2)
         method(app, 2)
         self.assertEqual(app._coffee_sent, 2)
