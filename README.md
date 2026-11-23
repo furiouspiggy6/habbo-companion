@@ -1,5 +1,40 @@
 # Habbo Companion
 
+## v1.1.101 — Stationary clientless anti-AFK (opt-in)
+
+**Clientless Bot → STATIONARY ANTI-AFK** has a new checkbox,
+**Enable anti-AFK for this saved account**. It starts **OFF**, is
+saved separately for every saved account profile, and can be toggled
+at any time without restarting the game socket. Select the profile,
+enable the checkbox and leave it running in a room.
+
+Every **four minutes after the last game action**, Companion will
+attempt one known AIR `LookTo` packet (`2574` for the pinned
+`WIN63-202611041140-327405090` release) targeted at **the avatar's
+own most recently confirmed X,Y coordinate**. This is a stationary,
+non-chat action: it never issues `MoveAvatar`, never leaves the tile,
+and pauses while automatic walking or another action is active. The
+read-only RoomEnter, UserInfo, Users and UnitStatus observations are
+used to associate the packet with the correct profile and tile.
+Room changes, disconnects and reconnects invalidate old coordinates.
+
+This feature works with both Direct TCP and the optional G-Earth
+gameplay interception bridge (the same `send_game_action` path is
+used). No guessed headers are used for a changed AIR release.
+This uses one Tk event-loop timer and does not start a separate
+background-spamming worker; the enabled setting persists, but no
+anti-AFK packet is attempted until the session is authenticated,
+room-entry confirmed, and own-avatar identity/location known.
+
+**Compatibility note:** HabboAirPlus documents its `:afk` command
+as an anti-AFK toggle with forced mode, but does not publish its
+internal implementation. This feature is a comparable **clientless**
+stationary activity attempt, *not* a recreation of HabboAirPlus's
+client-specific idle event hook. A successful packet send is not proof
+that the official server resets inactivity. If your server ignores
+LookTo for this purpose, the anti-AFK effect may not work; test in a
+normal room without using it to claim active presence.
+
 ## v1.1.100 — G-Earth 1.5.4-beta-29 loopback collision fix
 
 **Fix for the G-Earth error "The port is in use by pythonw.exe" after
