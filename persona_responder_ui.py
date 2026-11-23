@@ -37,9 +37,12 @@ class PersonaResponderMixin:
         previous_target=str(self.config.get('responder_target','')).strip()
         self.responder.selected_users=str(
             self.config.get('responder_targets','') or previous_target)
-        self.responder.target_mode=str(
-            self.config.get('responder_target_mode',
-                            'Selected users' if previous_target else 'Everyone'))
+        current_mode=str(self.config.get('responder_target_mode','Everyone'))
+        # On upgrade, preserve an older single-user target instead of silently
+        # switching a previously targeted bot to Everyone.
+        if previous_target and not self.config.get('responder_targets'):
+            current_mode='Selected users'
+        self.responder.target_mode=current_mode
         self.responder.fixed_target=''
         self.responder_enabled_var=tk.BooleanVar(value=False)
         self.responder_send_var=tk.BooleanVar(value=False)
