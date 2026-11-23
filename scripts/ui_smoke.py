@@ -41,7 +41,7 @@ try:
     assert app.packet_tree.winfo_exists(), 'Packet Viewer failed to build'
     assert app.outfit_listbox.winfo_exists(), 'Outfit Cycler UI failed to build'
     assert not app._outfit_running, 'Outfit Cycler must start OFF'
-    assert app.outfit_delay_var.get()=='0.3', 'Incorrect default outfit interval'
+    assert app.outfit_delay_var.get()=='300', 'Incorrect default millisecond interval'
     assert app.fuzz_live_var.get().startswith('Passive reader OFF'), 'Protocol Lab failed to initialize'
     assert app.arcturus_header_var.get()=='', (
         'Arcturus header must be supplied by the emulator owner, never guessed')
