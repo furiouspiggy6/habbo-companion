@@ -38,7 +38,8 @@ def fake_app(connected=False):
         _account_profiles=[account],_tcp_sessions=({account["id"]:existing}
                                                    if connected else {}),
         _tcp_inflight=set(),_tcp_generation={},_tcp_states={},
-        _bot_pending_room={},bot_room_var=Var("69118545"),
+        _bot_pending_room={},_bot_walk_plans={},
+        bot_room_var=Var("69118545"),
         bot_status_var=Var(""),bot_account_var=Var(""),
         _tcp_render=lambda:None,
         _bot_send_action=lambda **kwargs:messages.append(kwargs),
