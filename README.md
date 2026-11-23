@@ -1,5 +1,51 @@
 # Habbo Companion
 
+## v1.1.83 — Safer distribution for friends, same Companion for everyone
+
+This release keeps **one app, one codebase and one update feed** for you and
+your friends. No AI, G-Earth, Direct TCP, protocol tools, chat recording,
+personality or account features were removed.
+
+### Security improvements
+
+- **Safer packet-log sharing.** The Packet Viewer export now asks whether to
+  include packet contents. Choosing **No** (the recommended default) exports
+  only timestamps, direction and a packet type when recognized; it omits
+  **all** chat text and packet payloads, even credentials in unknown formats.
+  Choosing **Yes** permits a private diagnostic content export after an
+  explicit warning. Known token formats are redacted on that path but raw
+  packet contents should still NEVER be posted publicly; redaction is not
+  guaranteed to find all secret formats. The *live Packet Viewer*, G-Earth
+  packet processing and manipulation tools are unchanged.
+- **Redacted TCP diagnostics.** Common session-ticket, bearer-token and API
+  key formats are masked in direct TCP diagnostic messages.
+- **Online updater restricted to the official publisher.** The existing
+  "Check online" flow now accepts only the canonical
+  `https://raw.githubusercontent.com/furiouspiggy6/habbo-companion/main/latest.json`
+  feed, an exactly version-matched Companion ZIP from the same repository,
+  and their SHA-256 checksums. HTTP(S) redirects and unrelated domains are
+  rejected. Existing one-click update prompts, backups, rollback and ZIP
+  format remain unchanged. Local **Install update ZIP** is still possible
+  from another source but requires explicit confirmation and must be treated
+  as untrusted executable code.
+- **Local data excluded from Git.** A new `.gitignore` excludes saved
+  settings, environment files, chat logs, browser profiles, packet captures
+  and local backups so contributors are less likely to publish personal data.
+- **Security checks on every PR and release.** `python
+  scripts/security_audit.py` examines Git-tracked paths and text source for
+  common real credential patterns and accidentally committed private files.
+  This runs before GitHub Actions publishes an update. Additional regression
+  tests exercise online-update trust checks, default payload-free exports,
+  token redaction and the scanner.
+
+**Remaining security limitations:** SHA-256 and trusted-source allowlisting
+still cannot prove the publisher's identity if the GitHub account or release
+workflow is compromised. Releases are **not cryptographically signed with a
+separate offline key**. This is a practical hardening step, not an independent
+penetration test or a guarantee that the application is vulnerability-free.
+Each friend's local accounts, chat logs and credentials remain on their own
+PC; selected chat examples are still sent to the OpenAI API when AI is enabled.
+
 ## v1.1.82 — Independent chat personas with temporary instructions
 
 **Recreate a chat persona from saved logs** now uses only the selected
