@@ -41,6 +41,10 @@ def fake_app(connected=False):
         _bot_pending_room={},_bot_walk_plans={},
         bot_room_var=Var("69118545"),
         bot_status_var=Var(""),bot_account_var=Var(""),
+        bot_gearth_var=Var(False),bot_gearth_status_var=Var(""),
+        gearth_port_var=Var("9092"),
+        config={"clientless_gearth_intercept":False},
+        save=lambda:None,
         _tcp_render=lambda:None,
         _bot_send_action=lambda **kwargs:messages.append(kwargs),
     )

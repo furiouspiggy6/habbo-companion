@@ -1,3 +1,14 @@
+v1.1.98: Clientless Bot now has an optional pre-start G-Earth
+interception toggle. OFF (default) keeps the existing Direct TCP
+login, chat, room entry and automatic walking unchanged.
+ON is an explicit preview only: clientless start is blocked until
+the G-Earth traffic interception/modify bridge has been built
+and verified. It never silently falls back to Direct TCP.
+A local extension-port readiness button is included, but port
+reachability alone does not mean packets are intercepted.
+Disconnect a running account before switching modes.
+See README.md for details.
+
 v1.1.97: Clientless Bot auto-walk after room join. Save primary X,Y and up to
 three backup X,Y tiles per Room ID, turn on auto-walk, then select an account.
 The bot waits for verified room entry and self-avatar identity, sends Walk

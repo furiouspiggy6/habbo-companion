@@ -1,5 +1,34 @@
 # Habbo Companion
 
+## v1.1.98 — Optional G-Earth pre-start interception setting (stage 1)
+
+Open **Clientless Bot** and choose **Use G-Earth interception when starting
+Clientless Bot** **before** selecting an account. The preference is saved
+across restarts and is **OFF by default**.
+
+- **OFF:** Existing one-click Direct TCP login, saved room, walking
+  destinations, chat and manual actions operate exactly as before.
+- **ON (preview):** Companion **does not start** the selected clientless
+  account. There is not yet a verified bridge that routes this session's
+  encrypted packets through G-Earth's intercept/modify pipeline. It
+  intentionally refuses to start rather than silently bypassing G-Earth.
+  Disable the option to run as before.
+- **Check G-Earth extension port:** Read-only check whether the local
+  G-Earth extension socket is reachable (normally 9092). A reachable
+  extension socket does **not** imply the clientless game connection is
+  proxied or intercepted. It does not send packets or log in an account.
+- Switching modes while the selected account is already authenticated or
+  connecting is refused; disconnect first. Selecting another profile or
+  using the Accounts tab's clientless start button uses the same guard.
+
+This is the reversible UI and safety foundation **only**, not the final
+G-Earth integration. In particular, installing a G-Python extension at
+port 9092 does **not** provide interception of Companion's independent
+Direct TCP socket. The next stage requires a separately tested game
+proxy bridge with correct encryption handling, connection ownership,
+and packet modification semantics. Existing advanced G-Earth tools are
+independent of this clientless mode selection.
+
 ## v1.1.97 — Automatic room walking with ordered fallback tiles
 
 In **Clientless Bot**, set the **Room ID** for the intended room (Coffee House
