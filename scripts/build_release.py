@@ -31,6 +31,11 @@ BOT_IMPORT = (
     "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,\n"
     "    clientless_walk_positions, decode_clientless_room_observation)\n"
 )
+BRIDGE_IMPORT = (
+    "from clientless_gearth_bridge import (\n"
+    "    ClientlessGearthBridge, GearthBridgeError, DEFAULT_BRIDGE_PORT,\n"
+    "    DEFAULT_BRIDGE_HOST, verify_bridge_alias)\n"
+)
 DIRECT_IMPORT = (
     "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
     "                                  launch_local_classic)\n"
@@ -54,6 +59,7 @@ def bundled_application(root=ROOT):
     app = (root / APP_FILES[0]).read_text(encoding="utf-8")
     if (app.count(HEADLESS_IMPORT) != 1 or app.count(DIRECT_IMPORT) != 1
         or app.count(TCP_IMPORT) != 1 or app.count(BOT_IMPORT) != 1
+        or app.count(BRIDGE_IMPORT) != 1
         or app.count(PERSONA_IMPORT) != 1
         or app.count(PERSONA_UI_IMPORT) != 1):
         raise ValueError("Companion module imports changed; update bundle anchors")
@@ -62,8 +68,8 @@ def bundled_application(root=ROOT):
 
     modules = []
     for filename in ("headless_transport.py", "local_classic_launch.py", "habbo_tcp.py",
-                     "clientless_bot.py", "persona_responder.py",
-                     "persona_responder_ui.py"):
+                     "clientless_bot.py", "clientless_gearth_bridge.py",
+                     "persona_responder.py", "persona_responder_ui.py"):
         source = (root / filename).read_text(encoding="utf-8")
         marker = "from __future__ import annotations\n"
         if source.count(marker) != 1:
@@ -79,6 +85,7 @@ def bundled_application(root=ROOT):
     app = app.replace(DIRECT_IMPORT, "", 1)
     app = app.replace(TCP_IMPORT, "", 1)
     app = app.replace(BOT_IMPORT, "", 1)
+    app = app.replace(BRIDGE_IMPORT, "", 1)
     app = app.replace(PERSONA_IMPORT, "", 1)
     app = app.replace(PERSONA_UI_IMPORT, "", 1)
     embedded = (
@@ -90,12 +97,14 @@ def bundled_application(root=ROOT):
         + "\n" + modules[3]
         + "\n" + modules[4]
         + "\n" + modules[5]
+        + "\n" + modules[6]
     )
     app = app.replace(APP_ANCHOR, "\n" + embedded + APP_ANCHOR, 1)
     compile(app, str(root / APP_FILES[0]), "exec")
     if any(text in app for text in ("from headless_transport import",
             "from local_classic_launch import", "from habbo_tcp import",
-            "from clientless_bot import", "from persona_responder import",
+            "from clientless_bot import", "from clientless_gearth_bridge import",
+            "from persona_responder import",
             "from persona_responder_ui import")):
         raise ValueError("Unbundled application dependency remains")
     return app.encode("utf-8")
