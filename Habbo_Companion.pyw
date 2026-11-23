@@ -5349,6 +5349,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.fuzz_running=False
         self.fuzz_last_result=None
         self.fuzz_target_ip_var=tk.StringVar(value='127.0.0.1')
+        self.fuzz_habbo_mode_var=tk.BooleanVar(value=False)
+        self.fuzz_habbo_header_var=tk.BooleanVar(value=False)
         self.fuzz_remote_ip_var=tk.StringVar(value='')
         self.fuzz_remote_port_var=tk.StringVar(value='39099')
         # Never persist the remote lab key, like an actual Habbo ticket.
@@ -7784,6 +7786,15 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._fuzz_start_lab).pack(side='left',padx=(0,8))
         ttk.Button(bar,text='Analyse results with local Ollama',
                    command=self._fuzz_analyse_ollama).pack(side='left')
+        ttk.Checkbutton(
+            holder,
+            text='Habbo framing (VL64/B64 body) instead of the synthetic format',
+            variable=self.fuzz_habbo_mode_var).pack(anchor='w',pady=(9,3))
+        ttk.Checkbutton(
+            holder,text='Also fuzz header IDs',
+            variable=self.fuzz_habbo_header_var).pack(anchor='w',pady=(0,6))
+        ttk.Button(holder,text='Run 40 Habbo-framing cases',
+                   command=self._fuzz_start_habbo_lab).pack(anchor='w',pady=(0,3))
         ttk.Separator(holder,orient='horizontal').pack(fill='x',pady=(17,15))
         tk.Label(holder,text='LOCAL ARCTURUS EMULATOR',font=('Segoe UI Semibold',13),
                  bg=p['background'],fg=p['text']).pack(anchor='w')
@@ -7905,6 +7916,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.fuzz_live_var.set('Export failed: '+str(exc)[:130])
 
     def _fuzz_start_lab(self):
+        if self.fuzz_habbo_mode_var.get():
+            self._fuzz_start_habbo_lab()
+            return
         if self.fuzz_running:
             self.fuzz_lab_var.set('Local boofuzz session already running.')
             return
@@ -7921,6 +7935,37 @@ class ChatOverlayApp(PersonaResponderMixin):
         def work():
             try:
                 result=run_local_boofuzz(seed_id=seed,cases=60,bind_ip=bind_ip)
+                self._packet_put(('fuzz_result',result))
+            except ModuleNotFoundError:
+                self._packet_put(('fuzz_error',
+                    'boofuzz not installed. Run: "'+sys.executable+
+                    '" -m pip install boofuzz==0.4.2'))
+            except Exception as exc:
+                self._packet_put(('fuzz_error',type(exc).__name__+': '+str(exc)[:170]))
+        threading.Thread(target=work,daemon=True).start()
+
+
+    def _fuzz_start_habbo_lab(self):
+        if self.fuzz_running:
+            self.fuzz_lab_var.set('Local boofuzz session already running.')
+            return
+        try:
+            bind_ip=validate_owned_lab_ip(self.fuzz_target_ip_var.get())
+        except ValueError as exc:
+            self.fuzz_lab_var.set(str(exc))
+            return
+        outgoing=[(v['count'],mid) for (direction,mid),v in self.fuzz_counts.items()
+                  if direction=='Outgoing']
+        seed=max(outgoing)[1] if outgoing else 896
+        fuzz_header=bool(self.fuzz_habbo_header_var.get())
+        self.fuzz_running=True
+        self.fuzz_lab_var.set(
+            f'Running up to 40 Habbo-framing cases on your PC at {bind_ip} '
+            f'(seed ID {seed}; fuzz header: {fuzz_header})...')
+        def work():
+            try:
+                result=run_local_habbo_boofuzz(
+                    seed_id=seed,cases=40,bind_ip=bind_ip,fuzz_header=fuzz_header)
                 self._packet_put(('fuzz_result',result))
             except ModuleNotFoundError:
                 self._packet_put(('fuzz_error',
@@ -10251,7 +10296,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self.fuzz_lab_var.set(
                     f"Lab boofuzz done: {result['requests']} requests; "
                     f"{result['accepted']} accepted / {result['rejected']} rejected. "
-                    'Results are for a synthetic test server only.')
+                    f"Results: {result['scope']}.")
                 continue
             if item[0]=='fuzz_error':
                 self.fuzz_running=False
