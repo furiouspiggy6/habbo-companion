@@ -156,6 +156,173 @@ def run_local_boofuzz(seed_id=896, cases=60, output_dir=None, bind_ip='127.0.0.1
 
 
 
+
+# Separate from Habbo's production session and the synthetic Companion mock.
+# This tool always contacts ONLY an Arcturus emulator on this machine.
+ARCTURUS_EMULATOR_HOST = '127.0.0.1'
+ARCTURUS_EMULATOR_PORT = 30000
+ARCTURUS_MAX_CASES = 50
+ARCTURUS_B64_ALPHABET = b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+
+class ArcturusEncoder:
+    """Callable boofuzz s_block encoder base for a confirmed wire field."""
+    def encode(self, data):
+        raise NotImplementedError
+
+    def __call__(self, data):
+        return self.encode(data)
+
+
+class ArcturusVL64Encoder(ArcturusEncoder):
+    """Signed 32-bit value encoded as supplied by the local emulator source."""
+
+    def encode(self, data):
+        if not isinstance(data, bytes) or len(data) != 4:
+            raise ValueError('VL64 input must be four big-endian bytes.')
+        value=struct.unpack('>i',data)[0]
+        magnitude=abs(value)
+        tail=[]
+        rest=magnitude>>2
+        while rest:
+            tail.append(rest&0x3f)
+            rest>>=6
+        bytecount=len(tail)+1
+        first=(0x04 if value<0 else 0)|(bytecount-1)<<3|(magnitude&0x03)
+        result=bytearray([first])
+        result.extend(reversed(tail))
+        result[-1]|=0x40
+        return bytes(result)
+
+
+class ArcturusB64Encoder(ArcturusEncoder):
+    """Only the confirmed one-digit signed B64 range, never arbitrary bytes."""
+
+    def encode(self, data):
+        try:
+            raw=data.decode('ascii') if isinstance(data,bytes) else str(data)
+            if not re.fullmatch(r'-?(?:0|[1-9][0-9]?)',raw):
+                raise ValueError
+            value=int(raw)
+        except (UnicodeError,ValueError):
+            raise ValueError('Only a signed single-digit B64 integer is supported.') from None
+        if abs(value)>63:
+            raise ValueError('B64 value must be from -63 to 63.')
+        terminal=ARCTURUS_B64_ALPHABET[abs(value)]|0x40
+        result=(b'@' if value<0 else b'')+bytes([terminal])
+        if any(ch not in ARCTURUS_B64_ALPHABET
+               for ch in (result[1:] if value<0 else result)):
+            raise ValueError('Encoded B64 character is outside its alphabet.')
+        return result
+
+
+def validate_arcturus_emulator_parameters(header_id,cases):
+    """Keep the new emulator fuzzer deterministic and loopback-only."""
+    if isinstance(header_id,bool) or not isinstance(header_id,int) or not 0<=header_id<=65535:
+        raise ValueError('Enter a known 16-bit Arcturus header ID.')
+    if isinstance(cases,bool) or not isinstance(cases,int) or not 1<=cases<=ARCTURUS_MAX_CASES:
+        raise ValueError(f'Use between 1 and {ARCTURUS_MAX_CASES} test cases.')
+    return header_id,cases
+
+
+def build_arcturus_boofuzz_request(header_id):
+    """One minimal frame; TODO: handler-specific fields and authentication.
+
+    s_size wraps the complete header+body block; the body is precisely a
+    VL64 integer followed by a single signed B64 digit for testing the
+    encoder boundary. Never invent a handler or full B64 string encoding.
+    """
+    validate_arcturus_emulator_parameters(header_id,1)
+    from boofuzz import (
+        s_initialize,s_size,s_block,s_word,s_dword,s_group,s_get)
+    request_name='local_arcturus_'+uuid.uuid4().hex
+    s_initialize(request_name)
+    s_size('header_and_body',length=4,endian='>',
+           output_format='binary',inclusive=False,fuzzable=False,
+           name='frame_length')
+    with s_block('header_and_body'):
+        s_word(header_id,endian='>',fuzzable=False,name='header_id')
+        with s_block('vl64_field',encoder=ArcturusVL64Encoder()):
+            s_dword(0,endian='>',name='vl64_source',
+                    fuzz_values=[
+                        0,1,2,3,4,63,64,255,256,65535,
+                        0x7fffffff,0x80000000,0xffffffff])
+        with s_block('b64_digit',encoder=ArcturusB64Encoder()):
+            s_group(name='b64_source',values=[
+                '-63','-32','-2','-1','0','1','2','3',
+                '31','32','62','63'])
+        # TODO: Supply the selected header's real body field sequence
+        # from your emulator handler. Many Arcturus handlers expect an
+        # authenticated session before any application packet.
+        # TODO: Implement multidigit B64 only after confirming its order.
+    return s_get(request_name)
+
+
+def preview_arcturus_emulator_packet(header_id):
+    """Validate the rendered length without sending any network traffic."""
+    req=build_arcturus_boofuzz_request(header_id)
+    raw=req.render()
+    if len(raw)<6 or int.from_bytes(raw[:4],'big')!=len(raw)-4:
+        raise ValueError('Invalid Arcturus frame length; nothing was sent.')
+    if int.from_bytes(raw[4:6],'big')!=header_id:
+        raise ValueError('Unexpected Arcturus header; nothing was sent.')
+    return raw
+
+
+def run_arcturus_emulator_boofuzz(header_id,cases=20,output_dir=None):
+    """Opt-in, bounded loopback-only fuzzing of a local Arcturus emulator.
+
+    This does not reuse live Habbo TCP sockets, G-Earth, SSO or browser
+    credentials. The emulator may reject this minimal unauthenticated frame.
+    """
+    header_id,cases=validate_arcturus_emulator_parameters(header_id,cases)
+    from boofuzz import Session,Target,TCPSocketConnection
+    # A non-negotiable destination; do not expose a host input or use
+    # discovered Habbo/G-Earth IPs here.
+    host=ARCTURUS_EMULATOR_HOST
+    port=ARCTURUS_EMULATOR_PORT
+    # Fail before invoking a fuzz session when no local emulator is present.
+    with socket.create_connection((host,port),timeout=0.75):
+        pass
+
+    output_dir=Path(output_dir) if output_dir else APP_DIR/'fuzz_lab'
+    output_dir.mkdir(parents=True,exist_ok=True)
+    database=output_dir/(
+        'arcturus_'+datetime.now().strftime('%Y%m%d_%H%M%S')+
+        '_'+uuid.uuid4().hex[:8]+'.db')
+    sent={'count':0}
+
+    class CountedLocalConnection(TCPSocketConnection):
+        def __init__(self):
+            super().__init__(host=host,port=port,
+                             recv_timeout=0.6,send_timeout=0.6)
+
+        def send(self,data):
+            written=super().send(data)
+            if written:
+                sent['count']+=1
+            return written
+
+    req=build_arcturus_boofuzz_request(header_id)
+    baseline=req.render()
+    if len(baseline)<6 or int.from_bytes(baseline[:4],'big')!=len(baseline)-4:
+        raise ValueError('Rendered boofuzz frame failed its size check.')
+    session=Session(
+        target=Target(connection=CountedLocalConnection()),
+        index_end=cases,sleep_time=0.05,
+        receive_data_after_each_request=False,
+        web_address='127.0.0.1',web_port=None,
+        keep_web_open=False,db_filename=str(database))
+    session.connect(req)
+    session.fuzz()
+    return {
+        'scope':'Local Arcturus emulator ONLY',
+        'host':host,'port':port,'header_id':header_id,
+        'case_limit':cases,'requests':sent['count'],
+        'boofuzz_db':str(database),
+        'note':'No authentication/handler schema assumed; packet acceptance unverified',
+    }
+
 def validate_remote_lab_target(host,port,secret):
     """Remote fuzz target must prove possession of the lab-only key.
 
