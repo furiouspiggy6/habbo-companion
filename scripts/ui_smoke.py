@@ -44,6 +44,21 @@ try:
     assert app.responder_log_text.winfo_exists(), 'AI Responder log failed to build'
     assert not app.responder.enabled, 'AI must start disabled'
     assert not app.responder_send_var.get(), 'Auto-send must start disabled'
+    assert app.responder.reply_cooldown_seconds==30, (
+        'Default reply interval should be a less spammy 30 seconds')
+    assert app.responder_reply_interval_scale.winfo_exists(), (
+        'Main AI Responder reply-speed slider is missing')
+    assert app.responder_reply_interval_text.get().endswith('30 sec'), (
+        'Slider must display the current minimum reply interval')
+    app.responder_reply_interval_var.set(95)
+    app._responder_reply_speed_changed(95)
+    assert app.responder.reply_cooldown_seconds==95, (
+        'Dragging speed slider must adjust the live AI throttle')
+    app._responder_commit_reply_speed()
+    assert app.config['responder_reply_interval']==95, (
+        'Reply speed must be persisted for next launch')
+    assert not app.responder.enabled and not app.responder_send_var.get(), (
+        'Moving the slider must not enable the bot or automatic sending')
     assert app.responder.save_history, (
         'Background public chat saving should start ON independently of AI')
     assert app.responder.archive_dir==app._responder_app_dir/'persona_logs'/'users', (
