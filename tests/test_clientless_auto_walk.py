@@ -216,6 +216,13 @@ class MovementLifecycleTests(unittest.TestCase):
         self.assertEqual(app._bot_walk_plans,{})
         self.assertEqual(len(spawned),0)
 
+    def test_room_switch_cancels_pending_auto_walk(self):
+        app,ident,session=fake_app()
+        app._bot_arm_walk(ident,3,session,69118545)
+        app._bot_receive_walk_observation(ident,3,("ready",444444))
+        self.assertNotIn(ident,app._bot_walk_plans)
+        self.assertEqual(spawned,[])
+
     def test_stale_generation_does_not_move(self):
         app,ident,session=fake_app()
         app._bot_arm_walk(ident,3,session,69118545)
