@@ -38,14 +38,32 @@ class ActionCompositionTests(unittest.TestCase):
             ((228,struct.pack(">ii",4,9),"LookTo"),))
 
     def test_chat_and_whisper_use_habbo_string_prefix(self):
-        for name,expected in (("Say","Chat"),("Shout","Shout")):
-            pkt=bot.encode_clientless_action(MAPPING,RELEASE,name,text="Hello ✓")
-            self.assertEqual(pkt[0][2],expected)
-            self.assertEqual(pkt[0][1],bot._packet_string("Hello ✓")+struct.pack(">i",0))
+        # Observed AIR ChatMessageComposer.getMessageArray():
+        # [text, styleId, chatTrackingId] where default trackingId = -1.
+        say=bot.encode_clientless_action(MAPPING,RELEASE,"Say",text="Hello ✓")
+        self.assertEqual(say[0][2],"Chat")
+        self.assertEqual(say[0][1],
+                         bot._packet_string("Hello ✓")+struct.pack(">ii",0,-1))
+        # Shout and Whisper each contain exactly two fields in the AIR source.
+        shout=bot.encode_clientless_action(MAPPING,RELEASE,"Shout",text="Hello ✓")
+        self.assertEqual(shout[0][2],"Shout")
+        self.assertEqual(shout[0][1],
+                         bot._packet_string("Hello ✓")+struct.pack(">i",0))
         pkt=bot.encode_clientless_action(
             MAPPING,RELEASE,"Whisper",recipient="Alice",text="hey")
         self.assertEqual(pkt[0][1],bot._packet_string("Alice hey")+struct.pack(">i",0))
         self.assertEqual(pkt[0][2],"Whisper")
+
+    def test_chat_payload_matches_air_three_field_contract(self):
+        # Real AIR defaults: style=0; tracking=-1. Verify full wire frame
+        # (without guessing a production header for the current release).
+        packet_id,body,name=bot.encode_clientless_action(
+            MAPPING,RELEASE,"Say",text="test123")[0]
+        self.assertEqual(name,"Chat")
+        self.assertEqual(packet_id,OUT["Chat"])
+        self.assertEqual(body,struct.pack(">H",7)+b"test123"
+                         +struct.pack(">ii",0,-1))
+        self.assertEqual(len(body),17)
 
     def test_dance_sign_posture_values_are_constrained(self):
         for action,kw,name in (

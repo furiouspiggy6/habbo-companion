@@ -1,5 +1,20 @@
 # Habbo Companion
 
+## v1.1.94 — Fix clientless Say chat packet shape
+
+**Clientless Bot → Say** now includes the third ChatMessageComposer field:
+`{s:message}{i:bubble_style=0}{i:chat_tracking_id=-1}`.
+The earlier v1.1.93 sent only the first two fields, leaving a malformed
+chat request even though the socket reported a locally accepted send.
+The serializer now matches the AIR ChatMessageComposer's documented
+three-value array and default tracking ID.
+
+**Shout** and **Whisper** remain two-field packets, matching their separate
+AIR composers. Automatic and unmapped packet injection remain disabled.
+The local send counter still does not establish server acceptance. Verify
+with a second Habbo account that your text actually appears in the room.
+If it still does not appear, investigate whether room entry has completed.
+
 ## v1.1.93 — Clientless Bot controls based on Habbo-Bot (experimental)
 
 A **Clientless Bot** page extends the per-account **Direct TCP** connections

@@ -1,3 +1,5 @@
+v1.1.94: Fixed Clientless Bot Say packet to send the third AIR chat tracking integer (-1). Shout and Whisper packets unchanged. Local send accepted still does not confirm server display.
+
 Habbo Companion v1.1.93 — Clientless Bot controls
 
 A new Clientless Bot sidebar page adds per-account Direct TCP room joining, walking, chatting, whispering, dancing, signs and posture control. Authenticate first in Direct TCP; capture matching named AIR headers from live G-Earth before sending. Only manual, rate-limited commands are allowed, and server acceptance is not guaranteed. Cookies and SSO tickets remain in Companion's existing account flow. See README.md for details.

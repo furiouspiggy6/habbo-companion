@@ -77,10 +77,16 @@ def build_clientless_action(action, **kwargs):
         y = _int_arg(kwargs.get("y"), "y")
         return ((("MoveAvatar" if action=="Walk" else "LookTo"),
                  _integer(x)+_integer(y)),)
-    if action in ("Say", "Shout"):
+    if action == "Say":
         text = _text_arg(kwargs.get("text"))
-        return ((("Chat" if action=="Say" else "Shout"),
-                 _packet_string(text)+_integer(0)),)
+        # WIN63 AIR ChatMessageComposer returns [text, styleId, trackingId].
+        # The client constructor defaults the tracking ID to -1. Omitting
+        # this third field causes an incomplete chat body on the wire.
+        return (("Chat", _packet_string(text)+_integer(0)+_integer(-1)),)
+    if action == "Shout":
+        text = _text_arg(kwargs.get("text"))
+        # ShoutMessageComposer is only [text, styleId]; do not add an int.
+        return (("Shout", _packet_string(text)+_integer(0)),)
     if action == "Whisper":
         recipient = kwargs.get("recipient")
         if (not isinstance(recipient, str)
