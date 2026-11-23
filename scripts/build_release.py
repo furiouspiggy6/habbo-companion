@@ -34,6 +34,7 @@ PERSONA_UI_IMPORT = "from persona_responder_ui import PersonaResponderMixin\n"
 PERSONA_UI_ENGINE_IMPORT = (
     "from persona_responder import (\n"
     "    PersonaResponder, chat_expression_from_template, generate_persona_reply,\n"
+    "    list_style_usernames, matching_style_usernames,\n"
     ")\n"
 )
 APP_ANCHOR = "\nAPP_NAME = 'Habbo View Chat'\n"

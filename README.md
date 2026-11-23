@@ -1,5 +1,35 @@
 # Habbo Companion
 
+## v1.1.77 — Search saved chat-log users and copy their writing styles
+
+The AI Responder's **Try a reply (preview only)** section has been removed.
+In its place, the main screen now has **Copy writing style from saved chat logs**:
+
+- Start typing any part of a username (case-insensitive), e.g. `mara`.
+  A matching-username dropdown appears with clickable suggestions drawn from
+  the available per-user `username.txt` chat-log files. No exact spelling
+  or full username is needed.
+- Select a result to **immediately switch** to that person's logged writing
+  style. Companion reads their saved examples (word choice, slang, spelling,
+  punctuation and typical message length), turns off style rotation, and
+  saves the choice. The bot learns *style*, not factual identity, and does
+  not reproduce or reveal private chat text verbatim.
+- Click **Use my own style** to switch back to the editable custom personality.
+  The custom editor is visually disabled while chat-log copying is active.
+- Click **Choose log folder** and select your existing `chat_logs/users`
+  directory (or its parent `chat_logs`) if the desired usernames are
+  not listed. Use **Refresh** after additional logs are saved.
+- The **Reply to** menu remains independent: choose Everyone, Selected
+  users, or First active speaker. The selected writing style is how the
+  bot replies; the selected target is whom it replies to.
+
+The app still uses the existing AIR chat feed and optional connected G-Earth
+sending. Both live AI and auto-send remain OFF after startup; no browser,
+fixed mouse coordinates, or change to the working packet-sending code.
+The previous advanced log-file username text field is removed to avoid
+duplicating the searchable picker. Older saved styles and log paths remain
+compatible.
+
 ## v1.1.76 — Simpler AI Responder screen
 
 The AI Responder has been reorganised into **one straightforward page**

@@ -1,3 +1,24 @@
+HABBO COMPANION v1.1.77 — SEARCH USER CHAT LOGS FOR WRITING STYLE
+===================================================================
+
+AI RESPONDER CHANGES
+- Removed the old TRY A REPLY / preview input and button from the screen.
+- Added COPY WRITING STYLE FROM SAVED CHAT LOGS on the main screen.
+- Search any part of a username; case-insensitive matching names appear
+  immediately in a clickable dropdown sourced from username.txt files.
+- Choose a username to apply that user's recorded way of speaking, including
+  style, slang, spelling, typical length, and punctuation. Copies style only:
+  does not claim to actually be that person and does not paste their logs.
+- Selecting a user automatically switches to chat-log style, turns OFF
+  automatic style rotation, and saves the new writing style.
+- Use my own style returns to the custom personality text box.
+- Choose log folder opens a saved username.txt folder, usually chat_logs/users;
+  Refresh scans the folder again for newly saved names.
+- Reply to (Everyone / Selected users / First active speaker) remains separate.
+- Custom personality settings, G-Earth packet capture, and sending are not
+  changed. Live AI and Auto-send remain OFF on startup.
+
+
 HABBO COMPANION v1.1.76 — SIMPLIFIED AI RESPONDER
 ==================================================
 
