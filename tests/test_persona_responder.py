@@ -1,5 +1,6 @@
 """Offline regression checks for opt-in AI persona responder."""
 from pathlib import Path
+import ast
 import unittest.mock
 import tempfile
 import unittest
@@ -136,6 +137,33 @@ class PersonaResponderTests(unittest.TestCase):
         self.assertEqual(reply,"hey there!")
         self.assertIn("test_mode",responses.last["input"][0]["content"])
         self.assertIn("DO NOT imitate",responses.last["input"][0]["content"])
+
+    def test_actual_g_earth_expression_is_used_for_capture(self):
+        # G-Python's g_string is the legacy/raw representation: it cannot
+        # be checked for a {out:Chat} expression prefix.
+        source=(Path(__file__).resolve().parents[1] /
+                'Habbo_Companion.pyw').read_text(encoding='utf-8')
+        tree=ast.parse(source)
+        overlay=next(node for node in tree.body
+                     if isinstance(node,ast.ClassDef)
+                     and node.name=='ChatOverlayApp')
+        worker=next(node for node in overlay.body
+                    if isinstance(node,ast.FunctionDef)
+                    and node.name=='_packet_worker')
+        body=ast.get_source_segment(source,worker)
+        self.assertIn('observed=msg.packet.g_expression(ext)',body)
+        self.assertIn("chat_expression_from_template(observed,'probe')",body)
+        self.assertNotIn("detail.lstrip().lower().startswith('{out:chat}')",body)
+        self.assertIn("('responder_outgoing_seen',)",body)
+        self.assertIn("('responder_chat_template',observed)",body)
+
+    def test_chat_template_accepts_expected_outgoing_expression(self):
+        actual='{out:Chat}{s:"hello"}{i:0}{i:0}'
+        self.assertEqual(chat_expression_from_template(actual,"hi"),
+                         '{out:Chat}{s:"hi"}{i:0}{i:0}')
+        # No ability to infer an unverified packet ID from unrelated output.
+        self.assertIsNone(chat_expression_from_template(
+            '{out:1234}{s:"hello"}{i:0}{i:0}',"hi"))
 
     def test_template_uses_real_outgoing_packet_shape(self):
         template='{out:Chat}{s:"hello"}{i:0}{i:0}'

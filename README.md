@@ -1,5 +1,30 @@
 # Habbo Companion
 
+## v1.1.75 — Fix AI outgoing Chat capture
+
+Fixed an AI Responder send failure where live room messages were read and AI
+drafts were generated but every send reported "type one normal public Habbo
+chat line to learn its format". The outgoing G-Earth interceptor incorrectly
+looked for an `{out:Chat}` header in `g_string()`, which is the legacy
+byte representation rather than the parsed packet expression. The interceptor
+now checks `g_expression()`, validates an explicitly named outgoing Chat
+packet and stores its verified template for subsequent sending.
+
+**How to verify:** connect the Habbo AIR client through G-Earth Packet Viewer,
+enable AI Responder (Auto-send can remain off), and type one normal public
+message directly in Habbo. The AI Responder decisions log should say
+`Outgoing Chat format learned from Habbo.`. You can click
+**Check G-Earth chat capture** for a diagnostic without sending a packet.
+If outgoing packets are observed but the Chat format is not learned,
+G-Earth may not have recognised its Chat packet name; no fallback packet ID
+will be guessed. Use the Packet Viewer to inspect which outgoing messages
+are actually being intercepted.
+
+AI still starts disabled, and Auto-send remains a separate opt-in.
+The client still uses the existing AIR feed and G-Earth, not a browser,
+mouse clicks or `capture.py`. Live packet acceptance on an actual Habbo
+session still requires testing on Windows.
+
 ## v1.1.74 — Create your own AI personality and test responses safely
 
 The **AI Responder** page has **Personality**, **Who to reply to**, and
