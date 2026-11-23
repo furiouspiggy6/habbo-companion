@@ -14,7 +14,8 @@ from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,
                        probe_classic_websocket, TCP_FALLBACK_RELEASE)
 from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
-    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES)
+    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,
+    clientless_walk_positions, decode_clientless_room_observation)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -594,6 +595,8 @@ DEFAULT = dict(
     clientless_last_room_id='69118545',
     clientless_header_map=None,
     clientless_standalone=True,
+    clientless_auto_walk=False,
+    clientless_walk_presets={},
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -5269,6 +5272,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_last_action_at={}
         # Pending one-click room entries are tied to the exact account generation.
         self._bot_pending_room={}
+        self._bot_walk_plans={}
+        self._bot_self_ids={}
+        self._bot_user_roster={}
+        self.bot_auto_walk_var=tk.BooleanVar(
+            value=bool(self.config.get('clientless_auto_walk',False)))
+        self.bot_walk_primary_var=tk.StringVar(value='')
+        self.bot_walk_backups_var=tk.StringVar(value='')
+        self.bot_walk_status_var=tk.StringVar(
+            value='Automatic walking is OFF until you save positions and enable it.')
         self.bot_standalone_var=tk.BooleanVar(
             value=bool(self.config.get('clientless_standalone',True)))
         self.bot_account_var=tk.StringVar(value='')
@@ -6187,6 +6199,35 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'The editable Room ID below remembers the last room you '
                   'requested; the Coffee House shortcut never auto-joins.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='AUTOMATIC WALKING',style='Section.TLabel').pack(
+            anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Save a primary X,Y tile and up to three backup '
+                  'tiles for the numeric Room ID below. When this room reports '
+                  'entry and your avatar is identified, Companion will walk '
+                  'there automatically. Backups are tried in order if arrival '
+                  'is not confirmed in time.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
+        walkrow=ttk.Frame(frame,style='Panel.TFrame')
+        walkrow.pack(fill='x',pady=(0,5))
+        ttk.Label(walkrow,text='Primary X,Y',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(walkrow,textvariable=self.bot_walk_primary_var,
+                  width=12).pack(side='left',padx=(10,18))
+        ttk.Label(walkrow,text='Backups (X,Y;X,Y;X,Y)',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Entry(walkrow,textvariable=self.bot_walk_backups_var,
+                  width=24).pack(side='left',padx=(9,0),fill='x',expand=True)
+        walkbuttons=ttk.Frame(frame,style='Panel.TFrame')
+        walkbuttons.pack(fill='x',pady=(0,7))
+        ttk.Checkbutton(walkbuttons,text='Walk automatically after room entry',
+                        variable=self.bot_auto_walk_var,
+                        command=self._bot_save_walk_preset,
+                        style='Panel.TCheckbutton').pack(side='left',padx=(0,8))
+        ttk.Button(walkbuttons,text='Save positions',
+                   command=self._bot_save_walk_preset).pack(side='left',padx=(0,6))
+        ttk.Button(walkbuttons,text='Load room positions',
+                   command=self._bot_load_walk_preset).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_walk_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6217,6 +6258,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             relief='flat',font=('Consolas',9))
         self.bot_chat_log.pack(fill='x',pady=(0,6))
         self._bot_refresh_accounts()
+        self._bot_load_walk_preset()
 
     def _bot_refresh_accounts(self):
         if not hasattr(self,'bot_account_picker'):
@@ -6268,9 +6310,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         room=int(clientless_saved_room_value(self.bot_room_var.get()))
         self.bot_room_var.set(str(room))
-        # A subsequent selection cancels any unfulfilled automatic room join,
-        # but keeps already authenticated TCP connections intact.
+        # A subsequent selection cancels unfinished joins and walking.
         self._bot_pending_room.clear()
+        self._bot_walk_plans.clear()
         session=self._tcp_sessions.get(ident)
         if session and session.authenticated and not session.stop.is_set():
             self._bot_send_action(account_override=account,
@@ -6316,6 +6358,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if account is None:
             return
         self._bot_pending_room.pop(account['id'],None)
+        self._bot_walk_plans.pop(account['id'],None)
         self._tcp_disconnect_one(account['id'])
         self._tcp_render()
         self.bot_status_var.set('Disconnected '+account['label']+'.')
@@ -6411,6 +6454,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         if action=='Join room':
             self.config['clientless_last_room_id']=str(args['room'])
             self.save()
+            self._bot_arm_walk(ident,self._tcp_generation.get(ident,0),
+                               session,args['room'])
+        elif action=='Walk' and action_override is None:
+            # Explicit manual movement cancels automatic walking.
+            self._bot_walk_plans.pop(ident,None)
         self._bot_last_action_at[ident]=now
         self._bot_action_inflight.add(ident)
         self.bot_status_var.set('Sending '+action+' via authenticated Direct TCP '
@@ -6441,6 +6489,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         mapping=self._bot_headers
         if not session.authenticated:
             return
+        observed=decode_clientless_room_observation(session.release,packet_id,body)
+        if observed is not None:
+            self._packet_put(('bot_walk_observation',ident,generation,observed))
         try:
             parsed=decode_clientless_chat(mapping,session.release,packet_id,body)
         except (ClientlessBotError,ValueError,TypeError):
@@ -6715,6 +6766,9 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_disconnect_one(self,ident):
         self._bot_pending_room.pop(ident,None)
+        self._bot_walk_plans.pop(ident,None)
+        self._bot_self_ids.pop(ident,None)
+        self._bot_user_roster.pop(ident,None)
         self._tcp_generation[ident]=self._tcp_generation.get(ident,0)+1
         self._tcp_inflight.discard(ident)
         session=self._tcp_sessions.pop(ident,None)
@@ -11306,10 +11360,23 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._bot_action_inflight.discard(ident)
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
+                if action=='Join room' and error is not None:
+                    self._bot_walk_plans.pop(ident,None)
+                    self.bot_walk_status_var.set('Room join failed: '+error)
+                if action=='Auto Walk' and error is not None:
+                    self._bot_walk_next(ident,generation,'Walk request failed')
+                if action=='Auto Walk' and error is None:
+                    self.bot_walk_status_var.set(
+                        'Walking request sent; awaiting avatar position confirmation.')
                 self.bot_status_var.set(
                     ('Direct TCP local send accepted: '+action+
                      f' ({count} packet(s)). Server application not verified.'
                      if error is None else 'Clientless action failed: '+error))
+                continue
+            if item[0]=='bot_walk_observation':
+                _,ident,generation,observation=item
+                if generation==self._tcp_generation.get(ident,0):
+                    self._bot_receive_walk_observation(ident,generation,observation)
                 continue
             if item[0]=='bot_chat':
                 _,ident,generation,kind,index,message=item
