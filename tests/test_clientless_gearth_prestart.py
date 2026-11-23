@@ -16,7 +16,7 @@ METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
 SELECTED=("_bot_gearth_changed","_bot_gearth_probe","_bot_run_account",
           "_bot_send_action","_tcp_auto_connect_startup")
 SCOPE={"clientless_saved_room_value":lambda n:str(n),
-       "DEFAULT_BRIDGE_HOST":"127.0.0.2.nip.io",
+       "DEFAULT_BRIDGE_HOST":"127.0.0.3.nip.io",
        "verify_bridge_alias":lambda host:host,
        "GearthBridgeError":RuntimeError}
 exec(compile(ast.Module(body=[METHODS[n] for n in SELECTED],
@@ -126,7 +126,7 @@ class GearthPrestartTests(unittest.TestCase):
     def test_hostname_check_is_read_only(self):
         app,account,calls=fixture()
         SCOPE["_bot_gearth_probe"](app)
-        self.assertIn("127.0.0.2",app.bot_gearth_status_var.get())
+        self.assertIn("127.0.0.3",app.bot_gearth_status_var.get())
         self.assertEqual(calls,[])
 
     def test_prestart_choice_before_account_profile_autorun(self):

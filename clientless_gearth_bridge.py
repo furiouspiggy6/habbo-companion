@@ -2,8 +2,8 @@
 """Optional G-Earth gameplay MITM adapter for an independently authenticated bot.
 
 Wire topology:
-  Companion action (plaintext) -> G-Earth client socket (127.0.0.1:port)
-  -> G-Earth modification pipeline -> upstream relay (127.0.0.2:port)
+  Companion action (plaintext) -> G-Earth client socket (127.0.0.2:port)
+  -> G-Earth modification pipeline -> upstream relay (127.0.0.3:port)
   -> Companion encrypted Habbo TCP socket.
   Game incoming packet -> upstream relay -> G-Earth modification pipeline
   -> client socket -> Companion's packet observers.
@@ -13,9 +13,12 @@ post-authentication *plaintext* framed gameplay via a separate loopback-only
 proxy session, this bridge avoids requiring AIR's memory, and avoids passing
 SSO tickets, RSA/DH negotiation or encryption keys through G-Earth.
 
-Requires G-Earth Flash mode targeting a hostname which resolves to 127.0.0.2
-BEFORE G-Earth rewrites the hostname in the OS hosts file. G-Earth itself
-listens at 127.0.0.1:port. Do not use its G-Python extension port (9092).
+Requires G-Earth 1.5.4-beta-29 Flash mode targeting a hostname which resolves
+to 127.0.0.3 BEFORE G-Earth rewrites the hostname in the OS hosts file.
+That beta's ConnectionInterceptor.java reserves 127.0.0.2 for its FIRST
+local listener (not 127.0.0.1 as in old G-Earth builds). Companion must
+never bind that same listener address. Do not use its G-Python
+extension port (9092).
 """
 from __future__ import annotations
 
@@ -25,11 +28,11 @@ import threading
 import time
 
 DEFAULT_BRIDGE_PORT = 31451
-BRIDGE_UPSTREAM = "127.0.0.2"
-BRIDGE_DOWNSTREAM = "127.0.0.1"
-# nip.io is a convenience DNS alias to 127.0.0.2. On networks that block
+BRIDGE_UPSTREAM = "127.0.0.3"
+BRIDGE_DOWNSTREAM = "127.0.0.2"
+# nip.io is a convenience DNS alias to 127.0.0.3. On networks that block
 # rebinding responses, a dedicated local hosts-file alias is required.
-DEFAULT_BRIDGE_HOST = "127.0.0.2.nip.io"
+DEFAULT_BRIDGE_HOST = "127.0.0.3.nip.io"
 BRIDGE_MAX_FRAME = 65536
 
 # Gameplay-only and client-owned control frames. No auth, handshake, or
@@ -87,10 +90,10 @@ def verify_bridge_alias(host=DEFAULT_BRIDGE_HOST):
     except OSError as exc:
         raise GearthBridgeError(
             "Bridge hostname did not resolve. Local DNS may block nip.io; "
-            "configure a local hosts alias to 127.0.0.2.") from exc
+            "configure a local hosts alias to 127.0.0.3.") from exc
     if addresses!={BRIDGE_UPSTREAM}:
         raise GearthBridgeError(
-            "Bridge hostname must resolve ONLY to 127.0.0.2 before starting "
+            "Bridge hostname must resolve ONLY to 127.0.0.3 before starting "
             "G-Earth; refusing to send local gameplay to a different address.")
     return host
 
@@ -128,7 +131,7 @@ class ClientlessGearthBridge:
         except OSError:
             listener.close()
             raise GearthBridgeError(
-                "Cannot reserve 127.0.0.2 bridge port. Check local port conflicts "
+                "Cannot reserve 127.0.0.3 bridge port. Check local port conflicts "
                 "and Windows loopback support.") from None
         self.listener=listener
         self.stop.clear()
@@ -143,7 +146,7 @@ class ClientlessGearthBridge:
 
         The first successful client connect must send a valid AIR greeting to
         confirm G-Earth's packet stream. G-Earth then connects our local
-        upstream bound to 127.0.0.2. Fail closed if the second half is absent.
+        upstream bound to 127.0.0.3. Fail closed if the second half is absent.
         """
         if self.listener is None:
             raise GearthBridgeError("Bridge upstream must be prepared first")
@@ -158,7 +161,7 @@ class ClientlessGearthBridge:
                 time.sleep(0.35)
         if front is None:
             raise GearthBridgeError(
-                "G-Earth Flash proxy did not listen at 127.0.0.1:"+
+                "G-Earth Flash proxy did not listen at 127.0.0.2:"+
                 str(self.port)+". Check that G-Earth started in Flash mode "
                 "with the bridge hostname and this port.")
         self.front=front

@@ -1,10 +1,21 @@
+v1.1.100: Fix G-Earth 1.5.4-beta-29 error "The port is in use by
+pythonw.exe". This beta uses 127.0.0.2:31451 for its first Flash
+proxy listener; v1.1.99 mistakenly also bound Companion's relay on
+127.0.0.2:31451. Now G-Earth listens on 127.0.0.2:31451 and the
+Companion upstream listens on 127.0.0.3:31451. The new hostname
+127.0.0.3.nip.io must resolve to 127.0.0.3; test using "Check bridge
+hostname" before starting the bot. Close the failed G-Earth window,
+then reconnect. Never kill pythonw.exe (this is Companion).
+This corrects the observed port collision; full live compatibility
+still requires checking incoming/outgoing packets in G-Earth.
+
 v1.1.99: Clientless Bot G-Earth ON now routes post-login game packets
 through the actual local G-Earth Flash proxy's block/replace pipeline
-using a plaintext loopback relay (127.0.0.1/127.0.0.2:31451).
+using a plaintext loopback relay (127.0.0.2/127.0.0.3:31451).
 SSO login, DH negotiation and RC4 keys remain in Companion.
 Close existing G-Earth windows and check bridge hostname first.
-Requires 127.0.0.2.nip.io to resolve to 127.0.0.2; if blocked,
-add "127.0.0.2 127.0.0.2.nip.io" to your Windows hosts file.
+Requires 127.0.0.3.nip.io to resolve to 127.0.0.3; if blocked,
+add "127.0.0.3 127.0.0.3.nip.io" to your Windows hosts file.
 OFF keeps original Direct TCP. ON does not bypass a disconnected
 bridge. Experimental; see README.md for setup and limitations.
 
