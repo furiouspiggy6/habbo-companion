@@ -70,6 +70,8 @@ def fake_app():
         bot_auto_walk_var=Var(True),bot_walk_status_var=Var(""),
         bot_status_var=Var(""),_bot_walk_plans={},_bot_self_ids={},
         _bot_user_roster={},_bot_headers=None,_bot_action_inflight=set(),
+        _bot_anti_afk_rooms={},_bot_anti_afk_positions={},
+        _bot_anti_afk_last={},
         _bot_last_action_at={},_tcp_sessions={account_id:session},
         _tcp_generation={account_id:3},root=Root(),
         _bot_action_worker=lambda *args:None,
@@ -158,6 +160,10 @@ class MovementLifecycleTests(unittest.TestCase):
         app._bot_receive_walk_observation(ident,3,("users",{4567:(42,1,2)}))
         self.assertEqual(len(spawned),0)
         app._bot_receive_walk_observation(ident,3,("ready",69118545))
+        # The new room must receive a fresh Users roster; one observed
+        # before RoomEnter could belong to the previous room.
+        self.assertEqual(len(spawned),0)
+        app._bot_receive_walk_observation(ident,3,("users",{4567:(42,1,2)}))
         self.assertEqual(len(spawned),1)
         self.assertEqual(app._bot_walk_plans[ident]["requested"],(10,15))
 

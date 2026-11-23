@@ -47,6 +47,7 @@ def fake_app(connected=False):
         save=lambda:None,
         _tcp_render=lambda:None,
         _bot_send_action=lambda **kwargs:messages.append(kwargs),
+        _bot_anti_afk_load_selected=lambda:None,
     )
     def connect(account,auto_capture=False):
         connect_calls.append(auto_capture)

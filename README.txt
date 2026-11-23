@@ -1,3 +1,12 @@
+v1.1.101: Stationary anti-AFK toggle in Clientless Bot. Save it
+independently for each account. It is OFF by default and sends a
+mapped LookTo packet to the avatar's current, verified tile about
+every 4 minutes of no game actions, without walking or chatting.
+Pauses during auto-walk/other actions and invalidates stale location
+on room switch, disconnect or reconnect. Works with G-Earth ON/OFF.
+It is a best-effort activity packet; whether Habbo resets its
+server-side AFK timer is NOT verified. See README.md for details.
+
 v1.1.100: Fix G-Earth 1.5.4-beta-29 error "The port is in use by
 pythonw.exe". This beta uses 127.0.0.2:31451 for its first Flash
 proxy listener; v1.1.99 mistakenly also bound Companion's relay on

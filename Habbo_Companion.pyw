@@ -602,6 +602,7 @@ DEFAULT = dict(
     clientless_gearth_intercept=False,
     clientless_auto_walk=False,
     clientless_walk_presets={},
+    clientless_anti_afk_profiles={},
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -5281,6 +5282,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans={}
         self._bot_self_ids={}
         self._bot_user_roster={}
+        # Read-only, generation-scoped avatar location for stationary anti-AFK.
+        self._bot_anti_afk_rooms={}
+        self._bot_anti_afk_positions={}
+        self._bot_anti_afk_last={}
+        self.bot_anti_afk_var=tk.BooleanVar(value=False)
+        self.bot_anti_afk_status_var=tk.StringVar(
+            value='Anti-AFK OFF for the selected profile.')
         self.bot_auto_walk_var=tk.BooleanVar(
             value=bool(self.config.get('clientless_auto_walk',False)))
         self.bot_walk_primary_var=tk.StringVar(value='')
@@ -6262,6 +6270,22 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_load_walk_preset).pack(side='left')
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
+                  style='Section.TLabel').pack(anchor='w',pady=(1,5))
+        ttk.Checkbutton(
+            frame,text='Enable anti-AFK for this saved account',
+            variable=self.bot_anti_afk_var,
+            command=self._bot_anti_afk_changed,
+            style='Panel.TCheckbutton').pack(anchor='w',pady=(0,6))
+        ttk.Label(frame,text='When enabled and in a confirmed room, '
+                  'sends a LookTo action aimed at your avatar\'s current '
+                  'tile about every four minutes. Does not walk or chat. '
+                  'Pauses during auto-walk and other actions. This is not '
+                  'the original HabboAIR internal idle override, and '
+                  'server-side AFK prevention is not guaranteed.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,textvariable=self.bot_anti_afk_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6293,6 +6317,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_chat_log.pack(fill='x',pady=(0,6))
         self._bot_refresh_accounts()
         self._bot_load_walk_preset()
+        self._bot_anti_afk_load_selected()
+        # One bounded Tk timer for all authenticated profiles; no extra
+        # background threads, no activity when disabled or disconnected.
+        self.root.after(10000,self._bot_anti_afk_tick)
 
     def _bot_refresh_accounts(self):
         if not hasattr(self,'bot_account_picker'):
@@ -6302,6 +6330,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_account_picker.configure(values=items)
         if current not in items:
             self.bot_account_var.set(items[0] if items else '')
+        self._bot_anti_afk_load_selected()
 
     def _bot_selected_profile(self):
         selected=self.bot_account_var.get()
@@ -6452,6 +6481,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         """Arm only a saved, user-enabled route for the requested room."""
         self._bot_walk_plans.pop(ident,None)
         self._bot_user_roster.pop(ident,None)
+        self._bot_anti_afk_rooms.pop(ident,None)
+        self._bot_anti_afk_positions.pop(ident,None)
         if not self.bot_auto_walk_var.get():
             return
         stored=self.config.get('clientless_walk_presets',{})
@@ -6499,10 +6530,28 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_receive_walk_observation(self,ident,generation,observation):
         kind,value=observation
-        if kind=='identity':
+        if kind=='ready':
+            # A new room invalidates the previous avatar's room index and tile.
+            self._bot_anti_afk_rooms[ident]=value
+            self._bot_anti_afk_positions.pop(ident,None)
+            self._bot_user_roster.pop(ident,None)
+            self._bot_anti_afk_last[ident]=time.monotonic()
+        elif kind=='identity':
             self._bot_self_ids[ident]=value
         elif kind=='users':
             self._bot_user_roster[ident]=value
+        if kind in ('identity','users'):
+            uid=self._bot_self_ids.get(ident)
+            unit=self._bot_user_roster.get(ident,{}).get(uid)
+            if unit is not None and ident in self._bot_anti_afk_rooms:
+                self._bot_anti_afk_positions[ident]=unit
+        if kind=='status':
+            previous=self._bot_anti_afk_positions.get(ident)
+            if previous is not None:
+                for index,x,y,_movement in value:
+                    if index==previous[0]:
+                        self._bot_anti_afk_positions[ident]=(index,x,y)
+                        break
         plan=self._bot_walk_plans.get(ident)
         if plan is None or plan['generation']!=generation:
             return
@@ -6634,7 +6683,106 @@ class ChatOverlayApp(PersonaResponderMixin):
                 account['label']+' ['+account['id'][:6]+']')
             self._bot_run_account(account)
 
+    def _bot_anti_afk_is_enabled(self,ident):
+        selected=self.config.get('clientless_anti_afk_profiles',{})
+        return (isinstance(selected,dict) and selected.get(ident) is True)
+
+    def _bot_anti_afk_load_selected(self):
+        account=self._bot_selected_profile()
+        enabled=(account is not None and
+                 self._bot_anti_afk_is_enabled(account['id']))
+        self.bot_anti_afk_var.set(enabled)
+        self.bot_anti_afk_status_var.set(
+            'Anti-AFK ON for this account: every four minutes, only after '
+            'your avatar is identified in a room; no walking or chat.'
+            if enabled else 'Anti-AFK OFF for the selected account.')
+
+    def _bot_anti_afk_changed(self):
+        account=self._bot_selected_profile()
+        if account is None:
+            self.bot_anti_afk_var.set(False)
+            self.bot_anti_afk_status_var.set(
+                'Select a saved account before enabling anti-AFK.')
+            return
+        ident=account['id']
+        enabled=bool(self.bot_anti_afk_var.get())
+        raw=self.config.get('clientless_anti_afk_profiles',{})
+        saved=dict(raw) if isinstance(raw,dict) else {}
+        if enabled:
+            saved[ident]=True
+            # Always begin with a full interval. Toggling does not immediately
+            # inject an action into a connecting or already active account.
+            self._bot_anti_afk_last[ident]=time.monotonic()
+        else:
+            saved.pop(ident,None)
+            self._bot_anti_afk_last.pop(ident,None)
+        self.config['clientless_anti_afk_profiles']=saved
+        self.save()
+        self.bot_anti_afk_status_var.set(
+            ('Anti-AFK enabled for '+account['label']+
+             ': first stationary action after four minutes if in a room.'
+             if enabled else 'Anti-AFK disabled for '+account['label']+'.'))
+
+    def _bot_anti_afk_tick(self):
+        """One Tk-owned timer; no movement, chat, or guessed room coordinates.
+
+        Does not run without an authenticated profile, verified room entry,
+        matching avatar index and known current location. The action uses the
+        same whitelisted LookTo packet path as manual Face tile and therefore
+        respects optional G-Earth interception, including fail-closed sends.
+        """
+        now=time.monotonic()
+        try:
+            for ident,session in tuple(self._tcp_sessions.items()):
+                if not self._bot_anti_afk_is_enabled(ident):
+                    continue
+                if (not session or not session.authenticated or
+                    session.stop.is_set() or ident in self._tcp_inflight or
+                    ident in self._bot_action_inflight or
+                    ident in self._bot_walk_plans or
+                    ident not in self._bot_anti_afk_rooms):
+                    continue
+                last=self._bot_anti_afk_last.get(ident)
+                if last is None:
+                    self._bot_anti_afk_last[ident]=now
+                    continue
+                if now-last<240:
+                    continue
+                position=self._bot_anti_afk_positions.get(ident)
+                if position is None:
+                    continue  # Never guess the tile or move the avatar.
+                _index,x,y=position
+                generation=self._tcp_generation.get(ident,0)
+                try:
+                    packets=encode_clientless_action(
+                        self._bot_headers,session.release,'Face tile',x=x,y=y)
+                except (ClientlessBotError,ValueError,TypeError) as exc:
+                    self._bot_anti_afk_last[ident]=now
+                    selected=self._bot_selected_profile()
+                    if selected is not None and selected['id']==ident:
+                        self.bot_anti_afk_status_var.set(
+                            'Anti-AFK unavailable: '+str(exc)[:155])
+                    continue
+                self._bot_anti_afk_last[ident]=now
+                self._bot_last_action_at[ident]=now
+                self._bot_action_inflight.add(ident)
+                selected=self._bot_selected_profile()
+                if selected is not None and selected['id']==ident:
+                    self.bot_anti_afk_status_var.set(
+                        'Sending stationary anti-AFK LookTo at '+
+                        str(x)+','+str(y)+' (server idle reset not verified).')
+                threading.Thread(
+                    target=self._bot_action_worker,
+                    args=(ident,generation,session,'Anti-AFK',packets),
+                    daemon=True,name='companion-anti-afk-'+ident).start()
+        finally:
+            try:
+                self.root.after(10000,self._bot_anti_afk_tick)
+            except (tk.TclError,RuntimeError):
+                pass
+
     def _bot_run_selected(self):
+        self._bot_anti_afk_load_selected()
         account=self._bot_selected_profile()
         if account is None:
             self.bot_status_var.set('Choose a saved Habbo account profile first.')
@@ -7065,6 +7213,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         getattr(self,'_bot_walk_plans',{}).pop(ident,None)
         getattr(self,'_bot_self_ids',{}).pop(ident,None)
         getattr(self,'_bot_user_roster',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_rooms',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_positions',{}).pop(ident,None)
+        getattr(self,'_bot_anti_afk_last',{}).pop(ident,None)
         generation=self._tcp_generation.get(ident,0)+1
         self._tcp_generation[ident]=generation
         self._tcp_inflight.add(ident)
@@ -7169,6 +7320,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans.pop(ident,None)
         self._bot_self_ids.pop(ident,None)
         self._bot_user_roster.pop(ident,None)
+        self._bot_anti_afk_rooms.pop(ident,None)
+        self._bot_anti_afk_positions.pop(ident,None)
+        self._bot_anti_afk_last.pop(ident,None)
         self._tcp_generation[ident]=self._tcp_generation.get(ident,0)+1
         self._tcp_inflight.discard(ident)
         session=self._tcp_sessions.pop(ident,None)
@@ -11771,6 +11925,17 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._bot_action_inflight.discard(ident)
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
+                if error is None and action!='Anti-AFK':
+                    # Ordinary user actions postpone automatic idle refreshes.
+                    self._bot_anti_afk_last[ident]=time.monotonic()
+                if action=='Anti-AFK':
+                    selected=self._bot_selected_profile()
+                    if selected is not None and selected['id']==ident:
+                        self.bot_anti_afk_status_var.set(
+                            'Stationary LookTo sent via game session. '
+                            'Server idle reset not verified.' if error is None
+                            else 'Anti-AFK send failed: '+error)
+                    continue
                 if action=='Join room' and error is not None:
                     self._bot_walk_plans.pop(ident,None)
                     self.bot_walk_status_var.set('Room join failed: '+error)
@@ -11809,6 +11974,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     self._tcp_sessions[ident]=item[3]
                     self._tcp_inflight.discard(ident)
                     if item[3].authenticated:
+                        self._bot_anti_afk_last[ident]=time.monotonic()
                         bridge=self._bot_gearth_bridges.get(ident)
                         self._tcp_states[ident]=(
                             'Authenticated (G-Earth gameplay proxy)'
