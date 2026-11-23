@@ -668,8 +668,10 @@ class PersonaResponderMixin:
         self.responder_style_mode_var.set('Chat-log style')
         # Selecting a specific user must not rotate away to someone else.
         self.responder_rotation_var.set(False)
-        self._responder_update_style_controls()
         self._responder_apply()
+        # Apply the widget states after the model/config change as well; this
+        # ensures no save-time UI redraw restores generic settings.
+        self._responder_update_style_controls()
         sample_count=reference['evidence_messages_in_recent_log_window']
         confidence=('Limited evidence; gather more messages for a closer match.'
                     if sample_count<60 else
