@@ -14,6 +14,7 @@ from tkinter import ttk, filedialog
 
 from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
+    list_style_usernames, matching_style_usernames,
 )
 
 
@@ -50,6 +51,12 @@ class PersonaResponderMixin:
         self.responder_capture_var=tk.BooleanVar(value=self.responder.save_history)
         self.responder_persona_var=tk.StringVar(value=self.responder.persona)
         self.responder_style_mode_var=tk.StringVar(value=self.responder.style_mode)
+        self.responder_style_search_var=tk.StringVar(
+            value=self.responder.persona if self.responder.style_mode=='Chat-log style' else '')
+        self.responder_style_status_var=tk.StringVar(
+            value='Using your own personality.')
+        self._responder_style_users=[]
+        self._responder_style_matches=[]
         self.responder_personality_text=self.responder.personality
         self.responder_tone_var=tk.StringVar(value=self.responder.tone)
         self.responder_humour_var=tk.StringVar(value=str(self.responder.humour))
@@ -63,7 +70,7 @@ class PersonaResponderMixin:
         self.responder_test_user_var=tk.StringVar(value='TestUser')
         self.responder_test_message_var=tk.StringVar(value='hey, what are you up to?')
         self.responder_status_var=tk.StringVar(
-            value='OFF. Define your own personality and use Test AI reply below.')
+            value='OFF. Choose a personality or search your saved chat logs.')
         self._responder_results=queue.Queue()
         self._responder_generation=0
         self._responder_chat_template=None
@@ -104,7 +111,45 @@ class PersonaResponderMixin:
         self.responder_personality_entry.pack(fill='x')
         self.responder_personality_entry.insert('1.0',self.responder_personality_text)
         ttk.Label(frame,text='Describe its tone, humour and behaviour in plain language.',
-                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,12))
+                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(4,8))
+
+        style_row=ttk.Frame(frame,style='Panel.TFrame')
+        style_row.pack(fill='x',pady=(0,5))
+        ttk.Label(style_row,text='COPY WRITING STYLE FROM SAVED CHAT LOGS',
+                  style='Panel.TLabel').pack(side='left')
+        ttk.Button(style_row,text='Use my own style',
+                   command=self._responder_use_custom_style).pack(side='right')
+        search_row=ttk.Frame(frame,style='Panel.TFrame')
+        search_row.pack(fill='x',pady=(0,4))
+        self.responder_style_search_entry=ttk.Entry(
+            search_row,textvariable=self.responder_style_search_var)
+        self.responder_style_search_entry.pack(
+            side='left',fill='x',expand=True,padx=(0,7))
+        ttk.Button(search_row,text='Choose log folder',
+                   command=self._responder_browse).pack(side='left',padx=(0,5))
+        ttk.Button(search_row,text='Refresh',
+                   command=self._responder_refresh_style_users).pack(side='left')
+        self._responder_suggestions_area=ttk.Frame(
+            frame,style='Panel.TFrame')
+        self._responder_suggestions_area.pack(fill='x')
+        self.responder_style_matches_list=tk.Listbox(
+            self._responder_suggestions_area,height=6,exportselection=False,
+            selectmode='browse',font=('Segoe UI',10),
+            bg=p['field'],fg=p['text'],
+            selectbackground=p['accent'],selectforeground=p['text'],
+            borderwidth=0,highlightthickness=1,relief='flat')
+        self.responder_style_matches_list.bind(
+            '<<ListboxSelect>>',self._responder_select_style_user)
+        self.responder_style_search_entry.bind(
+            '<KeyRelease>',self._responder_filter_style_users)
+        self.responder_style_search_entry.bind(
+            '<FocusIn>',lambda event:self._responder_filter_style_users())
+        self.responder_style_search_entry.bind(
+            '<Escape>',lambda event:self._responder_hide_style_matches())
+        self.responder_style_search_entry.bind(
+            '<Down>',self._responder_focus_style_matches)
+        ttk.Label(frame,textvariable=self.responder_style_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(2,11))
 
         audience=ttk.Frame(frame,style='Panel.TFrame')
         audience.pack(fill='x',pady=(0,4))
@@ -138,17 +183,6 @@ class PersonaResponderMixin:
         ttk.Button(actions,text='Stop',
                    command=self._responder_stop).pack(side='left')
 
-        ttk.Label(frame,text='TRY A REPLY (PREVIEW ONLY)',
-                  style='Panel.TLabel').pack(anchor='w',pady=(0,5))
-        preview=ttk.Frame(frame,style='Panel.TFrame')
-        preview.pack(fill='x',pady=(0,10))
-        ttk.Entry(preview,textvariable=self.responder_test_message_var).pack(
-            side='left',fill='x',expand=True,padx=(0,8))
-        ttk.Button(preview,text='Test reply',
-                   command=self._responder_test_reply).pack(side='left')
-        ttk.Label(frame,text='Tests never send to Habbo, even when live sending is enabled.',
-                  style='Panel.TLabel',wraplength=600).pack(anchor='w',pady=(0,12))
-
         self._responder_advanced_button=ttk.Button(
             frame,text='Advanced options ▸',command=self._responder_toggle_advanced)
         self._responder_advanced_button.pack(anchor='w',pady=(0,5))
@@ -180,43 +214,23 @@ class PersonaResponderMixin:
                      state='readonly',values=('0','1','2','3','4','5'),
                      width=5).pack(side='left')
 
-        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,7))
-        ttk.Label(row,text='Style source',style='Panel.TLabel').pack(
-            side='left',padx=(0,9))
-        mode=ttk.Combobox(row,textvariable=self.responder_style_mode_var,
-                          values=('Custom personality','Chat-log style'),
-                          state='readonly',width=21)
-        mode.pack(side='left')
-        mode.bind('<<ComboboxSelected>>',
-                  lambda event:self._responder_update_style_controls())
-
         self._responder_logs_frame=ttk.Frame(
             self._responder_advanced_frame,style='Panel.TFrame')
-        ttk.Label(self._responder_logs_frame,text='Chat-log source username',
-                  style='Panel.TLabel').pack(anchor='w',pady=(5,4))
-        ttk.Entry(self._responder_logs_frame,
-                  textvariable=self.responder_persona_var).pack(fill='x',pady=(0,5))
+        ttk.Label(self._responder_logs_frame,
+                  text='Saved chat-log preferences',style='Panel.TLabel').pack(
+                      anchor='w',pady=(4,5))
         ttk.Checkbutton(self._responder_logs_frame,
-                        text='Rotate logged style every 5 minutes',
+                        text='Rotate through other logged styles every 5 minutes',
                         variable=self.responder_rotation_var).pack(anchor='w',pady=3)
         ttk.Checkbutton(self._responder_logs_frame,
                         text='Capture new public chat into local style logs',
                         variable=self.responder_capture_var).pack(anchor='w',pady=3)
-        dir_row=ttk.Frame(self._responder_logs_frame,style='Panel.TFrame')
-        dir_row.pack(fill='x',pady=(4,6))
-        ttk.Entry(dir_row,textvariable=self.responder_log_dir_var).pack(
-            side='left',fill='x',expand=True)
-        ttk.Button(dir_row,text='Browse logs',command=self._responder_browse).pack(
-            side='left',padx=(6,0))
+        ttk.Label(self._responder_logs_frame,
+                  text='Search uses the folder chosen above.',
+                  style='Panel.TLabel').pack(anchor='w',pady=(3,6))
+        self._responder_logs_frame.pack(fill='x',pady=(3,8))
+        self._responder_refresh_style_users()
         self._responder_update_style_controls()
-
-        row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
-        row.pack(fill='x',pady=(8,7))
-        ttk.Label(row,text='Preview as username',style='Panel.TLabel').pack(
-            side='left',padx=(0,8))
-        ttk.Entry(row,textvariable=self.responder_test_user_var,width=20).pack(
-            side='left')
         row=ttk.Frame(self._responder_advanced_frame,style='Panel.TFrame')
         row.pack(fill='x',pady=(3,6))
         ttk.Button(row,text='Check G-Earth chat capture',
@@ -255,17 +269,132 @@ class PersonaResponderMixin:
             self._responder_targets_frame.pack_forget()
 
     def _responder_update_style_controls(self):
-        if self.responder_style_mode_var.get()=='Chat-log style':
-            self._responder_logs_frame.pack(fill='x',pady=(4,7))
+        mode=self.responder_style_mode_var.get()
+        copying=(mode=='Chat-log style')
+        self.responder_personality_entry.configure(
+            state='disabled' if copying else 'normal')
+        if copying:
+            self.responder_style_status_var.set(
+                'Using saved writing style: '+self.responder_persona_var.get()+
+                '. Select another username to change it.')
         else:
-            self._responder_logs_frame.pack_forget()
+            self.responder_style_status_var.set(
+                'Using your own personality. Choose a logged username to switch.')
+
+    def _responder_style_directory(self):
+        path=Path(self.responder_log_dir_var.get().strip() or
+                  self._responder_default_logs).expanduser()
+        if path.name.casefold()=='chat_logs' and (path/'users').is_dir():
+            path=path/'users'
+        return path
+
+    def _responder_refresh_style_users(self):
+        """Find matching per-user .txt files without loading whole chat logs."""
+        folder=self._responder_style_directory()
+        names=list_style_usernames(folder)
+        if not names and not self.responder_log_dir_var.get().strip():
+            # Fresh installs: find common legacy or Companion log locations.
+            candidates=(
+                Path(__file__).resolve().parent/'chat_logs'/'users',
+                self._responder_app_dir/'chat_logs'/'users',
+                self._responder_app_dir/'persona_logs'/'users',
+            )
+            for candidate in candidates:
+                if candidate==folder:
+                    continue
+                names=list_style_usernames(candidate)
+                if names:
+                    folder=candidate
+                    break
+        self.responder_log_dir_var.set(str(folder))
+        self._responder_style_users=names
+        self._responder_filter_style_users()
+        if not names:
+            self.responder_style_status_var.set(
+                'No user logs found in '+str(folder)+
+                '. Click Choose log folder and select chat_logs/users.')
+        elif self.responder_style_mode_var.get()=='Custom personality':
+            self.responder_style_status_var.set(
+                f'{len(names)} usernames found. Search to copy one, or keep your own style.')
+        else:
+            self._responder_update_style_controls()
+
+    def _responder_filter_style_users(self,event=None):
+        """Display a dropdown-like list of case-insensitive partial matches."""
+        if event is not None and event.keysym in (
+            'Up','Down','Return','Escape','Tab','Left','Right'):
+            return
+        query=self.responder_style_search_var.get()
+        names=matching_style_usernames(self._responder_style_users,query,limit=80)
+        self._responder_style_matches=names
+        box=self.responder_style_matches_list
+        box.delete(0,'end')
+        for name in names:
+            box.insert('end',name)
+        if names:
+            box.configure(height=min(7,len(names)))
+            if not box.winfo_manager():
+                box.pack(fill='x',pady=(0,5))
+        else:
+            self._responder_hide_style_matches()
+
+    def _responder_hide_style_matches(self):
+        self.responder_style_matches_list.pack_forget()
+
+    def _responder_focus_style_matches(self,event=None):
+        if self._responder_style_matches:
+            self.responder_style_matches_list.focus_set()
+            self.responder_style_matches_list.selection_set(0)
+            self.responder_style_matches_list.activate(0)
+        return 'break'
+
+    def _responder_select_style_user(self,event=None):
+        """Switch to a selected real log file, never an unverified typed name."""
+        selected=self.responder_style_matches_list.curselection()
+        if not selected:
+            return
+        name=self.responder_style_matches_list.get(selected[0])
+        if name not in self._responder_style_users:
+            return
+        directory=self._responder_style_directory()
+        profile=PersonaResponder(directory)
+        profile.persona=name
+        examples=profile.style_examples()
+        self._responder_hide_style_matches()
+        if not examples:
+            self.responder_style_status_var.set(
+                'No usable messages found for '+name+'. Select another user.')
+            return
+        self.responder_style_search_var.set(name)
+        self.responder_persona_var.set(name)
+        self.responder_style_mode_var.set('Chat-log style')
+        # Selecting a specific user must not rotate away to someone else.
+        self.responder_rotation_var.set(False)
+        self._responder_update_style_controls()
+        self._responder_apply()
+        self.responder_style_status_var.set(
+            f'Copying {name} writing style from {len(examples)} saved messages.')
+        self._responder_log(
+            f'Style changed to {name} ({len(examples)} saved message examples).')
+
+    def _responder_use_custom_style(self):
+        self.responder_style_mode_var.set('Custom personality')
+        self._responder_hide_style_matches()
+        self._responder_update_style_controls()
+        self._responder_apply()
 
     def _responder_browse(self):
         folder=filedialog.askdirectory(
-            title='Choose chat_logs/users or another style folder',
-            initialdir=self.responder_log_dir_var.get())
+            title='Choose folder containing username.txt chat logs',
+            initialdir=str(self._responder_style_directory()))
         if folder:
-            self.responder_log_dir_var.set(folder)
+            path=Path(folder)
+            if (path/'users').is_dir():
+                path=path/'users'
+            self.responder_log_dir_var.set(str(path))
+            self.responder_style_search_var.set('')
+            self._responder_refresh_style_users()
+
 
     def _responder_log(self,detail):
         if not hasattr(self,'responder_log_text'):
