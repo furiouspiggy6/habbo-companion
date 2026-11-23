@@ -14,7 +14,8 @@ TREE=ast.parse(SOURCE)
 APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
          and n.name=="ChatOverlayApp")
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
-SELECTED=("_bot_gearth_changed","_bot_gearth_probe","_bot_run_account")
+SELECTED=("_bot_gearth_changed","_bot_gearth_probe","_bot_run_account",
+          "_bot_send_action","_tcp_auto_connect_startup")
 SCOPE={"clientless_saved_room_value":lambda n:str(n)}
 exec(compile(ast.Module(body=[METHODS[n] for n in SELECTED],
              type_ignores=[]),"clientless-gearth-preview","exec"),SCOPE)
@@ -46,6 +47,8 @@ def fixture(connected=False):
         _tcp_connect_one=lambda *args,**kwargs:calls.append(("connect",kwargs)),
         _gearth_extension_port_responds=lambda port:port==9092,
         save=lambda:calls.append(("save",{})),
+        tcp_autostart_var=Var(True),tcp_status_var=Var(""),
+        _tcp_connect_all=lambda:calls.append(("connect_all",{})),
         _tcp_render=lambda:None,
     )
     return app,account,calls
@@ -93,6 +96,15 @@ class GearthPrestartTests(unittest.TestCase):
         app.bot_gearth_var.set(True)
         SCOPE["_bot_gearth_changed"](app)
         self.assertFalse(app.bot_gearth_var.get())
+        self.assertEqual(calls,[])
+
+    def test_preview_blocks_manual_sends_and_automatic_tcp_startup(self):
+        app,account,calls=fixture(connected=True)
+        app.bot_gearth_var.set(True)
+        SCOPE["_bot_send_action"](app)
+        self.assertIn("actions are blocked",app.bot_status_var.get())
+        SCOPE["_tcp_auto_connect_startup"](app)
+        self.assertIn("startup skipped",app.tcp_status_var.get())
         self.assertEqual(calls,[])
 
     def test_off_retains_direct_tcp_launch(self):
