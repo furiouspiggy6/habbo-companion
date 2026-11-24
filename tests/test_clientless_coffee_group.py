@@ -157,3 +157,19 @@ class CoffeeGroupTests(TestCase):
         app._coffee_send.assert_not_called()
         scope['_coffee_advance'](app,run,105)
         app._coffee_send.assert_called_once_with('a','Collect hand item',furniture=1)
+
+
+    def test_requested_delay_applies_before_pass_after_pickup_confirmation(self):
+        state={'generation':1,'room':1,'players':{2:(0,'B')},'carry':{0:(1,100.2)}}
+        other={'generation':1,'room':1,'players':{1:(0,'A')},'carry':{}}
+        app=SimpleNamespace(_coffee_context=lambda ident:(state,1,0) if ident=='a' else (other,2,0),
+            _coffee_last_pickup={'a':100},_coffee_last_pass={},
+            _bot_action_inflight=set(),_bot_last_action_at={'a':100},
+            _coffee_send=Mock(return_value=102))
+        run=dict(id='a',peer='b',target=2,generation=1,peer_generation=1,
+            room=1,phase='pickup',at=100,done=0,count=2,alternate=False,ids=(1,2),delay=2)
+        scope['_coffee_advance'](app,run,101)
+        app._coffee_send.assert_not_called()
+        scope['_coffee_advance'](app,run,102)
+        app._coffee_send.assert_called_once_with('a','Pass hand item',recipient_id=2)
+        self.assertEqual(run['phase'],'pass')

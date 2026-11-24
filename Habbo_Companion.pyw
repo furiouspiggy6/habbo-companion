@@ -6485,7 +6485,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_recipient_var=tk.StringVar(value='')
         self.coffee_one_var=tk.StringVar(value='476989081')
         self.coffee_two_var=tk.StringVar(value='476989024')
-        self.coffee_delay_var=tk.StringVar(value='0')
+        self.coffee_delay_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
         self.coffee_count_var=tk.StringVar(value='5')
         self.coffee_alternate_var=tk.BooleanVar(value=True)
         self.coffee_consent_var=tk.BooleanVar(value=False)
@@ -6493,13 +6493,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         for label,var in (('Recipient username or room player ID',self.coffee_recipient_var),
                           ('Cup 1 furniture ID',self.coffee_one_var),
                           ('Cup 2 furniture ID',self.coffee_two_var),
-                          ('Extra delay between cups (seconds)',self.coffee_delay_var),
+                          ('Delay per action (seconds)',self.coffee_delay_var),
                           ('Cups per run',self.coffee_count_var)):
             row=ttk.Frame(panel,style='Panel.TFrame')
             row.pack(anchor='w',pady=3)
             ttk.Label(row,text=label,width=34,style='Panel.TLabel').pack(side='left',padx=(0,12))
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
-        ttk.Label(panel,text='0 removes extra waiting; per-account cooldown and server confirmations still apply.',
+        ttk.Button(panel,text='Copy Packet Manipulator delay',
+                   command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
+        ttk.Label(panel,text='Requested minimum delay between actions; 0 removes extra waiting. Per-account cooldown and server confirmations still apply.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
         ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
@@ -6663,12 +6665,20 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not isinstance(preset,dict):preset={}
         for key,var,default in (
                 ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024'),
-                ('delay',self.coffee_delay_var,'0'),('count',self.coffee_count_var,'5')):
+                ('delay',self.coffee_delay_var,self.config.get('coffee_interval','0.1')),('count',self.coffee_count_var,'5')):
             var.set(str(preset.get(key,default)))
         self.coffee_recipient_var.set('')
         self.coffee_alternate_var.set(preset.get('alternate',True) is True)
         self.coffee_consent_var.set(False)
         self.coffee_status_var.set('Selected '+account['label']+'.')
+
+    def _coffee_copy_packet_delay(self):
+        try:
+            interval=validate_coffee_interval(self.coffee_interval_var.get())
+        except ValueError as exc:
+            self.coffee_status_var.set(str(exc));return
+        self.coffee_delay_var.set(str(interval))
+        self.coffee_status_var.set('Packet Manipulator delay copied. Save settings to keep it for selected accounts.')
 
     def _coffee_settings(self):
         return validate_clientless_coffee_settings(self.coffee_one_var.get(),
@@ -6878,7 +6888,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             if now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
             if (item>0 and seen>=run['at'] and ready
-                and now>=self._coffee_last_pass.get(ident,0)+10 and now>=run['at']+0.4):
+                and now>=self._coffee_last_pass.get(ident,0)+10
+                and now>=run['at']+max(0.4,run['delay'])):
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
                 run['phase']='pass'
         elif phase=='pass':
