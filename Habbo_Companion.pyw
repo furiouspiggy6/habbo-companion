@@ -7301,10 +7301,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                        else self._bot_selected_profile())
         if route_account is not None:
             route_id=route_account['id']
-            bridge=self._bot_gearth_bridges.get(route_id)
+            bridge=getattr(self,'_bot_gearth_bridges',{}).get(route_id)
             route_session=self._tcp_sessions.get(route_id)
             actual_bridge=getattr(route_session,'gameplay_bridge',None)
-            explicit_direct=route_id in self._bot_multi_direct_ids
+            explicit_direct=route_id in getattr(self,'_bot_multi_direct_ids',set())
             wants_bridge=(route_account.get('launch_mode')=='clientless_gearth'
                           or (not route_account.get('launch_mode') and
                               bridge_choice is not None and bridge_choice.get()))
