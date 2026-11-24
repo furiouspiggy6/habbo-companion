@@ -1,5 +1,9 @@
 # Habbo Companion
 
+## v1.1.106 — Explicit clientless action account
+
+The clientless profile picker switches selection without reconnecting. Run selected profile remains an explicit launch button. Manual actions now have a dedicated connected-account sender selector; no fallback to the last connected account. Incoming chat formatting and opt-in inactivity settings are unchanged.
+
 ## v1.1.105 — Update manifest freshness
 
 The updater cross-checks the canonical raw manifest against the pinned GitHub contents API, selects the newest validated version, rejects same-version checksum conflicts, and reports the source. Existing package URL and SHA-256 checks remain. If both sources fail, the updater reports an error. One manual installation may be needed to bootstrap this fix.

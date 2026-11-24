@@ -6257,13 +6257,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(frame,textvariable=self.bot_gearth_status_var,
                   style='Panel.TLabel',wraplength=620).pack(
             anchor='w',pady=(0,12))
-        ttk.Label(frame,text='Connected account',style='Panel.TLabel').pack(anchor='w')
+        ttk.Label(frame,text='Selected account (switch without reconnecting)',style='Panel.TLabel').pack(anchor='w')
         self.bot_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_account_var,state='readonly',width=42)
         self.bot_account_picker.pack(anchor='w',fill='x',pady=(4,7))
-        # Selecting a profile is an explicit user action; never auto-run on launch.
+        # Selection changes the action target only; connection is explicit.
         self.bot_account_picker.bind(
-            '<<ComboboxSelected>>',lambda _event:self._bot_run_selected())
+            '<<ComboboxSelected>>',lambda _event:self._bot_select_only())
         commands=ttk.Frame(frame,style='Panel.TFrame')
         commands.pack(fill='x',pady=(0,11))
         ttk.Button(commands,text='Refresh accounts',
@@ -6315,7 +6315,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             variable=self.bot_standalone_var,
             command=self._bot_standalone_changed,
             style='Panel.TCheckbutton').pack(anchor='w',pady=(1,8))
-        ttk.Label(frame,text='Profile selection automatically uses the saved '
+        ttk.Label(frame,text='Run selected profile uses the saved '
                   'website session or a private background login, obtains an '
                   'official ticket, authenticates Direct TCP and joins the saved '
                   'room. The bundled November 4 AIR mapping needs no G-Earth. '
@@ -6395,6 +6395,12 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_anti_afk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='MANUAL ACCOUNT ACTIONS',style='Section.TLabel').pack(anchor='w',pady=(4,5))
+        self.bot_action_account_var=tk.StringVar(value='')
+        self.bot_action_account_picker=ttk.Combobox(
+            frame,textvariable=self.bot_action_account_var,state='readonly',width=42)
+        ttk.Label(frame,text='Send action as (one connected account)',style='Panel.TLabel').pack(anchor='w')
+        self.bot_action_account_picker.pack(fill='x',pady=(3,8))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6411,8 +6417,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Label(frame,text=label,style='Panel.TLabel').pack(anchor='w')
             ttk.Entry(frame,textvariable=var,width=42).pack(
                 anchor='w',fill='x',pady=(2,7))
-        ttk.Button(frame,text='Send one action',style='Primary.TButton',
-                   command=self._bot_send_action).pack(anchor='w',pady=(3,11))
+        ttk.Button(frame,text='Send action as selected account',style='Primary.TButton',
+                   command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
         ttk.Label(frame,textvariable=self.bot_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='Incoming text-only chat (when current-release '
@@ -6440,8 +6446,35 @@ class ChatOverlayApp(PersonaResponderMixin):
         if current not in items:
             self.bot_account_var.set(items[0] if items else '')
         self._bot_anti_afk_load_selected()
+        self._bot_refresh_action_accounts()
         if hasattr(self,'bot_multi_tree'):
             self._bot_multi_refresh()
+
+    def _bot_select_only(self):
+        self._bot_anti_afk_load_selected()
+        self._bot_load_walk_preset()
+
+    def _bot_refresh_action_accounts(self):
+        picker=getattr(self,'bot_action_account_picker',None)
+        if picker is None:return
+        items=[]
+        for account in self._account_profiles:
+            session=self._tcp_sessions.get(account['id'])
+            if session is not None and session.authenticated and not session.stop.is_set():
+                items.append(account['label']+' ['+account['id'][:6]+']')
+        picker.configure(values=items)
+        # Do not silently transfer a user's action to another account.
+        if self.bot_action_account_var.get() not in items:
+            self.bot_action_account_var.set('')
+
+    def _bot_send_selected_action(self):
+        selected=self.bot_action_account_var.get()
+        account=next((a for a in self._account_profiles
+                      if a['label']+' ['+a['id'][:6]+']'==selected),None)
+        if account is None:
+            self.bot_status_var.set('Choose a connected account under Send action as.')
+            return
+        self._bot_send_action(account_override=account)
 
     def _bot_selected_profile(self):
         selected=self.bot_account_var.get()
@@ -12353,10 +12386,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     and ident in self._bot_walk_plans):
                     self.bot_walk_status_var.set(
                         'Walking request sent; awaiting avatar position confirmation.')
+                label=next((a['label'] for a in self._account_profiles
+                            if a['id']==ident),ident[:6])
                 self.bot_status_var.set(
-                    ('Direct TCP local send accepted: '+action+
+                    (label+': Direct TCP local send accepted: '+action+
                      f' ({count} packet(s)). Server application not verified.'
-                     if error is None else 'Clientless action failed: '+error))
+                     if error is None else label+': Clientless action failed: '+error))
                 continue
             if item[0]=='bot_walk_observation':
                 _,ident,generation,observation=item
