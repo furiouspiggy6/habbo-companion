@@ -6501,7 +6501,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
         ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
-        ttk.Checkbutton(panel,text='I control both accounts and agree to the transfer',variable=self.coffee_consent_var,
+        ttk.Checkbutton(panel,text='I control the participating accounts and agree to the transfers',variable=self.coffee_consent_var,
                         style='Panel.TCheckbutton').pack(anchor='w')
         buttons=ttk.Frame(panel,style='Panel.TFrame')
         buttons.pack(anchor='w',pady=(8,3))
@@ -6577,7 +6577,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             except ClientlessBotError:
                 pass
             status=('Sender: '+run['phase'] if run and run['id']==ident else
-                    'Receiver' if run and run['peer']==ident else 'Idle')
+                    'Receiver' if run and run['peer']==ident else
+                    'Queued' if run and any(r['id']==ident for r in run.get('remaining',[])) else 'Idle')
             values=(room,item,status)
             if tree.exists(ident):
                 tree.item(ident,text=account['label'],values=values)
@@ -6649,7 +6650,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if self.coffee_account_var.get()=='All connected accounts':
             self.coffee_consent_var.set(False)
             self._coffee_group_select_all()
-            self.coffee_status_var.set('All connected accounts selected. Edit shared settings and save to apply. Select an individual sender for hand-item actions.')
+            self.coffee_status_var.set('All connected accounts selected. Save shared settings or start a sequential run to a connected account you control.')
             return
         account=self._coffee_selected()
         if account is None:return
@@ -6749,7 +6750,7 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _coffee_manual(self,action,source=1):
         if self.coffee_account_var.get()=='All connected accounts':
-            self.coffee_status_var.set('Select an individual sender for hand-item actions. All connected accounts is for shared settings.');return
+            self.coffee_status_var.set('Select an individual sender for manual actions, or use Start run for all connected accounts.');return
         if self._coffee_run:
             self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
         account=self._coffee_selected()
@@ -6772,36 +6773,77 @@ class ChatOverlayApp(PersonaResponderMixin):
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self.coffee_status_var.set(str(exc)[:180])
 
+    def _coffee_build_run(self,ident,ids,seconds,count):
+        state,own,index=self._coffee_context(ident)
+        target=self._coffee_target(state,own)
+        peer=next((a['id'] for a in self._account_profiles
+                   if a['id']!=ident and self._coffee_session(a['id']) is not None
+                   and self._bot_self_ids.get(a['id'])==target),None)
+        if peer is None:
+            raise ClientlessBotError('Automated runs require a second connected account you control. Use manual Pass for other players.')
+        other,_,_=self._coffee_context(peer)
+        if other['room']!=state['room'] or own not in other['players']:
+            raise ClientlessBotError('Both accounts must be confirmed in the same room.')
+        return dict(id=ident,peer=peer,target=target,
+            generation=state['generation'],peer_generation=other['generation'],
+            room=state['room'],ids=ids,delay=seconds,count=count,done=0,
+            alternate=bool(self.coffee_alternate_var.get()),phase='next',at=time.monotonic())
+
     def _coffee_start_run(self):
-        if self.coffee_account_var.get()=='All connected accounts':
-            self.coffee_status_var.set('Select an individual sender for hand-item actions. All connected accounts is for shared settings.');return
         if self._coffee_run:
             self.coffee_status_var.set('A coffee run is already active.');return
-        account=self._coffee_selected()
-        if account is None:
+        accounts=self._coffee_selected_accounts()
+        if not accounts:
             self.coffee_status_var.set('Select a connected account.');return
-        ident=account['id']
         try:
             ids,seconds,count=self._coffee_settings()
-            state,own,index=self._coffee_context(ident)
-            target=self._coffee_target(state,own)
             if not self.coffee_consent_var.get():
-                raise ClientlessBotError('Confirm you control both accounts before starting a run.')
-            peer=next((a['id'] for a in self._account_profiles
-                       if a['id']!=ident and self._coffee_session(a['id']) is not None
-                       and self._bot_self_ids.get(a['id'])==target),None)
-            if peer is None:
-                raise ClientlessBotError('Automated runs require a second connected account you control. Use manual Pass for other players.')
-            other,_,_=self._coffee_context(peer)
-            if other['room']!=state['room'] or own not in other['players']:
-                raise ClientlessBotError('Both accounts must be confirmed in the same room.')
-            self._coffee_run=dict(id=ident,peer=peer,target=target,
-                generation=state['generation'],peer_generation=other['generation'],
-                room=state['room'],ids=ids,delay=seconds,count=count,done=0,
-                alternate=bool(self.coffee_alternate_var.get()),phase='next',at=time.monotonic())
+                raise ClientlessBotError('Confirm you control the participating accounts before starting a run.')
+            if self.coffee_account_var.get()!='All connected accounts':
+                self._coffee_run=self._coffee_build_run(accounts[0]['id'],ids,seconds,count)
+            else:
+                runs=[]
+                skipped=[]
+                for account in accounts:
+                    ident=account['id']
+                    try:
+                        run=self._coffee_build_run(ident,ids,seconds,count)
+                        if runs and (run['peer']!=runs[0]['peer'] or run['target']!=runs[0]['target']):
+                            raise ClientlessBotError('Recipient differs between senders.')
+                        runs.append(run)
+                    except (ValueError,TypeError,RuntimeError,OSError):
+                        skipped.append(account['label'])
+                if not runs:
+                    raise ClientlessBotError('No eligible senders. Enter a connected recipient you control and join the same room.')
+                first=runs.pop(0)
+                first.update(remaining=runs,group_total=len(runs)+1,group_index=1,
+                             skipped=len(skipped))
+                self._coffee_run=first
+                self.coffee_group_status_var.set(
+                    str(first['group_total'])+' eligible sender(s) queued; '+str(len(skipped))+
+                    ' skipped (recipient or unavailable). One sender at a time.')
             self._coffee_tick(self._coffee_run)
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
+
+    def _coffee_finish_run(self,run,now):
+        remaining=run.get('remaining',[])
+        if remaining:
+            following=remaining[0]
+            following.update(remaining=remaining[1:],group_total=run['group_total'],
+                             group_index=run['group_index']+1,skipped=run['skipped'])
+            following['at']=now+run['delay']
+            self._coffee_run=following
+            self.coffee_status_var.set('Preparing next sender '+str(following['group_index'])+
+                                       '/'+str(following['group_total'])+'.')
+            self._coffee_group_refresh()
+            self.root.after(250,lambda:self._coffee_tick(following))
+        elif 'group_total' in run:
+            self._coffee_stop_run('Group complete: '+str(run['group_total'])+
+                ' sender(s), '+str(run['group_total']*run['count'])+
+                ' releases observed; '+str(run['skipped'])+' skipped. Receipt not verified.')
+        else:
+            self._coffee_stop_run('Run complete: '+str(run['done'])+' releases observed. Receipt not verified.')
 
     def _coffee_stop_run(self,message='Coffee run stopped.'):
         self._coffee_run=None
@@ -6841,11 +6883,13 @@ class ChatOverlayApp(PersonaResponderMixin):
                 if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
                     run['done']+=1
                     if run['done']>=run['count']:
-                        self._coffee_stop_run('Run complete: '+str(run['done'])+' releases observed. Receipt not verified.')
+                        self._coffee_finish_run(run,now)
                         return
                     run['phase']='next'
                     run['at']=now+run['delay']
-            self.coffee_status_var.set('Coffee run: '+str(run['done'])+'/'+str(run['count'])+' — '+run['phase'])
+            prefix=('Sender '+str(run['group_index'])+'/'+str(run['group_total'])+' — '
+                    if 'group_total' in run else '')
+            self.coffee_status_var.set(prefix+'Coffee run: '+str(run['done'])+'/'+str(run['count'])+' — '+run['phase'])
             self._coffee_group_refresh()
             self.root.after(250,lambda:self._coffee_tick(run))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:

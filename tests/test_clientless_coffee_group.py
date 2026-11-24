@@ -1,4 +1,4 @@
-"""Offline settings-only bulk selection tests."""
+"""Offline Coffee Pass bulk settings and sequential run tests."""
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +11,8 @@ tree=ast.parse(p.read_text(encoding='utf-8'))
 scope={'ClientlessBotError':ClientlessBotError}
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
-       '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run')
+       '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
+       '_coffee_finish_run')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
 
@@ -77,7 +78,40 @@ class CoffeeGroupTests(TestCase):
         self.assertEqual(presets['b'],{'one':7})
         app.save.assert_called_once()
         scope['_coffee_manual'](app,'Pass hand item')
+        app.coffee_consent_var.get.return_value=False
+        app._coffee_stop_run=Mock()
         scope['_coffee_start_run'](app)
+        app._coffee_stop_run.assert_called_once()
         app._coffee_send.assert_not_called()
         app.coffee_account_var.get.return_value='C [c]'
         self.assertEqual(app._coffee_selected_accounts(),[accounts[2]])
+
+    def test_all_queues_eligible_senders_and_stops_after_last(self):
+        accounts=[{'id':i,'label':i.upper()} for i in ('a','b','c')]
+        def build(ident,ids,delay,count):
+            if ident=='b':
+                raise ClientlessBotError('Recipient is not a sender.')
+            return dict(id=ident,peer='b',target=2,delay=delay,count=count,done=0)
+        app=SimpleNamespace(_coffee_run=None,_coffee_selected_accounts=lambda:accounts,
+            _coffee_settings=lambda:((1,2),10,3),_coffee_build_run=build,
+            coffee_account_var=Mock(),coffee_consent_var=Mock(),
+            coffee_status_var=Mock(),coffee_group_status_var=Mock(),
+            _coffee_tick=Mock(),_coffee_stop_run=Mock(),_coffee_group_refresh=Mock(),
+            root=Mock())
+        app.coffee_account_var.get.return_value='All connected accounts'
+        app.coffee_consent_var.get.return_value=True
+        scope['_coffee_start_run'](app)
+        first=app._coffee_run
+        self.assertEqual(first['id'],'a')
+        self.assertEqual(first['group_total'],2)
+        self.assertEqual(first['skipped'],1)
+        self.assertEqual([r['id'] for r in first['remaining']],['c'])
+        app._coffee_tick.assert_called_once_with(first)
+        scope['_coffee_finish_run'](app,first,100)
+        following=app._coffee_run
+        self.assertEqual(following['id'],'c')
+        self.assertEqual(following['at'],110)
+        self.assertEqual(following['group_index'],2)
+        app.root.after.assert_called_once()
+        scope['_coffee_finish_run'](app,following,120)
+        app._coffee_stop_run.assert_called_once()
