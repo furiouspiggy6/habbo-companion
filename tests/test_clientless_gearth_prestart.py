@@ -130,13 +130,15 @@ class GearthPrestartTests(unittest.TestCase):
         self.assertIn("127.0.0.3",app.bot_gearth_status_var.get())
         self.assertEqual(calls,[])
 
-    def test_prestart_choice_before_account_profile_autorun(self):
+    def test_prestart_choice_before_explicit_account_launch(self):
         panel=ast.get_source_segment(SOURCE,METHODS["_make_clientless_bot_panel"])
         self.assertLess(panel.index("PRE-START: G-EARTH INTERCEPTION"),
-                        panel.index("Connected account"))
+                        panel.index("Selected account (switch without reconnecting)"))
         self.assertIn("command=self._bot_gearth_changed",panel)
         self.assertIn("command=self._bot_gearth_probe",panel)
         self.assertIn("<<ComboboxSelected>>",panel)
+        self.assertIn("lambda _event:self._bot_select_only()",panel)
+        self.assertIn("command=self._bot_run_selected",panel)
         self.assertIn("clientless_gearth_intercept=False",SOURCE)
 
 

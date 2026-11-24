@@ -6261,7 +6261,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_account_var,state='readonly',width=42)
         self.bot_account_picker.pack(anchor='w',fill='x',pady=(4,7))
-        # Selection changes the action target only; connection is explicit.
+        # Selection changes the profile settings only; manual action sender is separate.
         self.bot_account_picker.bind(
             '<<ComboboxSelected>>',lambda _event:self._bot_select_only())
         commands=ttk.Frame(frame,style='Panel.TFrame')
