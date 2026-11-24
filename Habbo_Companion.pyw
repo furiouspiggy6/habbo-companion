@@ -474,7 +474,10 @@ def _open_official_update(req, timeout):
 
 
 def fetch_current_update_manifest(url,helper):
-    """Cross-check the pinned raw feed against GitHub's repository contents API."""
+    """Cross-check the pinned raw feed against GitHub's repository contents API.
+
+    Keep raw-feed cache busting here so both UI and offline tests share it.
+    """
     helper.validate_official_release_url(url,'manifest')
     api='https://api.github.com/repos/furiouspiggy6/habbo-companion/contents/latest.json?ref=main'
     headers={'User-Agent':'HabboCompanionUpdater/1.3','Cache-Control':'no-cache','Pragma':'no-cache'}
