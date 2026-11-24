@@ -5342,6 +5342,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             value='Select multiple profiles below and choose Run highlighted.')
         self._bot_gearth_bridges={}
         self._bot_walk_plans={}
+        self._bot_follow_run=None
         self._bot_self_ids={}
         self._bot_user_roster={}
         self._coffee_room_state={}
@@ -6395,6 +6396,23 @@ class ChatOverlayApp(PersonaResponderMixin):
                       anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='FOLLOW USER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Follow another connected account you control in the same room. '
+                  'The selected profile above is the follower; no automatic room changes.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        self.bot_follow_target_var=tk.StringVar(value='')
+        self.bot_follow_status_var=tk.StringVar(value='Follow is off.')
+        self.bot_follow_picker=ttk.Combobox(frame,textvariable=self.bot_follow_target_var,
+                                            state='readonly',width=42)
+        self.bot_follow_picker.pack(anchor='w',pady=(0,5))
+        follow_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        follow_buttons.pack(anchor='w',pady=(0,5))
+        ttk.Button(follow_buttons,text='Start following',style='Primary.TButton',
+                   command=self._bot_follow_start).pack(side='left',padx=(0,6))
+        ttk.Button(follow_buttons,text='Stop following',
+                   command=self._bot_follow_stop).pack(side='left',padx=(0,6))
+        ttk.Label(frame,textvariable=self.bot_follow_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
                   style='Section.TLabel').pack(anchor='w',pady=(1,5))
         ttk.Checkbutton(
@@ -6939,6 +6957,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             if session is not None and session.authenticated and not session.stop.is_set():
                 items.append(account['label']+' ['+account['id'][:6]+']')
         picker.configure(values=items)
+        if hasattr(self,'bot_follow_picker'):
+            self.bot_follow_picker.configure(values=items)
+            if self.bot_follow_target_var.get() not in items:
+                self.bot_follow_target_var.set('')
         # Do not silently transfer a user's action to another account.
         if self.bot_action_account_var.get() not in items:
             self.bot_action_account_var.set('')
@@ -7221,6 +7243,9 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _bot_receive_walk_observation(self,ident,generation,observation):
         kind,value=observation
         if kind=='ready':
+            follow=getattr(self,'_bot_follow_run',None)
+            if follow and ident in (follow['id'],follow['peer']):
+                self._bot_follow_stop('Follow stopped: room entry changed.')
             # A new room invalidates the previous avatar's room index and tile.
             self._bot_anti_afk_rooms[ident]=value
             self._bot_anti_afk_positions.pop(ident,None)
@@ -7365,6 +7390,80 @@ class ChatOverlayApp(PersonaResponderMixin):
         if ident in self._bot_walk_plans:
             self.root.after(800,lambda uid=ident,gen=generation:
                             self._bot_walk_tick(uid,gen))
+
+    def _bot_follow_stop(self,message='Follow stopped.'):
+        self._bot_follow_run=None
+        self.bot_follow_status_var.set(message)
+
+    def _bot_follow_start(self):
+        follower=self._bot_selected_profile()
+        label=self.bot_follow_target_var.get()
+        leader=next((a for a in self._account_profiles
+                     if a['label']+' ['+a['id'][:6]+']'==label),None)
+        if self._bot_follow_run is not None:
+            self.bot_follow_status_var.set('Stop the current follow session before starting another.')
+            return
+        try:
+            if follower is None or leader is None or follower['id']==leader['id']:
+                raise ClientlessBotError('Select two different connected accounts.')
+            ident,peer=follower['id'],leader['id']
+            state,own,_=self._coffee_context(ident)
+            other,target,_=self._coffee_context(peer)
+            if state['room']!=other['room'] or target not in state['players'] or own not in other['players']:
+                raise ClientlessBotError('Both accounts must be visible in the same room.')
+            if ident not in self._bot_anti_afk_positions or peer not in self._bot_anti_afk_positions:
+                raise ClientlessBotError('Wait for confirmed avatar positions.')
+            self._bot_walk_plans.pop(ident,None)
+            run=dict(id=ident,peer=peer,generation=state['generation'],
+                     peer_generation=other['generation'],room=state['room'],
+                     last_target=None,last_sent=None,label=leader['label'])
+            self._bot_follow_run=run
+            self.bot_follow_status_var.set('Following '+leader['label']+' in this room.')
+            self._bot_follow_tick(run)
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self._bot_follow_stop(str(exc)[:160])
+
+    def _bot_follow_tick(self,run):
+        if self._bot_follow_run is not run:return
+        ident,peer=run['id'],run['peer']
+        try:
+            state,own,index=self._coffee_context(ident)
+            other,target,peer_index=self._coffee_context(peer)
+            if (state['generation']!=run['generation'] or other['generation']!=run['peer_generation']
+                or state['room']!=run['room'] or other['room']!=run['room']
+                or target not in state['players'] or own not in other['players']
+                or self._bot_anti_afk_rooms.get(ident)!=run['room']
+                or self._bot_anti_afk_rooms.get(peer)!=run['room']):
+                raise ClientlessBotError('Follow stopped: account or room changed.')
+            pos=self._bot_anti_afk_positions.get(ident)
+            lead=self._bot_anti_afk_positions.get(peer)
+            if pos is None or lead is None or pos[0]!=index or lead[0]!=peer_index:
+                raise ClientlessBotError('Follow stopped: avatar position unavailable.')
+            x,y=pos[1:]
+            tx,ty=lead[1:]
+            # Walk towards a nearby tile rather than repeatedly clicking the leader.
+            if max(abs(x-tx),abs(y-ty))<=1:
+                run['last_target']=(tx,ty)
+                self.bot_follow_status_var.set('Following '+run['label']+' — nearby.')
+            elif (run['last_target']!=(tx,ty) and ident not in self._bot_action_inflight
+                  and time.monotonic()-self._bot_last_action_at.get(ident,0)>=2):
+                choices=[(a,b) for a,b in ((tx-1,ty),(tx+1,ty),(tx,ty-1),(tx,ty+1))
+                         if 0<=a<=1023 and 0<=b<=1023]
+                dest=min(choices,key=lambda p:abs(p[0]-x)+abs(p[1]-y))
+                if dest!=run['last_sent']:
+                    session=self._coffee_session(ident)
+                    packets=encode_clientless_action(self._bot_headers,session.release,'Walk',x=dest[0],y=dest[1])
+                    self._bot_action_inflight.add(ident)
+                    self._bot_last_action_at[ident]=time.monotonic()
+                    run['last_sent']=dest
+                    threading.Thread(target=self._bot_action_worker,
+                        args=(ident,run['generation'],session,'Follow Walk',packets),
+                        daemon=True).start()
+                    self.bot_follow_status_var.set('Following '+run['label']+' — walking nearby.')
+                run['last_target']=(tx,ty)
+            self.root.after(2000,lambda:self._bot_follow_tick(run))
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self._bot_follow_stop(str(exc)[:160])
 
     def _bot_multi_refresh(self):
         """Keep multi-select rows in sync without losing highlighted profiles."""
@@ -7847,6 +7946,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         except (ValueError,TypeError,AttributeError) as exc:
             self.bot_status_var.set('Action not ready: '+str(exc)[:160])
             return
+        follow=getattr(self,'_bot_follow_run',None)
+        if follow and ((action in ('Join room','Leave room') and ident in (follow['id'],follow['peer']))
+                       or (action=='Walk' and ident==follow['id'])):
+            self._bot_follow_stop('Follow stopped by manual action.')
         # Remember the last VALID room ID, including manually entered IDs.
         # Coffee House itself remains a fixed, named favorite regardless.
         if action=='Join room':
@@ -12919,6 +13022,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if action=='Join room' and error is not None:
                     self._bot_walk_plans.pop(ident,None)
                     self.bot_walk_status_var.set('Room join failed: '+error)
+                if action=='Follow Walk' and error is not None:
+                    follow=getattr(self,'_bot_follow_run',None)
+                    if follow and follow['id']==ident and follow['generation']==generation:
+                        self._bot_follow_stop('Follow stopped: '+error)
                 if action=='Auto Walk' and error is not None:
                     self._bot_walk_next(ident,generation,'Walk request failed')
                 if (action=='Auto Walk' and error is None
