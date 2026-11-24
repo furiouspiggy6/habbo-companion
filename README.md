@@ -1,5 +1,9 @@
 # Habbo Companion
 
+## v1.1.105 — Update manifest freshness
+
+The updater cross-checks the canonical raw manifest against the pinned GitHub contents API, selects the newest validated version, rejects same-version checksum conflicts, and reports the source. Existing package URL and SHA-256 checks remain. If both sources fail, the updater reports an error. One manual installation may be needed to bootstrap this fix.
+
 ## v1.1.104 — Intercepted AIR launch guard fix
 
 Accounts now uses strict native AIR window detection instead of the broad overlay tracker. An idle G-Earth extension on the selected port can be reused; an actual game connection or a different attached endpoint still blocks with a specific reason. No account reset is needed. Live Windows validation remains required.

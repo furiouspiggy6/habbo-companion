@@ -473,6 +473,50 @@ def _open_official_update(req, timeout):
         req, timeout=timeout)
 
 
+def fetch_current_update_manifest(url,helper):
+    """Cross-check the pinned raw feed against GitHub's repository contents API."""
+    helper.validate_official_release_url(url,'manifest')
+    api='https://api.github.com/repos/furiouspiggy6/habbo-companion/contents/latest.json?ref=main'
+    headers={'User-Agent':'HabboCompanionUpdater/1.3','Cache-Control':'no-cache','Pragma':'no-cache'}
+    def read(target,accept):
+        req=urllib.request.Request(target,headers=dict(headers,Accept=accept))
+        with _open_official_update(req,timeout=12) as response:
+            if response.geturl()!=target:
+                raise ValueError('Update source changed unexpectedly')
+            raw=response.read(65_537)
+            if len(raw)>65_536:raise ValueError('Manifest is too large')
+        return json.loads(raw.decode('utf-8'))
+    def validate(info):
+        if not isinstance(info,dict) or info.get('app_id')!='habbo-companion':
+            raise ValueError('Not a Habbo Companion update manifest')
+        version=info['version']
+        helper.validate_official_release_url(info['package_url'],'package',version=version)
+        if not re.fullmatch(r'[a-f0-9]{64}',str(info['sha256']).lower()):
+            raise ValueError('Invalid package checksum')
+        return info
+    candidates=[]
+    errors=[]
+    for source,target,accept in (
+            ('GitHub API',api,'application/vnd.github.raw+json'),
+            ('raw feed',url+'?check='+uuid.uuid4().hex,'application/json')):
+        try:
+            info=validate(read(target,accept))
+            candidates.append((info,source))
+        except (OSError,ValueError,KeyError,TypeError) as exc:
+            errors.append(source+': '+str(exc)[:120])
+    if not candidates:
+        raise ValueError('Both update sources failed: '+'; '.join(errors))
+    if len(candidates)==2:
+        a,b=candidates
+        if a[0]['version']==b[0]['version'] and (
+                a[0]['sha256'].lower()!=b[0]['sha256'].lower()
+                or a[0]['package_url']!=b[0]['package_url']):
+            raise ValueError('Update sources disagree on package checksum')
+    info,source=max(candidates,key=lambda item:helper.version_tuple(item[0]['version']))
+    if errors:source+='; other source unavailable'
+    return info,source
+
+
 def redact_sensitive_diagnostic(value):
     """Best-effort protection for readable diagnostic messages.
 
@@ -8926,25 +8970,12 @@ class ChatOverlayApp(PersonaResponderMixin):
             try:
                 helper=self._update_module()
                 helper.validate_official_release_url(url,'manifest')
-                # Cache-busting is only applied after validating the exact
-                # canonical publisher/path; redirects are not allowed.
-                fresh_url=url+'?check='+uuid.uuid4().hex
-                req=urllib.request.Request(fresh_url,headers={'User-Agent':'HabboCompanionUpdater/1.2','Cache-Control':'no-cache','Pragma':'no-cache'})
-                with _open_official_update(req,timeout=12) as response:
-                    if response.geturl()!=fresh_url:
-                        raise ValueError('Update source changed unexpectedly')
-                    raw=response.read(65_537)
-                    if len(raw)>65_536:raise ValueError('Manifest is too large')
-                info=json.loads(raw.decode('utf-8'))
-                if info.get('app_id')!='habbo-companion':raise ValueError('Not a Habbo Companion update manifest')
+                info,source=fetch_current_update_manifest(url,helper)
                 version=str(info['version']);package_url=str(info['package_url'])
                 checksum=str(info['sha256']).lower()
-                helper.validate_official_release_url(
-                    package_url,'package',version=version)
-                if not re.fullmatch(r'[a-f0-9]{64}',checksum):
-                    raise ValueError('Invalid package checksum')
                 if not helper.is_newer(version,self.current_app_version):
-                    self.root.after(0,lambda v=version:self._finish_online_update(f'No newer update. Installed: {self.current_app_version}; feed: {v}.'))
+                    self.root.after(0,lambda v=version,src=source:self._finish_online_update(
+                        f'No newer update. Installed: {self.current_app_version}; feed: {v} ({src}).'))
                     return
                 def ask_and_download():
                     self._online_update_busy=False
