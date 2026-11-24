@@ -1,5 +1,9 @@
 # Habbo Companion
 
+## v1.1.107 — Four per-account launch modes
+
+Accounts now offers HabboAIR without G-Earth, HabboAIR with G-Earth, Clientless Bot without G-Earth, and Clientless Bot with G-Earth. The old saved clientless mode maps to Direct TCP; select the new intercepted mode explicitly. Clientless Bot no longer exposes global routing checkboxes; the existing bridge hostname and mapping checks are under Advanced diagnostics. The table distinguishes saved modes from active connections. The existing Direct TCP batch shortcut only accepts direct or unconfigured profiles. Existing sessions cannot switch routing without disconnecting. One G-Earth game relay remains the limit. No changes to inactivity or coordinated actions.
+
 ## v1.1.106 — Explicit clientless action account
 
 The clientless profile picker switches selection without reconnecting. Run selected profile remains an explicit launch button. Manual actions now have a dedicated connected-account sender selector; no fallback to the last connected account. Incoming chat formatting and opt-in inactivity settings are unchanged.

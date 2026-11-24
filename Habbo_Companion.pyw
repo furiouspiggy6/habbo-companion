@@ -793,7 +793,7 @@ def normalize_habbo_accounts(profiles):
         ids.add(ident)
         ports.add(port)
         profile={'id':ident,'label':label,'port':port,'url':url}
-        if entry.get('launch_mode') in ('air','gearth','clientless'):
+        if entry.get('launch_mode') in ('air','gearth','clientless','clientless_gearth'):
             profile['launch_mode']=entry['launch_mode']
         valid.append(profile)
         if len(valid)==12:
@@ -5357,13 +5357,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             value='Automatic walking is OFF until you save positions and enable it.')
         self.bot_standalone_var=tk.BooleanVar(
             value=bool(self.config.get('clientless_standalone',True)))
-        self.bot_gearth_var=tk.BooleanVar(
-            value=bool(self.config.get('clientless_gearth_intercept',False)))
-        self.bot_gearth_status_var=tk.StringVar(value=(
-            'G-Earth OFF: normal Direct TCP will be used.'
-            if not self.bot_gearth_var.get() else
-            'G-Earth ON: gameplay will use the local plaintext G-Earth relay. '
-            'Connection setup and SSO stay inside Companion.'))
+        # Legacy internal fallback stays OFF; launch routing is now per account.
+        self.bot_gearth_var=tk.BooleanVar(value=False)
+        self.bot_gearth_status_var=tk.StringVar(
+            value='Choose Direct TCP or G-Earth for each profile in Accounts.')
         self.bot_account_var=tk.StringVar(value='')
         self.bot_action_var=tk.StringVar(value='Say')
         self.bot_message_var=tk.StringVar(value='')
@@ -6236,27 +6233,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'Based on the open-source Habbo-Bot packet structures, '
                   'not its outdated 2025 header IDs.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,12))
-        ttk.Label(frame,text='PRE-START: G-EARTH INTERCEPTION',
-                  style='Section.TLabel').pack(anchor='w',pady=(2,5))
-        ttk.Checkbutton(
-            frame,text='Use G-Earth interception when starting Clientless Bot',
-            variable=self.bot_gearth_var,
-            command=self._bot_gearth_changed,
-            style='Panel.TCheckbutton').pack(anchor='w',pady=(0,5))
-        ttk.Label(frame,text='OFF: original Direct TCP bot. ON: starts G-Earth '
-                  'in Flash proxy mode and routes decrypted gameplay through '
-                  'its packet interception/modification path. Authentication '
-                  'and cipher keys stay in Companion. Close any existing '
-                  'G-Earth window before running ON. This uses local game '
-                  'proxy port 31451, not extension port 9092. G-Earth beta-29 listens ''on 127.0.0.2 and Companion relays upstream on 127.0.0.3.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
-        probe=ttk.Frame(frame,style='Panel.TFrame')
-        probe.pack(fill='x',pady=(0,6))
-        ttk.Button(probe,text='Check bridge hostname',
-                   command=self._bot_gearth_probe).pack(side='left')
-        ttk.Label(frame,textvariable=self.bot_gearth_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(
-            anchor='w',pady=(0,12))
+        ttk.Label(frame,text='Choose the connection mode in Accounts. '
+                  'This page controls clientless sessions and manual actions.',
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(frame,text='Selected account (switch without reconnecting)',style='Panel.TLabel').pack(anchor='w')
         self.bot_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_account_var,state='readonly',width=42)
@@ -6281,16 +6260,20 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'below. Auto-walk and anti-AFK run separately. An existing '
                   'G-Earth-intercepted account can stay connected, but only '
                   'that account is intercepted; additional accounts use '
-                  'Direct TCP without G-Earth.',
+                  'Direct TCP without G-Earth. Only profiles set to Clientless '
+                  'without G-Earth or not yet assigned a launch mode are eligible '
+                  'for this shortcut; choose other modes in Accounts.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
         table=ttk.Treeview(
-            frame,columns=('connection','room'),show='tree headings',
+            frame,columns=('connection','mode','room'),show='tree headings',
             selectmode='extended',height=5)
         table.heading('#0',text='Saved account')
         table.heading('connection',text='Connection')
+        table.heading('mode',text='Connection mode')
         table.heading('room',text='Target room')
         table.column('#0',width=180,minwidth=110,stretch=True)
         table.column('connection',width=210,minwidth=130,stretch=True)
+        table.column('mode',width=150,minwidth=100,stretch=False)
         table.column('room',width=100,minwidth=80,stretch=False)
         table.pack(fill='x',pady=(0,6))
         self.bot_multi_tree=table
@@ -6310,11 +6293,6 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_multi_refresh()
         self.root.after(2500,lambda generation=self._bot_multi_ui_generation:
                         self._bot_multi_tick(generation))
-        ttk.Checkbutton(
-            frame,text='Clientless-only mode: never auto-start G-Earth',
-            variable=self.bot_standalone_var,
-            command=self._bot_standalone_changed,
-            style='Panel.TCheckbutton').pack(anchor='w',pady=(1,8))
         ttk.Label(frame,text='Run selected profile uses the saved '
                   'website session or a private background login, obtains an '
                   'official ticket, authenticates Direct TCP and joins the saved '
@@ -6322,8 +6300,14 @@ class ChatOverlayApp(PersonaResponderMixin):
                   'Later releases require newly verified headers; CAPTCHA and '
                   'email verification still need manual official sign-in.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
-        ttk.Button(frame,text='Advanced: capture newer AIR mappings from G-Earth',
-                   command=self._bot_capture_mapping).pack(anchor='w',pady=(0,10))
+        diagnostics=ttk.LabelFrame(frame,text='Advanced diagnostics',padding=7)
+        diagnostics.pack(fill='x',pady=(0,10))
+        ttk.Button(diagnostics,text='Check bridge hostname',
+                   command=self._bot_gearth_probe).pack(side='left',padx=(0,7))
+        ttk.Button(diagnostics,text='Capture newer AIR mappings',
+                   command=self._bot_capture_mapping).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_gearth_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
             anchor='w',pady=(0,5))
         favorite=ttk.Frame(frame,style='Panel.TFrame')
@@ -6915,7 +6899,15 @@ class ChatOverlayApp(PersonaResponderMixin):
                     connection=state[:58]
                 room=self._bot_run_room_targets.get(ident,'—')
                 tree.insert('', 'end',iid=ident,text=account['label'],
-                            values=(connection,room))
+                            values=(connection,
+                                'G-Earth' if ident in self._bot_gearth_bridges else
+                                'Direct TCP' if ident in self._tcp_inflight or
+                                (session is not None and session.authenticated and not session.stop.is_set()) else
+                                {'clientless':'Direct TCP (saved)',
+                                 'clientless_gearth':'G-Earth (saved)',
+                                 'air':'HabboAIR (saved)',
+                                 'gearth':'AIR + G-Earth (saved)'}.get(account.get('launch_mode'),'Not set'),
+                                room))
             keep=tuple(a['id'] for a in self._account_profiles
                        if a['id'] in highlighted)
             if keep:
@@ -6972,8 +6964,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_multi_status_var.set(
                 'Enter a valid numeric Room ID (1–2147483647) before launching.')
             return
-        # This button always means Direct TCP: it never requests a second
-        # G-Earth process or silently changes the intercepted profile.
+        # This explicit legacy shortcut never overrides an incompatible saved mode.
+        if any(a.get('launch_mode','clientless')!='clientless' for a in chosen):
+            self.bot_multi_status_var.set(
+                'Run highlighted is Direct TCP only. Deselect profiles saved with other launch modes, or change their mode in Accounts.')
+            return
         self._bot_multi_start_generation+=1
         generation=self._bot_multi_start_generation
         count=len(chosen)
@@ -7002,6 +6997,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             # Existing sessions keep their room, auto-walk and AFK state.
             self._bot_multi_refresh()
             return
+        if account.get('launch_mode','clientless')!='clientless':
+            self.bot_multi_status_var.set('A queued profile changed mode; launch it from Accounts.')
+            return
         self._bot_run_account(account,room_override=room,force_direct=True)
         self._bot_multi_refresh()
 
@@ -7026,7 +7024,27 @@ class ChatOverlayApp(PersonaResponderMixin):
         if account is not None:
             self.bot_account_var.set(
                 account['label']+' ['+account['id'][:6]+']')
-            self._bot_run_account(account)
+            self._bot_run_configured_account(account)
+            self.account_status_var.set(self.bot_status_var.get())
+
+    def _bot_run_configured_account(self,account):
+        """Use the selected profile's saved mode; never change a live route."""
+        mode=account.get('launch_mode','clientless')
+        if mode not in ('clientless','clientless_gearth'):
+            self.bot_status_var.set('This profile is set to HabboAIR. Choose a clientless mode in Accounts first.')
+            return
+        ident=account['id']
+        session=self._tcp_sessions.get(ident)
+        if ident in self._tcp_inflight or (session is not None and
+                session.authenticated and not session.stop.is_set()):
+            actual_gearth=ident in self._bot_gearth_bridges
+            if actual_gearth!=(mode=='clientless_gearth'):
+                self.bot_status_var.set('Disconnect this account before changing its live connection mode.')
+            else:
+                self.bot_status_var.set('This account is already connecting or connected in its selected mode.')
+            return
+        self._bot_run_account(account,force_direct=(mode=='clientless'),
+                              force_gearth=(mode=='clientless_gearth'))
 
     def _bot_anti_afk_is_enabled(self,ident):
         selected=self.config.get('clientless_anti_afk_profiles',{})
@@ -7133,9 +7151,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         if account is None:
             self.bot_status_var.set('Choose a saved Habbo account profile first.')
             return
-        self._bot_run_account(account)
+        self._bot_run_configured_account(account)
 
-    def _bot_run_account(self,account,room_override=None,force_direct=False):
+    def _bot_run_account(self,account,room_override=None,force_direct=False,
+                         force_gearth=False):
         """One click: user-selected profile, optional G-Earth gameplay MITM.
 
         Login and RC4 remain in Companion. With G-Earth ON, post-auth gameplay
@@ -7149,7 +7168,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             # This is a separate, explicitly labelled multi-account action.
             # The single-account G-Earth ON preference remains untouched.
             self._bot_multi_direct_ids.add(ident)
-        elif self.bot_gearth_var.get():
+        elif force_gearth or self.bot_gearth_var.get():
             session=self._tcp_sessions.get(ident)
             if ident in self._tcp_inflight or (
                 session is not None and session.authenticated):
@@ -7160,6 +7179,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             if not self._bot_start_gearth_bridge(ident):
                 self.bot_status_var.set(self.bot_gearth_status_var.get())
                 return
+            self._bot_multi_direct_ids.discard(ident)
         room=(int(room_override) if room_override is not None else
               int(clientless_saved_room_value(self.bot_room_var.get())))
         if not 1<=room<=2147483647:
@@ -7233,8 +7253,8 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_connect_selected(self):
         account=self._bot_selected_profile()
-        if self.bot_gearth_var.get() and account is not None:
-            self._bot_run_account(account)
+        if account is not None and account.get('launch_mode')=='clientless_gearth':
+            self._bot_run_configured_account(account)
             return
         if account is None:
             self.bot_status_var.set('Add and select an account in Accounts first.')
@@ -7277,13 +7297,20 @@ class ChatOverlayApp(PersonaResponderMixin):
         # Prevent manual actions from bypassing the selected interception
         # mode even if a socket was established through the separate TCP tab.
         bridge_choice=getattr(self,'bot_gearth_var',None)
-        if bridge_choice is not None and bridge_choice.get():
-            account=(account_override if account_override is not None
-                     else self._bot_selected_profile())
-            ident=account['id'] if account is not None else ''
-            bridge=self._bot_gearth_bridges.get(ident)
-            explicit_direct=ident in self._bot_multi_direct_ids
-            if not explicit_direct and (bridge is None or not bridge.ready):
+        route_account=(account_override if account_override is not None
+                       else self._bot_selected_profile())
+        if route_account is not None:
+            route_id=route_account['id']
+            bridge=self._bot_gearth_bridges.get(route_id)
+            route_session=self._tcp_sessions.get(route_id)
+            actual_bridge=getattr(route_session,'gameplay_bridge',None)
+            explicit_direct=route_id in self._bot_multi_direct_ids
+            wants_bridge=(route_account.get('launch_mode')=='clientless_gearth'
+                          or (not route_account.get('launch_mode') and
+                              bridge_choice is not None and bridge_choice.get()))
+            if (actual_bridge is not None or bridge is not None or
+                    (wants_bridge and not explicit_direct)) and (
+                    bridge is None or not bridge.ready):
                 self.bot_status_var.set(
                     'G-Earth interception ON, but the local packet relay '
                     'is not ready. Actions cannot bypass it.')
@@ -7521,6 +7548,10 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _tcp_connect_one(self, account, use_form=False, auto_capture=False):
         ident=account['id']
+        if (account.get('launch_mode')=='clientless_gearth' and
+                ident not in getattr(self,'_bot_gearth_bridges',{})):
+            self._tcp_states[ident]='Launch Clientless Bot with G-Earth from Accounts'
+            return
         if ident in self._tcp_inflight:
             return
         existing=self._tcp_sessions.get(ident)
@@ -8246,7 +8277,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         for label,value in (
                 ('HabboAIR without G-Earth','air'),
                 ('HabboAIR with G-Earth','gearth'),
-                ('Clientless Bot','clientless')):
+                ('Clientless Bot without G-Earth','clientless'),
+                ('Clientless Bot with G-Earth','clientless_gearth')):
             ttk.Radiobutton(modes,text=label,value=value,
                 variable=self.account_launch_mode_var,
                 command=self._account_remember_launch_mode).pack(anchor='w')
@@ -8266,7 +8298,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                  font=('Segoe UI',9)).pack(
                      anchor='w',fill='x',pady=(2,9))
         tk.Label(right,text='Launch mode is saved per profile. AIR without G-Earth requires the proxy closed. '
-                 'AIR with G-Earth requires a ready proxy; clientless uses its own settings. '
+                 'AIR with G-Earth requires a ready proxy. Clientless with G-Earth uses the existing single-account relay. '
                  'Auto Play all launches Classic accounts sequentially '
                  'when native launcher interaction is required. '
                  'One G-Earth packet endpoint can be attached at a time; '
@@ -8439,7 +8471,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         account=self._account_selected()
         if account is None:return
         mode=self.account_launch_mode_var.get()
-        if mode not in ('air','gearth','clientless'):return
+        if mode not in ('air','gearth','clientless','clientless_gearth'):return
         account['launch_mode']=mode
         self.config['account_profiles']=self._account_profiles
         self.save()
@@ -8452,7 +8484,12 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         mode=self.account_launch_mode_var.get()
         self._account_remember_launch_mode()
-        if mode=='clientless':
+        if mode in ('clientless','clientless_gearth'):
+            self.gearth_auto_arm_var.set(False)
+            self.config['gearth_auto_arm']=False
+            self.bot_standalone_var.set(True)
+            self.config['clientless_standalone']=True
+            self.save()
             self._bot_run_from_accounts()
             return
         if mode not in ('air','gearth'):return
