@@ -6544,6 +6544,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if picker is None:return
         items=[a['label']+' ['+a['id'][:6]+']' for a in self._account_profiles
                if self._coffee_session(a['id']) is not None]
+        if items:
+            items.insert(0,'All connected accounts')
         picker.configure(values=items)
         if self.coffee_account_var.get() not in items:
             self.coffee_account_var.set('')
@@ -6636,7 +6638,19 @@ class ChatOverlayApp(PersonaResponderMixin):
                      if a['label']+' ['+a['id'][:6]+']'==selected and
                      self._coffee_session(a['id']) is not None),None)
 
+    def _coffee_selected_accounts(self):
+        if self.coffee_account_var.get()=='All connected accounts':
+            return [a for a in self._account_profiles
+                    if self._coffee_session(a['id']) is not None]
+        account=self._coffee_selected()
+        return [account] if account is not None else []
+
     def _coffee_load_settings(self):
+        if self.coffee_account_var.get()=='All connected accounts':
+            self.coffee_consent_var.set(False)
+            self._coffee_group_select_all()
+            self.coffee_status_var.set('All connected accounts selected. Edit shared settings and save to apply. Select an individual sender for hand-item actions.')
+            return
         account=self._coffee_selected()
         if account is None:return
         raw=self.config.get('clientless_coffee_presets',{})
@@ -6656,8 +6670,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_two_var.get(),self.coffee_delay_var.get(),self.coffee_count_var.get())
 
     def _coffee_save_settings(self):
-        account=self._coffee_selected()
-        if account is None:
+        accounts=self._coffee_selected_accounts()
+        if not accounts:
             self.coffee_status_var.set('Select a connected account first.')
             return
         try:ids,seconds,count=self._coffee_settings()
@@ -6665,11 +6679,14 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_status_var.set(str(exc));return
         raw=self.config.get('clientless_coffee_presets',{})
         presets=dict(raw) if isinstance(raw,dict) else {}
-        presets[account['id']]=dict(one=ids[0],two=ids[1],delay=seconds,count=count,
-                                    alternate=bool(self.coffee_alternate_var.get()))
+        for account in accounts:
+            presets[account['id']]=dict(one=ids[0],two=ids[1],delay=seconds,count=count,
+                                        alternate=bool(self.coffee_alternate_var.get()))
         self.config['clientless_coffee_presets']=presets
         self.save()
-        self.coffee_status_var.set('Coffee settings saved for '+account['label']+'.')
+        label=(str(len(accounts))+' connected account(s)' if self.coffee_account_var.get()=='All connected accounts'
+               else accounts[0]['label'])
+        self.coffee_status_var.set('Coffee settings saved for '+label+'.')
 
     def _coffee_observe(self,ident,generation,observation):
         kind,value=observation
@@ -6731,6 +6748,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         return now
 
     def _coffee_manual(self,action,source=1):
+        if self.coffee_account_var.get()=='All connected accounts':
+            self.coffee_status_var.set('Select an individual sender for hand-item actions. All connected accounts is for shared settings.');return
         if self._coffee_run:
             self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
         account=self._coffee_selected()
@@ -6754,6 +6773,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_status_var.set(str(exc)[:180])
 
     def _coffee_start_run(self):
+        if self.coffee_account_var.get()=='All connected accounts':
+            self.coffee_status_var.set('Select an individual sender for hand-item actions. All connected accounts is for shared settings.');return
         if self._coffee_run:
             self.coffee_status_var.set('A coffee run is already active.');return
         account=self._coffee_selected()

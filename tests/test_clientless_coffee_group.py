@@ -9,7 +9,9 @@ from clientless_bot import ClientlessBotError
 p=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 tree=ast.parse(p.read_text(encoding='utf-8'))
 scope={'ClientlessBotError':ClientlessBotError}
-names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop')
+names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
+       '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
+       '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
 
@@ -48,3 +50,34 @@ class CoffeeGroupTests(TestCase):
         scope['_coffee_group_stop'](app)
         app._coffee_stop_run.assert_called_once()
         app._tcp_disconnect_one.assert_not_called()
+
+    def test_dropdown_all_saves_current_connected_accounts_only(self):
+        accounts=[{'id':i,'label':i.upper()} for i in ('a','b','c')]
+        app=SimpleNamespace(_account_profiles=accounts,
+            _coffee_session=lambda ident:object() if ident!='b' else None,
+            _coffee_settings=lambda:((476989081,476989024),15,3),
+            coffee_account_picker=Mock(),coffee_account_var=Mock(),
+            coffee_alternate_var=Mock(),coffee_status_var=Mock(),
+            coffee_consent_var=Mock(),_coffee_run=None,_coffee_group_refresh=Mock(),
+            _coffee_group_select_all=Mock(),_coffee_send=Mock(),
+            config={'clientless_coffee_presets':{'b':{'one':7}}},save=Mock())
+        app.coffee_account_var.get.return_value='All connected accounts'
+        app.coffee_alternate_var.get.return_value=True
+        app._coffee_selected=lambda:scope['_coffee_selected'](app)
+        app._coffee_selected_accounts=lambda:scope['_coffee_selected_accounts'](app)
+        scope['_coffee_refresh_accounts'](app)
+        app.coffee_account_picker.configure.assert_called_once_with(
+            values=['All connected accounts','A [a]','C [c]'])
+        app.coffee_account_var.set.assert_not_called()
+        scope['_coffee_load_settings'](app)
+        app._coffee_group_select_all.assert_called_once()
+        scope['_coffee_save_settings'](app)
+        presets=app.config['clientless_coffee_presets']
+        self.assertEqual(presets['a'],presets['c'])
+        self.assertEqual(presets['b'],{'one':7})
+        app.save.assert_called_once()
+        scope['_coffee_manual'](app,'Pass hand item')
+        scope['_coffee_start_run'](app)
+        app._coffee_send.assert_not_called()
+        app.coffee_account_var.get.return_value='C [c]'
+        self.assertEqual(app._coffee_selected_accounts(),[accounts[2]])
