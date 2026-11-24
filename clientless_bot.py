@@ -460,6 +460,6 @@ def validate_clientless_coffee_settings(cup_one,cup_two,delay,count):
         raise ClientlessBotError("Enter valid furniture IDs, delay and quantity.") from exc
     if ids[0]==ids[1]:
         raise ClientlessBotError("Choose two different furniture IDs.")
-    if not 10<=seconds<=3600 or not 1<=quantity<=5:
-        raise ClientlessBotError("Enter a delay from 10 to 3600 seconds and 1 to 5 cups.")
+    if not 0<=seconds<=3600 or not 1<=quantity<=5:
+        raise ClientlessBotError("Enter an extra delay from 0 to 3600 seconds and 1 to 5 cups.")
     return ids,seconds,quantity

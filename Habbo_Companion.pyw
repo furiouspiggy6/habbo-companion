@@ -6485,7 +6485,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_recipient_var=tk.StringVar(value='')
         self.coffee_one_var=tk.StringVar(value='476989081')
         self.coffee_two_var=tk.StringVar(value='476989024')
-        self.coffee_delay_var=tk.StringVar(value='10')
+        self.coffee_delay_var=tk.StringVar(value='0')
         self.coffee_count_var=tk.StringVar(value='5')
         self.coffee_alternate_var=tk.BooleanVar(value=True)
         self.coffee_consent_var=tk.BooleanVar(value=False)
@@ -6493,12 +6493,14 @@ class ChatOverlayApp(PersonaResponderMixin):
         for label,var in (('Recipient username or room player ID',self.coffee_recipient_var),
                           ('Cup 1 furniture ID',self.coffee_one_var),
                           ('Cup 2 furniture ID',self.coffee_two_var),
-                          ('Delay between cups (seconds)',self.coffee_delay_var),
+                          ('Extra delay between cups (seconds)',self.coffee_delay_var),
                           ('Cups per run',self.coffee_count_var)):
             row=ttk.Frame(panel,style='Panel.TFrame')
             row.pack(anchor='w',pady=3)
             ttk.Label(row,text=label,width=34,style='Panel.TLabel').pack(side='left',padx=(0,12))
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
+        ttk.Label(panel,text='0 removes extra waiting; per-account cooldown and server confirmations still apply.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
         ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
         ttk.Checkbutton(panel,text='I control the participating accounts and agree to the transfers',variable=self.coffee_consent_var,
@@ -6661,7 +6663,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not isinstance(preset,dict):preset={}
         for key,var,default in (
                 ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024'),
-                ('delay',self.coffee_delay_var,'10'),('count',self.coffee_count_var,'5')):
+                ('delay',self.coffee_delay_var,'0'),('count',self.coffee_count_var,'5')):
             var.set(str(preset.get(key,default)))
         self.coffee_recipient_var.set('')
         self.coffee_alternate_var.set(preset.get('alternate',True) is True)

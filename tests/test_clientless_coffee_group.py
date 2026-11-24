@@ -141,3 +141,19 @@ class CoffeeGroupTests(TestCase):
         self.assertEqual(a['phase'],'next')
         self.assertEqual(c['phase'],'pickup')
         app._coffee_send.assert_called_once_with('c','Collect hand item',furniture=1)
+
+    def test_zero_extra_delay_retains_pickup_cooldown(self):
+        state={'generation':1,'room':1,'players':{2:(0,'B')},'carry':{0:(0,101)}}
+        other={'generation':1,'room':1,'players':{1:(0,'A')},'carry':{}}
+        app=SimpleNamespace(_coffee_context=lambda ident:(state,1,0) if ident=='a' else (other,2,0),
+            _coffee_last_pickup={'a':95},_coffee_last_pass={'a':100},
+            _bot_action_inflight=set(),_bot_last_action_at={'a':100},
+            _coffee_send=Mock(return_value=105))
+        run=dict(id='a',peer='b',target=2,generation=1,peer_generation=1,room=1,
+            phase='pass',at=100,done=0,count=2,alternate=False,ids=(1,2),delay=0)
+        scope['_coffee_advance'](app,run,101)
+        self.assertEqual((run['phase'],run['at'],run['done']),('next',101,1))
+        scope['_coffee_advance'](app,run,102)
+        app._coffee_send.assert_not_called()
+        scope['_coffee_advance'](app,run,105)
+        app._coffee_send.assert_called_once_with('a','Collect hand item',furniture=1)
