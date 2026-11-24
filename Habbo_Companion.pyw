@@ -745,7 +745,10 @@ def normalize_habbo_accounts(profiles):
             continue
         ids.add(ident)
         ports.add(port)
-        valid.append({'id':ident,'label':label,'port':port,'url':url})
+        profile={'id':ident,'label':label,'port':port,'url':url}
+        if entry.get('launch_mode') in ('air','gearth','clientless'):
+            profile['launch_mode']=entry['launch_mode']
+        valid.append(profile)
         if len(valid)==12:
             break
     return valid
@@ -8157,13 +8160,20 @@ class ChatOverlayApp(PersonaResponderMixin):
                      anchor='w',pady=(0,8))
         autoplay=ttk.Frame(right,style='Card.TFrame')
         autoplay.pack(fill='x',pady=(0,7))
-        ttk.Button(right,text='Run selected profile (clientless, no AIR window)',
+        self.account_launch_mode_var=tk.StringVar(value='air')
+        modes=ttk.Frame(right,style='Card.TFrame')
+        modes.pack(fill='x',pady=(0,7),before=autoplay)
+        for label,value in (
+                ('HabboAIR without G-Earth','air'),
+                ('HabboAIR with G-Earth','gearth'),
+                ('Clientless Bot','clientless')):
+            ttk.Radiobutton(modes,text=label,value=value,
+                variable=self.account_launch_mode_var,
+                command=self._account_remember_launch_mode).pack(anchor='w')
+        ttk.Button(modes,text='Launch selected account',
                    style='Primary.TButton',
-                   command=self._bot_run_from_accounts).pack(
-                       anchor='w',pady=(0,9))
-        ttk.Button(autoplay,text='Auto Play selected',
-                   command=self._account_auto_play).pack(
-                       side='left',padx=(0,9))
+                   command=self._account_launch_selected_mode).pack(
+                       anchor='w',pady=(7,3))
         ttk.Button(autoplay,text='Auto Play all saved accounts',
                    command=lambda:self._account_auto_play(
                        all_accounts=True)).pack(side='left')
@@ -8175,7 +8185,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                  wraplength=520,justify='left',
                  font=('Segoe UI',9)).pack(
                      anchor='w',fill='x',pady=(2,9))
-        tk.Label(right,text='Auto Play launches Classic accounts sequentially '
+        tk.Label(right,text='Launch mode is saved per profile. AIR without G-Earth requires the proxy closed. '
+                 'AIR with G-Earth requires a ready proxy; clientless uses its own settings. '
+                 'Auto Play all launches Classic accounts sequentially '
                  'when native launcher interaction is required. '
                  'One G-Earth packet endpoint can be attached at a time; '
                  'multiple endpoints need separate configured proxies. '
@@ -8212,6 +8224,8 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _account_on_select(self,event=None):
         account=self._account_selected()
         if account is None:return
+        if hasattr(self,'account_launch_mode_var'):
+            self.account_launch_mode_var.set(account.get('launch_mode','air'))
         self.account_label_var.set(account['label'])
         self.account_login_url_var.set(account['url'])
         self.account_port_var.set(str(account['port']))
@@ -8340,6 +8354,70 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.account_status_var.set(
             'Account entry removed. Its isolated browser data remains on disk.')
 
+    def _account_remember_launch_mode(self):
+        account=self._account_selected()
+        if account is None:return
+        mode=self.account_launch_mode_var.get()
+        if mode not in ('air','gearth','clientless'):return
+        account['launch_mode']=mode
+        self.config['account_profiles']=self._account_profiles
+        self.save()
+
+    def _account_launch_selected_mode(self):
+        account=self._account_selected()
+        if account is None:return
+        if self._account_auto_running:
+            self.account_status_var.set('An account launch is already in progress.')
+            return
+        mode=self.account_launch_mode_var.get()
+        self._account_remember_launch_mode()
+        if mode=='clientless':
+            self._bot_run_from_accounts()
+            return
+        if mode not in ('air','gearth'):return
+        # Do not let a scheduled global startup silently change the chosen route.
+        self.gearth_auto_arm_var.set(False)
+        self.config['gearth_auto_arm']=False
+        if mode=='air':
+            self.bot_standalone_var.set(True)
+            self.config['clientless_standalone']=True
+            self.save()
+            if (self.packet_started or self._engine_installing
+                or self._gearth_launch_watch_until>time.monotonic()
+                or self._find_gearth_window()
+                or gearth_network_state()['unsafe']
+                or any(self._gearth_extension_port_responds(p)
+                       for p in {9092,account['port']})):
+                self.account_status_var.set(
+                    'Direct AIR launch blocked: close G-Earth and finish its network cleanup, then retry.')
+                return
+        else:
+            port=account['port']
+            if self.packet_started or self.tracker.find(
+                    [self.root.winfo_id(),self.overlay.winfo_id()]):
+                self.account_status_var.set(
+                    'Close the existing game / packet session before launching intercepted AIR.')
+                return
+            self._account_use_port()
+            if not self._gearth_extension_port_responds(port):
+                if port==9092:
+                    self._start_integrated_engine()
+                    self.account_status_var.set(
+                        'G-Earth starting. When it says Waiting for connection, click Launch selected account again.')
+                else:
+                    self.account_status_var.set(
+                        'Start the configured G-Earth proxy on extension port '+str(port)+' and retry.')
+                return
+            if not messagebox.askyesno('HabboAIR with G-Earth',
+                    'Confirm the selected G-Earth proxy is Waiting for connection. '
+                    'An open extension port alone does not prove interception. Launch now?',
+                    parent=self.root):
+                return
+            self.bot_standalone_var.set(False)
+            self.config['clientless_standalone']=False
+            self.save()
+        self._account_auto_play(explicit_launch_mode=mode)
+
     def _account_open_login(self):
         """Open just this browser profile and sign it in using the local vault."""
         self._account_auto_play(login_only=True)
@@ -8367,7 +8445,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._account_auto_play(remaining_only=True)
 
     def _account_auto_play(self,all_accounts=False,login_only=False,
-                           remaining_only=False):
+                           remaining_only=False,explicit_launch_mode=None):
         """Open selected, all or only unfinished browser/Classic profiles."""
         if self._account_auto_running:
             self.account_status_var.set(
@@ -8395,7 +8473,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                 'Two account profiles share a browser control port. '
                 'Remove/re-add one profile before automation.')
             return
-        if not login_only and not self.packet_started and not all_accounts and not remaining_only:
+        if (explicit_launch_mode is None and not login_only and not self.packet_started
+                and not all_accounts and not remaining_only):
             self._account_use_port()
             if (accounts[0]['port']==9092
                 and not self._gearth_extension_port_responds(9092)):
