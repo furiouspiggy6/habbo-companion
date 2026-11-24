@@ -176,8 +176,11 @@ class ManagedEngineTests(unittest.TestCase):
         self.assertTrue(callable(app.ChatOverlayApp._diagnose_and_repair))
         self.assertTrue(callable(app.ChatOverlayApp._copy_engine_diagnostic))
         code=inspect.getsource(app.ChatOverlayApp._check_online_update)
-        self.assertIn('uuid.uuid4().hex',code)
-        self.assertIn("Cache-Control",code)
+        self.assertIn('fetch_current_update_manifest(url,helper)',code)
+        fetch=inspect.getsource(app.fetch_current_update_manifest)
+        self.assertIn('uuid.uuid4().hex',fetch)
+        self.assertIn("Cache-Control",fetch)
+        self.assertIn('api.github.com/repos/furiouspiggy6/habbo-companion/contents/latest.json',fetch)
 
 
     def test_auto_hide_restores_explicit_advanced_control(self):
