@@ -8394,11 +8394,27 @@ class ChatOverlayApp(PersonaResponderMixin):
                 return
         else:
             port=account['port']
-            if self.packet_started or self.tracker.find(
-                    [self.root.winfo_id(),self.overlay.winfo_id()]):
+            # Overlay tracking accepts broad Habbo titles (including Brave).
+            # Only native AIR windows and actual game-session events block launch.
+            native=account_native_client_windows()
+            if native is None:
                 self.account_status_var.set(
-                    'Close the existing game / packet session before launching intercepted AIR.')
+                    'Cannot verify native AIR windows. Retry launch after Windows window inspection succeeds.')
                 return
+            if native:
+                self.account_status_var.set(
+                    'A native HabboAIR game window is already open ('+str(len(native))+'). Close that game before launching intercepted AIR.')
+                return
+            if self._habbo_session_connected:
+                self.account_status_var.set(
+                    'G-Earth reports an active game connection. Disconnect that game before launching another.')
+                return
+            if self.packet_started and self._account_attached_port!=port:
+                self.account_status_var.set(
+                    'Idle packet tools are attached to port '+str(self._account_attached_port)+
+                    '; selected profile requires port '+str(port)+'. Use the matching proxy endpoint.')
+                return
+            # An idle extension on the selected port is safe to reuse.
             self._account_use_port()
             if not self._gearth_extension_port_responds(port):
                 if port==9092:

@@ -1,5 +1,9 @@
 # Habbo Companion
 
+## v1.1.104 — Intercepted AIR launch guard fix
+
+Accounts now uses strict native AIR window detection instead of the broad overlay tracker. An idle G-Earth extension on the selected port can be reused; an actual game connection or a different attached endpoint still blocks with a specific reason. No account reset is needed. Live Windows validation remains required.
+
 ## v1.1.103 — Per-account launch mode
 
 In Accounts, select a profile and choose HabboAIR without G-Earth, HabboAIR with G-Earth, or Clientless Bot, then click Launch selected account. The choice is saved per profile and defaults to AIR without G-Earth. Direct AIR refuses to launch while the known proxy is running or network cleanup is required. Intercepted AIR requires a ready G-Earth proxy; the extension port alone cannot prove interception. Clientless uses the existing clientless settings. The legacy batch launch remains available separately. Live Windows launch behavior requires validation.
