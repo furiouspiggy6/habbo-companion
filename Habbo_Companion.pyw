@@ -6438,7 +6438,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_account_var.set(items[0] if items else '')
         self._bot_anti_afk_load_selected()
         self._bot_refresh_action_accounts()
-        self._coffee_refresh_accounts()
+        if hasattr(self,'coffee_account_picker'):
+            self._coffee_refresh_accounts()
         if hasattr(self,'bot_multi_tree'):
             self._bot_multi_refresh()
 

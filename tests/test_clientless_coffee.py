@@ -22,6 +22,6 @@ class CoffeeTests(unittest.TestCase):
         release=bot.BUNDLED_AIR_RELEASE
         self.assertEqual(bot.decode_clientless_hand_observation(release,1548,struct.pack(">ii",9,2)),
                          ("carry",(9,2)))
-        self.assertEqual(bot.decode_clientless_hand_observation(release,2675,b"\\x00\\x019"),
+        self.assertEqual(bot.decode_clientless_hand_observation(release,2675,struct.pack(">H",1)+b"9"),
                          ("remove",9))
         self.assertIsNone(bot.decode_clientless_hand_observation("unknown",1548,struct.pack(">ii",9,2)))
