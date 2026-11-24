@@ -1428,3 +1428,8 @@ ordering, missing saved credentials, and cross-profile isolation.
 ## v1.1.108 — Clientless Coffee Pass
 
 Direct TCP accounts can select a room player, collect a hand item from either editable furniture source, or manually pass a held item. Furniture defaults are 476989081 and 476989024. A bounded transfer run is available only between two authenticated accounts controlled by the user, with confirmed shared room membership and own-avatar hand-item observations. One run at a time; no retry or bulk start. Source-pinned WIN63 hand-item mappings are not live-verified. The existing G-Earth panel is unchanged.
+
+
+## v1.1.109 — Clientless Coffee account settings
+
+Select all connected Direct TCP profiles or highlight individual rows. Apply shared coffee source IDs, delay, quantity and alternation settings without sending game actions. The table shows observed room, held item and active run status. Stop all cancels the active run without disconnecting accounts. Individual collection and pass controls remain unchanged.

@@ -6482,6 +6482,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Button(runs,text='Start run (own accounts)',command=self._coffee_start_run).pack(side='left',padx=(0,4))
         ttk.Button(runs,text='STOP',command=self._coffee_stop_run).pack(side='left')
         ttk.Label(panel,textvariable=self.coffee_status_var,style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,0))
+        group=ttk.LabelFrame(panel,text='Connected account settings & status',padding=7)
+        group.pack(fill='x',pady=(10,0))
+        self.coffee_group_tree=ttk.Treeview(group,columns=('room','item','run'),
+            show='tree headings',selectmode='extended',height=5)
+        for key,label,width in (('#0','Account',180),('room','Room',90),
+                                ('item','Hand item',130),('run','Run',110)):
+            self.coffee_group_tree.heading(key,text=label)
+            self.coffee_group_tree.column(key,width=width,minwidth=65,stretch=True)
+        self.coffee_group_tree.pack(fill='x',pady=(0,5))
+        self.coffee_group_status_var=tk.StringVar(value='Highlight accounts to apply shared settings.')
+        group_buttons=ttk.Frame(group)
+        group_buttons.pack(fill='x')
+        for label,command in (
+                ('Select all connected',self._coffee_group_select_all),
+                ('Deselect all',self._coffee_group_clear),
+                ('Apply settings',self._coffee_group_apply),
+                ('Stop all runs',self._coffee_group_stop)):
+            ttk.Button(group_buttons,text=label,command=command).pack(side='left',padx=(0,4))
+        ttk.Label(group,textvariable=self.coffee_group_status_var,style='Panel.TLabel',
+                  wraplength=620).pack(anchor='w',pady=(4,0))
 
     def _coffee_refresh_accounts(self):
         picker=getattr(self,'coffee_account_picker',None)
@@ -6495,6 +6515,77 @@ class ChatOverlayApp(PersonaResponderMixin):
         run=self._coffee_run
         if run and (self._coffee_session(run['id']) is None or self._coffee_session(run['peer']) is None):
             self._coffee_stop_run('Run stopped: account disconnected.')
+        self._coffee_group_refresh()
+
+    def _coffee_group_refresh(self):
+        tree=getattr(self,'coffee_group_tree',None)
+        if tree is None:return
+        if not tree.winfo_exists():return
+        highlighted=set(tree.selection())
+        eligible=set()
+        run=self._coffee_run
+        for account in self._account_profiles:
+            ident=account['id']
+            if self._coffee_session(ident) is None:continue
+            eligible.add(ident)
+            room='—'
+            item='Awaiting room'
+            try:
+                state,own,index=self._coffee_context(ident)
+                room=str(state['room'])
+                observed=state['carry'].get(index)
+                item=('Not observed' if observed is None else
+                      'Empty' if observed[0]==0 else 'Item '+str(observed[0]))
+            except ClientlessBotError:
+                pass
+            status=('Sender: '+run['phase'] if run and run['id']==ident else
+                    'Receiver' if run and run['peer']==ident else 'Idle')
+            values=(room,item,status)
+            if tree.exists(ident):
+                tree.item(ident,text=account['label'],values=values)
+            else:
+                tree.insert('','end',iid=ident,text=account['label'],values=values)
+        for ident in tree.get_children(''):
+            if ident not in eligible:tree.delete(ident)
+        keep=tuple(ident for ident in tree.get_children('') if ident in highlighted)
+        if keep:tree.selection_set(keep)
+
+    def _coffee_group_select_all(self):
+        self._coffee_group_refresh()
+        tree=self.coffee_group_tree
+        ids=tuple(tree.get_children(''))
+        if ids:tree.selection_set(ids)
+        self.coffee_group_status_var.set(str(len(ids))+' connected account(s) selected.')
+
+    def _coffee_group_clear(self):
+        tree=self.coffee_group_tree
+        selected=tree.selection()
+        if selected:tree.selection_remove(selected)
+        self.coffee_group_status_var.set('Selection cleared.')
+
+    def _coffee_group_apply(self):
+        selected=set(self.coffee_group_tree.selection())
+        ids=[a['id'] for a in self._account_profiles
+             if a['id'] in selected and self._coffee_session(a['id']) is not None]
+        if not ids:
+            self.coffee_group_status_var.set('Select connected accounts first.')
+            return
+        try:machines,seconds,count=self._coffee_settings()
+        except ClientlessBotError as exc:
+            self.coffee_group_status_var.set(str(exc));return
+        raw=self.config.get('clientless_coffee_presets',{})
+        presets=dict(raw) if isinstance(raw,dict) else {}
+        for ident in ids:
+            presets[ident]=dict(one=machines[0],two=machines[1],delay=seconds,
+                                count=count,alternate=bool(self.coffee_alternate_var.get()))
+        self.config['clientless_coffee_presets']=presets
+        self.save()
+        self.coffee_group_status_var.set('Settings saved for '+str(len(ids))+' connected account(s).')
+
+    def _coffee_group_stop(self):
+        self._coffee_stop_run('All coffee runs stopped.')
+        self._coffee_group_refresh()
+        self.coffee_group_status_var.set('All coffee runs stopped. Accounts remain connected.')
 
     def _coffee_session(self,ident):
         session=self._tcp_sessions.get(ident)
@@ -6551,6 +6642,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._coffee_room_state[ident]=dict(generation=generation,room=value,players={},carry={})
             if self._coffee_run and ident in (self._coffee_run['id'],self._coffee_run['peer']):
                 self._coffee_stop_run('Run stopped: room changed.')
+            self._coffee_group_refresh()
             return
         if not state or state['generation']!=generation:return
         if kind=='players':
@@ -6563,6 +6655,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             index,item=value
             if any(unit[0]==index for unit in state['players'].values()):
                 state['carry'][index]=(item,time.monotonic())
+        self._coffee_group_refresh()
 
     def _coffee_context(self,ident):
         state=self._coffee_room_state.get(ident)
@@ -6656,6 +6749,7 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _coffee_stop_run(self,message='Coffee run stopped.'):
         self._coffee_run=None
         self.coffee_status_var.set(message)
+        self._coffee_group_refresh()
 
     def _coffee_tick(self,run):
         if self._coffee_run is not run:return
@@ -6695,6 +6789,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                     run['phase']='next'
                     run['at']=now+run['delay']
             self.coffee_status_var.set('Coffee run: '+str(run['done'])+'/'+str(run['count'])+' — '+run['phase'])
+            self._coffee_group_refresh()
             self.root.after(250,lambda:self._coffee_tick(run))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
