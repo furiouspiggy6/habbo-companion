@@ -8195,6 +8195,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                  font=('Segoe UI',9),fg=p['muted'],bg=p['surface'],
                  wraplength=520,justify='left').pack(anchor='w')
         self._accounts_render()
+        self._account_on_select()
 
     def _accounts_render(self,select_id=None):
         table=self.account_table

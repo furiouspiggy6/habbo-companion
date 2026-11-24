@@ -109,7 +109,9 @@ class AccountAutoPlayTests(unittest.TestCase):
     def test_no_cross_account_port_switch_and_powershell_only_known_window(self):
         self.assertIn("account_browser_debug_port(a['id'])",CODE)
         self.assertIn("self._account_auto_running=True",CODE)
-        self.assertIn("text='Auto Play selected'",CODE)
+        self.assertIn("text='Launch selected account'",CODE)
+        self.assertIn("command=self._account_launch_selected_mode",CODE)
+        self.assertIn("self._account_auto_play(explicit_launch_mode=mode)",CODE)
         self.assertIn("text='Auto Play all saved accounts'",CODE)
         self.assertIn('active_packet_port=(self._account_attached_port',CODE)
         self.assertIn('launching another account does NOT intercept its packets.',CODE)
