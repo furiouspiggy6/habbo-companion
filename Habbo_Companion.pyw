@@ -5346,8 +5346,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_user_roster={}
         self._coffee_room_state={}
         self._coffee_run=None
-        self._coffee_last_pass=0.0
-        self._coffee_last_pickup=0.0
+        self._coffee_last_pass={}
+        self._coffee_last_pickup={}
         # Read-only, generation-scoped avatar location for stationary anti-AFK.
         self._bot_anti_afk_rooms={}
         self._bot_anti_afk_positions={}
@@ -6550,8 +6550,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         if self.coffee_account_var.get() not in items:
             self.coffee_account_var.set('')
             self.coffee_consent_var.set(False)
-        run=self._coffee_run
-        if run and (self._coffee_session(run['id']) is None or self._coffee_session(run['peer']) is None):
+        batch=self._coffee_run
+        if batch and any(self._coffee_session(r['id']) is None or self._coffee_session(r['peer']) is None
+                         for r in batch['runs'] if r['phase']!='complete'):
             self._coffee_stop_run('Run stopped: account disconnected.')
         self._coffee_group_refresh()
 
@@ -6561,7 +6562,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not tree.winfo_exists():return
         highlighted=set(tree.selection())
         eligible=set()
-        run=self._coffee_run
+        batch=self._coffee_run
+        runs=batch['runs'] if batch else []
         for account in self._account_profiles:
             ident=account['id']
             if self._coffee_session(ident) is None:continue
@@ -6576,9 +6578,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                       'Empty' if observed[0]==0 else 'Item '+str(observed[0]))
             except ClientlessBotError:
                 pass
-            status=('Sender: '+run['phase'] if run and run['id']==ident else
-                    'Receiver' if run and run['peer']==ident else
-                    'Queued' if run and any(r['id']==ident for r in run.get('remaining',[])) else 'Idle')
+            run=next((r for r in runs if r['id']==ident),None)
+            status=('Sender: '+run['phase'] if run else
+                    'Receiver' if any(r['peer']==ident for r in runs) else 'Idle')
             values=(room,item,status)
             if tree.exists(ident):
                 tree.item(ident,text=account['label'],values=values)
@@ -6650,7 +6652,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if self.coffee_account_var.get()=='All connected accounts':
             self.coffee_consent_var.set(False)
             self._coffee_group_select_all()
-            self.coffee_status_var.set('All connected accounts selected. Save shared settings or start a sequential run to a connected account you control.')
+            self.coffee_status_var.set('All connected accounts selected. Collect together or start concurrent runs to a connected account you control.')
             return
         account=self._coffee_selected()
         if account is None:return
@@ -6694,7 +6696,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         state=self._coffee_room_state.get(ident)
         if kind=='room':
             self._coffee_room_state[ident]=dict(generation=generation,room=value,players={},carry={})
-            if self._coffee_run and ident in (self._coffee_run['id'],self._coffee_run['peer']):
+            if self._coffee_run and any(ident in (r['id'],r['peer']) for r in self._coffee_run['runs']
+                                        if r['phase']!='complete'):
                 self._coffee_stop_run('Run stopped: room changed.')
             self._coffee_group_refresh()
             return
@@ -6736,23 +6739,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         now=time.monotonic()
         if now-self._bot_last_action_at.get(ident,0)<0.4:
             raise ClientlessBotError('Previous action is still settling.')
-        last=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
+        cooldowns=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
+        last=cooldowns.get(ident,0.0)
         if now-last<10:raise ClientlessBotError('Please wait before sending another hand-item action.')
         packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
         generation=self._tcp_generation.get(ident,0)
         self._bot_action_inflight.add(ident)
         self._bot_last_action_at[ident]=now
-        if action=='Pass hand item':self._coffee_last_pass=now
-        else:self._coffee_last_pickup=now
+        cooldowns[ident]=now
         threading.Thread(target=self._bot_action_worker,
             args=(ident,generation,session,action,packets),daemon=True).start()
         return now
 
     def _coffee_manual(self,action,source=1):
-        if self.coffee_account_var.get()=='All connected accounts':
-            self.coffee_status_var.set('Select an individual sender for manual actions, or use Start run for all connected accounts.');return
         if self._coffee_run:
             self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
+        if self.coffee_account_var.get()=='All connected accounts':
+            if action!='Collect hand item':
+                self.coffee_status_var.set('Use Start run for group transfers, or select one sender for manual Pass.');return
+            self._coffee_collect_all(source)
+            return
         account=self._coffee_selected()
         if account is None:
             self.coffee_status_var.set('Select a connected account.');return
@@ -6772,6 +6778,28 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_status_var.set(account['label']+': request sent; waiting for server activity.')
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self.coffee_status_var.set(str(exc)[:180])
+
+    def _coffee_collect_all(self,source):
+        try:
+            ids,_,_=self._coffee_settings()
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self.coffee_status_var.set(str(exc)[:180]);return
+        sent=0
+        skipped=0
+        for account in self._coffee_selected_accounts():
+            ident=account['id']
+            try:
+                state,_,index=self._coffee_context(ident)
+                if state['carry'].get(index,(0,0))[0]>0:
+                    raise ClientlessBotError('Avatar already holds an item.')
+                self._coffee_send(ident,'Collect hand item',furniture=ids[source-1])
+                state['carry'].pop(index,None)
+                sent+=1
+            except (ValueError,TypeError,RuntimeError,OSError):
+                skipped+=1
+        self.coffee_status_var.set('Collect requested for '+str(sent)+' account(s); '+str(skipped)+
+                                   ' skipped. Awaiting server activity.')
+        self._coffee_group_refresh()
 
     def _coffee_build_run(self,ident,ids,seconds,count):
         state,own,index=self._coffee_context(ident)
@@ -6799,99 +6827,89 @@ class ChatOverlayApp(PersonaResponderMixin):
             ids,seconds,count=self._coffee_settings()
             if not self.coffee_consent_var.get():
                 raise ClientlessBotError('Confirm you control the participating accounts before starting a run.')
-            if self.coffee_account_var.get()!='All connected accounts':
-                self._coffee_run=self._coffee_build_run(accounts[0]['id'],ids,seconds,count)
-            else:
-                runs=[]
-                skipped=[]
-                for account in accounts:
-                    ident=account['id']
-                    try:
-                        run=self._coffee_build_run(ident,ids,seconds,count)
-                        if runs and (run['peer']!=runs[0]['peer'] or run['target']!=runs[0]['target']):
-                            raise ClientlessBotError('Recipient differs between senders.')
-                        runs.append(run)
-                    except (ValueError,TypeError,RuntimeError,OSError):
-                        skipped.append(account['label'])
-                if not runs:
-                    raise ClientlessBotError('No eligible senders. Enter a connected recipient you control and join the same room.')
-                first=runs.pop(0)
-                first.update(remaining=runs,group_total=len(runs)+1,group_index=1,
-                             skipped=len(skipped))
-                self._coffee_run=first
-                self.coffee_group_status_var.set(
-                    str(first['group_total'])+' eligible sender(s) queued; '+str(len(skipped))+
-                    ' skipped (recipient or unavailable). One sender at a time.')
-            self._coffee_tick(self._coffee_run)
+            group=self.coffee_account_var.get()=='All connected accounts'
+            runs=[]
+            skipped=0
+            for account in accounts:
+                try:
+                    run=self._coffee_build_run(account['id'],ids,seconds,count)
+                    if runs and (run['peer']!=runs[0]['peer'] or run['target']!=runs[0]['target']):
+                        raise ClientlessBotError('Recipient differs between senders.')
+                    runs.append(run)
+                except (ValueError,TypeError,RuntimeError,OSError):
+                    if not group:raise
+                    skipped+=1
+            if not runs:
+                raise ClientlessBotError('No eligible senders. Enter a connected recipient you control and join the same room.')
+            batch=dict(runs=runs,skipped=skipped)
+            self._coffee_run=batch
+            self.coffee_group_status_var.set(str(len(runs))+' active sender(s); '+str(skipped)+
+                ' skipped (recipient or unavailable). Concurrent collection.')
+            self._coffee_tick(batch)
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
-
-    def _coffee_finish_run(self,run,now):
-        remaining=run.get('remaining',[])
-        if remaining:
-            following=remaining[0]
-            following.update(remaining=remaining[1:],group_total=run['group_total'],
-                             group_index=run['group_index']+1,skipped=run['skipped'])
-            following['at']=now+run['delay']
-            self._coffee_run=following
-            self.coffee_status_var.set('Preparing next sender '+str(following['group_index'])+
-                                       '/'+str(following['group_total'])+'.')
-            self._coffee_group_refresh()
-            self.root.after(250,lambda:self._coffee_tick(following))
-        elif 'group_total' in run:
-            self._coffee_stop_run('Group complete: '+str(run['group_total'])+
-                ' sender(s), '+str(run['group_total']*run['count'])+
-                ' releases observed; '+str(run['skipped'])+' skipped. Receipt not verified.')
-        else:
-            self._coffee_stop_run('Run complete: '+str(run['done'])+' releases observed. Receipt not verified.')
 
     def _coffee_stop_run(self,message='Coffee run stopped.'):
         self._coffee_run=None
         self.coffee_status_var.set(message)
         self._coffee_group_refresh()
 
-    def _coffee_tick(self,run):
-        if self._coffee_run is not run:return
-        try:
-            ident=run['id']
-            state,own,index=self._coffee_context(ident)
-            other,peer_id,_=self._coffee_context(run['peer'])
-            if (state['generation']!=run['generation'] or other['generation']!=run['peer_generation']
-                or state['room']!=run['room'] or other['room']!=run['room']
-                or peer_id!=run['target'] or peer_id not in state['players'] or own not in other['players']):
-                raise ClientlessBotError('Run stopped: account or room changed.')
-            now=time.monotonic()
-            phase=run['phase']
-            if phase=='next' and now>=max(run['at'],self._coffee_last_pickup+10):
-                if state['carry'].get(index,(0,0))[0]>0:
-                    raise ClientlessBotError('Run stopped: avatar already holds an item.')
-                slot=run['done']%2 if run['alternate'] else 0
-                run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot])
-                run['phase']='pickup'
-            elif phase=='pickup':
-                item,seen=state['carry'].get(index,(0,0))
-                if now-run['at']>20:
-                    raise ClientlessBotError('Run stopped: pickup was not confirmed.')
-                if (item>0 and seen>=run['at'] and ident not in self._bot_action_inflight
-                    and now>=self._coffee_last_pass+10 and now>=run['at']+0.4):
-                    run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
-                    run['phase']='pass'
-            elif phase=='pass':
-                item,seen=state['carry'].get(index,(0,0))
-                if now-run['at']>20:
-                    raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
-                if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
-                    run['done']+=1
-                    if run['done']>=run['count']:
-                        self._coffee_finish_run(run,now)
-                        return
+    def _coffee_advance(self,run,now):
+        ident=run['id']
+        state,own,index=self._coffee_context(ident)
+        other,peer_id,_=self._coffee_context(run['peer'])
+        if (state['generation']!=run['generation'] or other['generation']!=run['peer_generation']
+            or state['room']!=run['room'] or other['room']!=run['room']
+            or peer_id!=run['target'] or peer_id not in state['players'] or own not in other['players']):
+            raise ClientlessBotError('Run stopped: account or room changed.')
+        phase=run['phase']
+        ready=(ident not in self._bot_action_inflight and
+               now-self._bot_last_action_at.get(ident,0)>=0.4)
+        if phase=='next' and ready and now>=max(run['at'],self._coffee_last_pickup.get(ident,0)+10):
+            if state['carry'].get(index,(0,0))[0]>0:
+                raise ClientlessBotError('Run stopped: avatar already holds an item.')
+            slot=run['done']%2 if run['alternate'] else 0
+            run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot])
+            run['phase']='pickup'
+        elif phase=='pickup':
+            item,seen=state['carry'].get(index,(0,0))
+            if now-run['at']>20:
+                raise ClientlessBotError('Run stopped: pickup was not confirmed.')
+            if (item>0 and seen>=run['at'] and ready
+                and now>=self._coffee_last_pass.get(ident,0)+10 and now>=run['at']+0.4):
+                run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
+                run['phase']='pass'
+        elif phase=='pass':
+            item,seen=state['carry'].get(index,(0,0))
+            if now-run['at']>20:
+                raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
+            if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
+                run['done']+=1
+                if run['done']>=run['count']:
+                    run['phase']='complete'
+                else:
                     run['phase']='next'
                     run['at']=now+run['delay']
-            prefix=('Sender '+str(run['group_index'])+'/'+str(run['group_total'])+' — '
-                    if 'group_total' in run else '')
-            self.coffee_status_var.set(prefix+'Coffee run: '+str(run['done'])+'/'+str(run['count'])+' — '+run['phase'])
+
+    def _coffee_tick(self,batch):
+        if self._coffee_run is not batch:return
+        try:
+            runs=batch['runs']
+            now=time.monotonic()
+            for run in runs:
+                if run['phase']!='complete':
+                    self._coffee_advance(run,now)
+            done=sum(r['done'] for r in runs)
+            total=sum(r['count'] for r in runs)
+            active=sum(r['phase']!='complete' for r in runs)
+            if not active:
+                self._coffee_stop_run('Run complete: '+str(done)+' releases observed across '+
+                    str(len(runs))+' sender(s); '+str(batch['skipped'])+' skipped. Receipt not verified.')
+                return
+            self.coffee_status_var.set('Coffee run: '+str(done)+'/'+str(total)+' — '+
+                str(active)+'/'+str(len(runs))+' active sender(s)')
             self._coffee_group_refresh()
-            self.root.after(250,lambda:self._coffee_tick(run))
+            self.root.after(250,lambda:self._coffee_tick(batch))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
 
@@ -12870,7 +12888,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     continue
                 if action in ('Collect hand item','Pass hand item'):
                     if error is not None:
-                        if self._coffee_run and self._coffee_run['id']==ident:
+                        if self._coffee_run and any(r['id']==ident for r in self._coffee_run['runs']
+                                                    if r['phase']!='complete'):
                             self._coffee_stop_run('Run stopped: '+error)
                         else:self.coffee_status_var.set('Hand-item action failed: '+error)
                 if error is None and action!='Anti-AFK':
