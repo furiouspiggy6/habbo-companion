@@ -1433,3 +1433,8 @@ Direct TCP accounts can select a room player, collect a hand item from either ed
 ## v1.1.109 — Clientless Coffee account settings
 
 Select all connected Direct TCP profiles or highlight individual rows. Apply shared coffee source IDs, delay, quantity and alternation settings without sending game actions. The table shows observed room, held item and active run status. Stop all cancels the active run without disconnecting accounts. Individual collection and pass controls remain unchanged.
+
+
+## v1.1.110 — Clientless tabs and dark controls
+
+Coffee Pass now has its own tab inside Clientless Bot, with independent scrolling, compact fields and dark dropdowns. The existing Clientless controls tab retains connection, room, movement and chat controls. This is a presentation-only change; coffee actions, presets and account behavior are unchanged.

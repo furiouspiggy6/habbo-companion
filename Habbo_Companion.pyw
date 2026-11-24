@@ -5733,6 +5733,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         style.configure('TCombobox',fieldbackground=p['field'],
                         foreground=p['text'],arrowcolor=p['muted'],
                         background=p['raised'],padding=5)
+        style.map('TCombobox',
+                  fieldbackground=[('readonly',p['field']),('disabled',p['surface'])],
+                  foreground=[('readonly',p['text']),('disabled',p['faint'])],
+                  selectbackground=[('readonly','#22415A')],
+                  selectforeground=[('readonly',p['text'])])
+        self.root.option_add('*TCombobox*Listbox.background',p['field'])
+        self.root.option_add('*TCombobox*Listbox.foreground',p['text'])
+        self.root.option_add('*TCombobox*Listbox.selectBackground','#22415A')
+        self.root.option_add('*TCombobox*Listbox.selectForeground',p['text'])
         style.configure('TScale',background=p['background'],
                         troughcolor=p['raised'])
         style.configure('TLabelframe',background=p['background'],
@@ -6029,8 +6038,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['classic'],'classic'))
         self._make_live_tcp_panel(self._ui_scroll_area(
             self._ui_pages['tcp'],'tcp'))
-        self._make_clientless_bot_panel(self._ui_scroll_area(
-            self._ui_pages['bot'],'bot'))
+        self._make_clientless_tabs(self._ui_pages['bot'])
         self._make_headless_panel(self._ui_scroll_area(
             self._ui_pages['headless'],'headless'))
         self._make_manipulator_panel(self._ui_scroll_area(
@@ -6225,6 +6233,24 @@ class ChatOverlayApp(PersonaResponderMixin):
                  wraplength=615).pack(anchor='w')
         self._tcp_render()
 
+    def _make_clientless_tabs(self,parent):
+        tabs=ttk.Notebook(parent)
+        tabs.pack(fill='both',expand=True,padx=(12,12),pady=(5,0))
+        main=ttk.Frame(tabs,style='Panel.TFrame')
+        coffee=ttk.Frame(tabs,style='Panel.TFrame')
+        tabs.add(main,text='Clientless controls')
+        tabs.add(coffee,text='Coffee Pass')
+        self._make_clientless_bot_panel(self._ui_scroll_area(main,'bot_controls'))
+        self._make_clientless_coffee_panel(self._ui_scroll_area(coffee,'bot_coffee'))
+        def select_scroll(_event=None):
+            key='bot_coffee' if tabs.select()==str(coffee) else 'bot_controls'
+            self._ui_scroll_canvases['bot']=self._ui_scroll_canvases[key]
+            if key=='bot_coffee':
+                self._coffee_refresh_accounts()
+        tabs.bind('<<NotebookTabChanged>>',select_scroll)
+        select_scroll()
+        self._coffee_refresh_accounts()
+
     def _make_clientless_bot_panel(self,parent):
         """Manual, source-derived AIR bot commands over an authenticated TCP session."""
         frame=ttk.Frame(parent,style='Panel.TFrame',padding=16)
@@ -6390,7 +6416,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.bot_action_account_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_account_var,state='readonly',width=42)
         ttk.Label(frame,text='Send action as (one connected account)',style='Panel.TLabel').pack(anchor='w')
-        self.bot_action_account_picker.pack(fill='x',pady=(3,8))
+        self.bot_action_account_picker.pack(anchor='w',pady=(3,8))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6406,12 +6432,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('Number: Dance 0–4, Sign 0–14, Posture 0–1',self.bot_id_var)):
             ttk.Label(frame,text=label,style='Panel.TLabel').pack(anchor='w')
             ttk.Entry(frame,textvariable=var,width=42).pack(
-                anchor='w',fill='x',pady=(2,7))
+                anchor='w',pady=(2,7))
         ttk.Button(frame,text='Send action as selected account',style='Primary.TButton',
                    command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
         ttk.Label(frame,textvariable=self.bot_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
-        self._make_clientless_coffee_panel(frame)
         ttk.Label(frame,text='Incoming text-only chat (when current-release '
                   'incoming headers are mapped). The original AIR bubble '
                   'feed remains separate. No automatic replies or bulk actions.',
@@ -6444,12 +6469,18 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._bot_multi_refresh()
 
     def _make_clientless_coffee_panel(self,frame):
-        panel=ttk.LabelFrame(frame,text='COFFEE PASS — CLIENTLESS',padding=10)
-        panel.pack(fill='x',pady=(4,12))
+        content=ttk.Frame(frame,style='Panel.TFrame',padding=(18,16))
+        content.pack(anchor='nw',fill='x')
+        tk.Label(content,text='Coffee Pass',font=('Segoe UI Semibold',17),
+                 bg=COMPANION_UI['background'],fg=COMPANION_UI['text']).pack(anchor='w')
+        ttk.Label(content,text='Hand-item controls and connected account settings via Direct TCP.',
+                  style='Muted.TLabel').pack(anchor='w',pady=(4,12))
+        panel=ttk.Frame(content,style='Panel.TFrame')
+        panel.pack(anchor='nw',pady=(0,12))
         self.coffee_account_var=tk.StringVar(value='')
-        self.coffee_account_picker=ttk.Combobox(panel,textvariable=self.coffee_account_var,state='readonly')
+        self.coffee_account_picker=ttk.Combobox(panel,textvariable=self.coffee_account_var,state='readonly',width=43)
         ttk.Label(panel,text='Connected account',style='Panel.TLabel').pack(anchor='w')
-        self.coffee_account_picker.pack(fill='x',pady=(3,7))
+        self.coffee_account_picker.pack(anchor='w',pady=(3,14))
         self.coffee_account_picker.bind('<<ComboboxSelected>>',lambda _event:self._coffee_load_settings())
         self.coffee_recipient_var=tk.StringVar(value='')
         self.coffee_one_var=tk.StringVar(value='476989081')
@@ -6464,26 +6495,31 @@ class ChatOverlayApp(PersonaResponderMixin):
                           ('Cup 2 furniture ID',self.coffee_two_var),
                           ('Delay between cups (seconds)',self.coffee_delay_var),
                           ('Cups per run',self.coffee_count_var)):
-            row=ttk.Frame(panel)
-            row.pack(fill='x',pady=2)
-            ttk.Label(row,text=label,width=36,style='Panel.TLabel').pack(side='left')
-            ttk.Entry(row,textvariable=var,width=22).pack(side='left')
-        ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var).pack(anchor='w')
-        ttk.Checkbutton(panel,text='I control both accounts and agree to the transfer',variable=self.coffee_consent_var).pack(anchor='w')
-        buttons=ttk.Frame(panel)
-        buttons.pack(fill='x',pady=(6,3))
+            row=ttk.Frame(panel,style='Panel.TFrame')
+            row.pack(anchor='w',pady=3)
+            ttk.Label(row,text=label,width=34,style='Panel.TLabel').pack(side='left',padx=(0,12))
+            ttk.Entry(row,textvariable=var,width=26).pack(side='left')
+        ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var,
+                        style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
+        ttk.Checkbutton(panel,text='I control both accounts and agree to the transfer',variable=self.coffee_consent_var,
+                        style='Panel.TCheckbutton').pack(anchor='w')
+        buttons=ttk.Frame(panel,style='Panel.TFrame')
+        buttons.pack(anchor='w',pady=(8,3))
         for text,command in (('Collect cup 1',lambda:self._coffee_manual('Collect hand item',1)),
                              ('Collect cup 2',lambda:self._coffee_manual('Collect hand item',2)),
                              ('Pass held cup',lambda:self._coffee_manual('Pass hand item')),
                              ('Save settings',self._coffee_save_settings)):
             ttk.Button(buttons,text=text,command=command).pack(side='left',padx=(0,4))
-        runs=ttk.Frame(panel)
-        runs.pack(fill='x',pady=3)
-        ttk.Button(runs,text='Start run (own accounts)',command=self._coffee_start_run).pack(side='left',padx=(0,4))
-        ttk.Button(runs,text='STOP',command=self._coffee_stop_run).pack(side='left')
+        runs=ttk.Frame(panel,style='Panel.TFrame')
+        runs.pack(anchor='w',pady=(5,8))
+        ttk.Button(runs,text='Start run (own accounts)',style='Primary.TButton',
+                   command=self._coffee_start_run).pack(side='left',padx=(0,7))
+        ttk.Button(runs,text='STOP',style='Danger.TButton',
+                   command=self._coffee_stop_run).pack(side='left')
         ttk.Label(panel,textvariable=self.coffee_status_var,style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,0))
-        group=ttk.LabelFrame(panel,text='Connected account settings & status',padding=7)
-        group.pack(fill='x',pady=(10,0))
+        ttk.Label(content,text='CONNECTED ACCOUNTS',style='Section.TLabel').pack(anchor='w',pady=(4,8))
+        group=ttk.Frame(content,style='Panel.TFrame')
+        group.pack(anchor='nw',pady=(0,8))
         self.coffee_group_tree=ttk.Treeview(group,columns=('room','item','run'),
             show='tree headings',selectmode='extended',height=5)
         for key,label,width in (('#0','Account',180),('room','Room',90),
@@ -6492,8 +6528,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_group_tree.column(key,width=width,minwidth=65,stretch=True)
         self.coffee_group_tree.pack(fill='x',pady=(0,5))
         self.coffee_group_status_var=tk.StringVar(value='Highlight accounts to apply shared settings.')
-        group_buttons=ttk.Frame(group)
-        group_buttons.pack(fill='x')
+        group_buttons=ttk.Frame(group,style='Panel.TFrame')
+        group_buttons.pack(anchor='w')
         for label,command in (
                 ('Select all connected',self._coffee_group_select_all),
                 ('Deselect all',self._coffee_group_clear),
