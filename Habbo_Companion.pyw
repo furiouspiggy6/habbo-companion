@@ -6402,9 +6402,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         self.bot_follow_target_var=tk.StringVar(value='')
         self.bot_follow_status_var=tk.StringVar(value='Follow is off.')
-        self.bot_follow_picker=ttk.Combobox(frame,textvariable=self.bot_follow_target_var,
-                                            state='readonly',width=42)
-        self.bot_follow_picker.pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='Target Habbo username',style='Panel.TLabel').pack(anchor='w')
+        ttk.Entry(frame,textvariable=self.bot_follow_target_var,width=42).pack(anchor='w',pady=(3,5))
         follow_buttons=ttk.Frame(frame,style='Panel.TFrame')
         follow_buttons.pack(anchor='w',pady=(0,5))
         ttk.Button(follow_buttons,text='Start following',style='Primary.TButton',
@@ -6957,10 +6956,6 @@ class ChatOverlayApp(PersonaResponderMixin):
             if session is not None and session.authenticated and not session.stop.is_set():
                 items.append(account['label']+' ['+account['id'][:6]+']')
         picker.configure(values=items)
-        if hasattr(self,'bot_follow_picker'):
-            self.bot_follow_picker.configure(values=items)
-            if self.bot_follow_target_var.get() not in items:
-                self.bot_follow_target_var.set('')
         # Do not silently transfer a user's action to another account.
         if self.bot_action_account_var.get() not in items:
             self.bot_action_account_var.set('')
@@ -7397,18 +7392,29 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_follow_start(self):
         follower=self._bot_selected_profile()
-        label=self.bot_follow_target_var.get()
-        leader=next((a for a in self._account_profiles
-                     if a['label']+' ['+a['id'][:6]+']'==label),None)
+        username=self.bot_follow_target_var.get().strip()
         if self._bot_follow_run is not None:
             self.bot_follow_status_var.set('Stop the current follow session before starting another.')
             return
         try:
-            if follower is None or leader is None or follower['id']==leader['id']:
-                raise ClientlessBotError('Select two different connected accounts.')
-            ident,peer=follower['id'],leader['id']
+            if follower is None or not username:
+                raise ClientlessBotError('Select a follower and enter the target Habbo username.')
+            ident=follower['id']
             state,own,_=self._coffee_context(ident)
-            other,target,_=self._coffee_context(peer)
+            matches=[uid for uid,unit in state['players'].items()
+                     if unit[1].casefold()==username.casefold() and uid!=own]
+            if len(matches)!=1:
+                raise ClientlessBotError('Enter the exact username of another avatar in this room.')
+            target=matches[0]
+            peers=[a['id'] for a in self._account_profiles if a['id']!=ident
+                   and self._coffee_session(a['id']) is not None
+                   and self._bot_self_ids.get(a['id'])==target]
+            if len(peers)!=1:
+                raise ClientlessBotError('The target must be another connected account you control.')
+            peer=peers[0]
+            other,peer_uid,_=self._coffee_context(peer)
+            if peer_uid!=target:
+                raise ClientlessBotError('Target identity changed; select the username again.')
             if state['room']!=other['room'] or target not in state['players'] or own not in other['players']:
                 raise ClientlessBotError('Both accounts must be visible in the same room.')
             if ident not in self._bot_anti_afk_positions or peer not in self._bot_anti_afk_positions:
@@ -7416,9 +7422,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._bot_walk_plans.pop(ident,None)
             run=dict(id=ident,peer=peer,generation=state['generation'],
                      peer_generation=other['generation'],room=state['room'],
-                     last_target=None,last_sent=None,label=leader['label'])
+                     last_target=None,last_sent=None,label=state['players'][target][1])
             self._bot_follow_run=run
-            self.bot_follow_status_var.set('Following '+leader['label']+' in this room.')
+            self.bot_follow_status_var.set('Following '+run['label']+' in this room.')
             self._bot_follow_tick(run)
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._bot_follow_stop(str(exc)[:160])

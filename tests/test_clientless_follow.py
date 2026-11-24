@@ -28,9 +28,10 @@ class FollowTests(TestCase):
             _bot_anti_afk_positions={a['id']:(10,1,1),b['id']:(20,5,5)},
             _bot_anti_afk_rooms={a['id']:99,b['id']:99},
             _bot_walk_plans={},_bot_action_inflight=set(),_bot_last_action_at={},
+            _bot_self_ids={a['id']:1,b['id']:2},
             _coffee_session=lambda ident:session,_bot_headers=None,
             _bot_action_worker=Mock(),root=Mock())
-        app.bot_follow_target_var.get.return_value='B [bcdefa]'
+        app.bot_follow_target_var.get.return_value=' b '
         for name in names:setattr(app,name,scope[name].__get__(app))
         scope['threading'].Thread.reset_mock()
         scope['encode_clientless_action'].reset_mock()
@@ -52,7 +53,7 @@ class FollowTests(TestCase):
         self.assertEqual(scope['threading'].Thread.call_count,1)
 
     def test_reject_unknown_or_self(self):
-        for label in ('Unknown','A [abcdef]'):
+        for label in ('Unknown','A',''):
             app=self.make_app()
             app.bot_follow_target_var.get.return_value=label
             app._bot_follow_start()
@@ -67,3 +68,12 @@ class FollowTests(TestCase):
         app._bot_follow_tick(run)
         self.assertIsNone(app._bot_follow_run)
         self.assertEqual(scope['threading'].Thread.call_count,1)
+
+    def test_reject_unconnected_room_avatar(self):
+        app=self.make_app()
+        state,_,_=app._coffee_context('abcdef')
+        state['players'][3]=(30,'Visitor')
+        app.bot_follow_target_var.get.return_value='Visitor'
+        app._bot_follow_start()
+        self.assertIsNone(app._bot_follow_run)
+        scope['threading'].Thread.assert_not_called()
