@@ -313,7 +313,7 @@ def _walk_byte(payload,offset):
     return payload[offset],offset+1
 
 
-def _walk_user_roster(payload, include_names=False):
+def _walk_user_roster(payload, include_names=False, bots_only=False):
     """Parse bounded AIR Users, returning *only numeric* user -> room indexes.
 
     Names, figures and other personal profile metadata are discarded.
@@ -345,7 +345,8 @@ def _walk_user_roster(payload, include_names=False):
             _,at=_walk_byte(payload,at) # is moderator
             _,at=_walk_int(payload,at) # badge rank
             if user_id>0 and 0<=room_index<=100000 and 0<=x<=1023 and 0<=y<=1023:
-                users[user_id]=((room_index,username) if include_names else (room_index,x,y))
+                if not bots_only:
+                    users[user_id]=((room_index,username) if include_names else (room_index,x,y))
         elif unit_type==2: # Pet
             _,at=_walk_int(payload,at) # subtype
             _,at=_walk_int(payload,at) # owner
@@ -368,6 +369,9 @@ def _walk_user_roster(payload, include_names=False):
                 _,at=_walk_short(payload,at)
         else:
             raise ValueError("Unknown user type.")
+        if (bots_only and unit_type in (3,4) and 0<=room_index<=100000
+            and 0<=x<=1023 and 0<=y<=1023 and 0<len(username)<=64):
+            users[room_index]=(username,x,y,user_id)
     if at!=len(payload):
         raise ValueError("Unexpected room roster tail.")
     return users
@@ -426,6 +430,17 @@ def decode_clientless_room_observation(release, packet_id, payload):
     except (ValueError,UnicodeError,struct.error,OverflowError):
         return None
     return None
+
+
+def decode_clientless_room_bots(release,packet_id,payload):
+    """Only server-classified room bots; player-type avatars are excluded."""
+    if (release!=BUNDLED_AIR_RELEASE or packet_id!=_ROOM_UNITS
+        or not isinstance(payload,bytes) or not 4<=len(payload)<=16384):
+        return None
+    try:
+        return _walk_user_roster(payload,bots_only=True)
+    except (ValueError,UnicodeError,struct.error,OverflowError):
+        return None
 
 
 # Read-only, pinned AIR room-unit hand-item and removal parsers.

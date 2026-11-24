@@ -4,10 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock
-from clientless_bot import ClientlessBotError
+from clientless_bot import ClientlessBotError, decode_clientless_room_bots, BUNDLED_AIR_RELEASE
+import struct
 
 source=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
-names={'_bot_follow_start','_bot_follow_tick','_bot_follow_stop'}
+names={'_bot_follow_start','_bot_follow_tick','_bot_follow_stop','_bot_follow_observe'}
 nodes=[n for n in ast.walk(ast.parse(source.read_text(encoding='utf-8')))
        if isinstance(n,ast.FunctionDef) and n.name in names]
 scope={'ClientlessBotError':ClientlessBotError,'time':SimpleNamespace(monotonic=lambda:100),
@@ -28,7 +29,7 @@ class FollowTests(TestCase):
             _bot_anti_afk_positions={a['id']:(10,1,1),b['id']:(20,5,5)},
             _bot_anti_afk_rooms={a['id']:99,b['id']:99},
             _bot_walk_plans={},_bot_action_inflight=set(),_bot_last_action_at={},
-            _bot_self_ids={a['id']:1,b['id']:2},
+            _bot_self_ids={a['id']:1,b['id']:2},_bot_follow_room_bots={},
             _coffee_session=lambda ident:session,_bot_headers=None,
             _bot_action_worker=Mock(),root=Mock())
         app.bot_follow_target_var.get.return_value=' b '
@@ -77,3 +78,28 @@ class FollowTests(TestCase):
         app._bot_follow_start()
         self.assertIsNone(app._bot_follow_run)
         scope['threading'].Thread.assert_not_called()
+
+    def test_room_bot_by_name_without_connected_peer(self):
+        app=self.make_app()
+        app._bot_follow_observe('abcdef',1,'ready',99)
+        app._bot_follow_observe('abcdef',1,'bots',{30:('RoomBot',5,5,77)})
+        app.bot_follow_target_var.get.return_value='roombot'
+        app._bot_follow_start()
+        run=app._bot_follow_run
+        self.assertIsNotNone(run)
+        self.assertIsNone(run['peer'])
+        scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=4,y=5)
+        app._bot_follow_observe('abcdef',1,'remove',30)
+        app._bot_follow_tick(run)
+        self.assertIsNone(app._bot_follow_run)
+
+    def test_decodes_server_classified_bot(self):
+        def s(v):
+            b=v.encode()
+            return struct.pack('>H',len(b))+b
+        unit=(struct.pack('>i',77)+s('RoomBot')+s('')+s('')+
+              struct.pack('>iii',30,5,5)+s('0')+struct.pack('>ii',0,3))
+        payload=struct.pack('>i',1)+unit
+        self.assertEqual(decode_clientless_room_bots(BUNDLED_AIR_RELEASE,3357,payload),
+                         {30:('RoomBot',5,5,77)})
+        self.assertIsNone(decode_clientless_room_bots('unknown',3357,payload))

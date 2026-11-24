@@ -18,7 +18,7 @@ from clientless_gearth_bridge import (
 from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
     encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,
-    clientless_walk_positions, decode_clientless_room_observation,
+    clientless_walk_positions, decode_clientless_room_observation, decode_clientless_room_bots,
     decode_clientless_hand_observation, validate_clientless_coffee_settings)
 import ctypes
 import csv
@@ -5343,6 +5343,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_gearth_bridges={}
         self._bot_walk_plans={}
         self._bot_follow_run=None
+        self._bot_follow_room_bots={}
         self._bot_self_ids={}
         self._bot_user_roster={}
         self._coffee_room_state={}
@@ -6397,7 +6398,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='FOLLOW USER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Follow another connected account you control in the same room. '
+        ttk.Label(frame,text='Follow a named room bot or another connected account you control in the same room. '
                   'The selected profile above is the follower; no automatic room changes.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         self.bot_follow_target_var=tk.StringVar(value='')
@@ -7386,6 +7387,27 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.root.after(800,lambda uid=ident,gen=generation:
                             self._bot_walk_tick(uid,gen))
 
+    def _bot_follow_observe(self,ident,generation,kind,value):
+        if kind=='ready':
+            self._bot_follow_room_bots[ident]=dict(generation=generation,room=value,units={})
+            return
+        cache=self._bot_follow_room_bots.get(ident)
+        if not cache or cache['generation']!=generation:return
+        units=cache['units']
+        if kind=='bots':
+            units.update(value)
+            if len(units)>200:units.clear()
+        elif kind=='status':
+            for idx,x,y,_ in value:
+                if idx in units:
+                    name,_,_,uid=units[idx]
+                    units[idx]=(name,x,y,uid)
+        elif kind=='remove':
+            units.pop(value,None)
+        elif kind=='players':
+            for unit in value.values():
+                units.pop(unit[0],None)
+
     def _bot_follow_stop(self,message='Follow stopped.'):
         self._bot_follow_run=None
         self.bot_follow_status_var.set(message)
@@ -7401,10 +7423,24 @@ class ChatOverlayApp(PersonaResponderMixin):
                 raise ClientlessBotError('Select a follower and enter the target Habbo username.')
             ident=follower['id']
             state,own,_=self._coffee_context(ident)
+            bots=getattr(self,'_bot_follow_room_bots',{}).get(ident,{})
+            entries=bots.get('units',{}) if bots.get('generation')==state['generation'] and bots.get('room')==state['room'] else {}
+            targets=[(idx,u) for idx,u in entries.items() if u[0].casefold()==username.casefold()]
             matches=[uid for uid,unit in state['players'].items()
                      if unit[1].casefold()==username.casefold() and uid!=own]
-            if len(matches)!=1:
-                raise ClientlessBotError('Enter the exact username of another avatar in this room.')
+            if len(targets)+len(matches)!=1:
+                raise ClientlessBotError('Enter an unambiguous room bot or connected avatar username.')
+            if targets:
+                idx,unit=targets[0]
+                if ident not in self._bot_anti_afk_positions:
+                    raise ClientlessBotError('Wait for your confirmed avatar position.')
+                self._bot_walk_plans.pop(ident,None)
+                run=dict(id=ident,peer=None,generation=state['generation'],room=state['room'],
+                         bot_index=idx,bot_id=unit[3],last_target=None,last_sent=None,label=unit[0])
+                self._bot_follow_run=run
+                self.bot_follow_status_var.set('Following room bot '+unit[0]+'.')
+                self._bot_follow_tick(run)
+                return
             target=matches[0]
             peers=[a['id'] for a in self._account_profiles if a['id']!=ident
                    and self._coffee_session(a['id']) is not None
@@ -7434,15 +7470,24 @@ class ChatOverlayApp(PersonaResponderMixin):
         ident,peer=run['id'],run['peer']
         try:
             state,own,index=self._coffee_context(ident)
-            other,target,peer_index=self._coffee_context(peer)
-            if (state['generation']!=run['generation'] or other['generation']!=run['peer_generation']
-                or state['room']!=run['room'] or other['room']!=run['room']
-                or target not in state['players'] or own not in other['players']
-                or self._bot_anti_afk_rooms.get(ident)!=run['room']
-                or self._bot_anti_afk_rooms.get(peer)!=run['room']):
+            if state['generation']!=run['generation'] or state['room']!=run['room'] or self._bot_anti_afk_rooms.get(ident)!=run['room']:
                 raise ClientlessBotError('Follow stopped: account or room changed.')
             pos=self._bot_anti_afk_positions.get(ident)
-            lead=self._bot_anti_afk_positions.get(peer)
+            if peer is None:
+                bots=self._bot_follow_room_bots.get(ident,{})
+                peer_index=run['bot_index']
+                unit=bots.get('units',{}).get(peer_index)
+                if (bots.get('generation')!=run['generation'] or bots.get('room')!=run['room']
+                    or unit is None or unit[3]!=run['bot_id'] or unit[0]!=run['label']):
+                    raise ClientlessBotError('Follow stopped: room bot left or changed.')
+                lead=(peer_index,unit[1],unit[2])
+            else:
+                other,target,peer_index=self._coffee_context(peer)
+                if (other['generation']!=run['peer_generation'] or other['room']!=run['room']
+                    or target not in state['players'] or own not in other['players']
+                    or self._bot_anti_afk_rooms.get(peer)!=run['room']):
+                    raise ClientlessBotError('Follow stopped: account or room changed.')
+                lead=self._bot_anti_afk_positions.get(peer)
             if pos is None or lead is None or pos[0]!=index or lead[0]!=peer_index:
                 raise ClientlessBotError('Follow stopped: avatar position unavailable.')
             x,y=pos[1:]
@@ -7999,6 +8044,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         observed=decode_clientless_room_observation(session.release,packet_id,body)
         if observed is not None:
             self._packet_put(('bot_walk_observation',ident,generation,observed))
+        bots=decode_clientless_room_bots(session.release,packet_id,body)
+        if bots is not None:
+            self._packet_put(('bot_room_bots',ident,generation,bots))
         hand=decode_clientless_hand_observation(session.release,packet_id,body)
         if hand is not None:
             self._packet_put(('bot_hand_observation',ident,generation,hand))
@@ -13045,15 +13093,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                      f' ({count} packet(s)). Server application not verified.'
                      if error is None else label+': Clientless action failed: '+error))
                 continue
+            if item[0]=='bot_room_bots':
+                _,ident,generation,bots=item
+                if generation==self._tcp_generation.get(ident,0):
+                    self._bot_follow_observe(ident,generation,'bots',bots)
+                continue
             if item[0]=='bot_hand_observation':
                 _,ident,generation,observation=item
                 if generation==self._tcp_generation.get(ident,0):
                     self._coffee_observe(ident,generation,observation)
+                    self._bot_follow_observe(ident,generation,*observation)
                 continue
             if item[0]=='bot_walk_observation':
                 _,ident,generation,observation=item
                 if generation==self._tcp_generation.get(ident,0):
                     self._bot_receive_walk_observation(ident,generation,observation)
+                    self._bot_follow_observe(ident,generation,*observation)
                 continue
             if item[0]=='bot_chat':
                 _,ident,generation,kind,index,message=item
