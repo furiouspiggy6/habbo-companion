@@ -17,11 +17,13 @@ import struct
 OUTGOING_ACTION_NAMES = (
     "GetGuestRoom", "Quit", "MoveAvatar", "LookTo", "Chat",
     "Shout", "Whisper", "Dance", "Sign", "ChangePosture",
+    "UseFurniture", "PassCarryItem",
 )
 INCOMING_OBSERVED_NAMES = ("Chat", "Shout", "Whisper", "RoomReady")
 _ALLOWED_INTS = {
     "dance": (0, 4), "sign": (0, 14), "posture": (0, 1),
     "x": (0, 1023), "y": (0, 1023), "room": (1, 2147483647),
+    "furniture": (1, 2147483647), "recipient_id": (1, 2147483647),
 }
 _RELEASE_PATTERN = re.compile(r"^WIN63-[0-9]{12}-[0-9]{5,}$")
 _USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,32}$")
@@ -43,6 +45,8 @@ BUNDLED_AIR_HEADERS = {
         "GetGuestRoom": 216, "MoveAvatar": 2995, "LookTo": 2574,
         "Chat": 3463, "Shout": 3079, "Whisper": 3523,
         "Dance": 1366, "Sign": 207, "ChangePosture": 1117,
+        # Pinned Volt source: FurnitureMultiState and RoomUnitGiveHandItem.
+        "UseFurniture": 3753, "PassCarryItem": 3129,
         # No verified Quit header in the pinned source: leave it unavailable.
     },
     "incoming": {
@@ -128,6 +132,10 @@ def build_clientless_action(action, **kwargs):
             raise ClientlessBotError("Enter a valid Habbo recipient username.")
         text = _text_arg(kwargs.get("text"), 128)
         return (("Whisper", _packet_string(recipient+" "+text)+_integer(0)),)
+    if action == "Collect hand item":
+        return (("UseFurniture", _integer(_int_arg(kwargs.get("furniture"), "furniture"))+_integer(0)),)
+    if action == "Pass hand item":
+        return (("PassCarryItem", _integer(_int_arg(kwargs.get("recipient_id"), "recipient_id"))),)
     if action == "Dance":
         return (("Dance", _integer(_int_arg(kwargs.get("dance"), "dance"))),)
     if action == "Sign":
@@ -305,7 +313,7 @@ def _walk_byte(payload,offset):
     return payload[offset],offset+1
 
 
-def _walk_user_roster(payload):
+def _walk_user_roster(payload, include_names=False):
     """Parse bounded AIR Users, returning *only numeric* user -> room indexes.
 
     Names, figures and other personal profile metadata are discarded.
@@ -318,7 +326,7 @@ def _walk_user_roster(payload):
     users={}
     for _ in range(count):
         user_id,at=_walk_int(payload,at)
-        _,at=_walk_string(payload,at) # username (not retained)
+        username,at=_walk_string(payload,at) # retained only for explicit hand-item controls
         _,at=_walk_string(payload,at) # custom
         _,at=_walk_string(payload,at) # figure
         room_index,at=_walk_int(payload,at)
@@ -337,7 +345,7 @@ def _walk_user_roster(payload):
             _,at=_walk_byte(payload,at) # is moderator
             _,at=_walk_int(payload,at) # badge rank
             if user_id>0 and 0<=room_index<=100000 and 0<=x<=1023 and 0<=y<=1023:
-                users[user_id]=(room_index,x,y)
+                users[user_id]=((room_index,username) if include_names else (room_index,x,y))
         elif unit_type==2: # Pet
             _,at=_walk_int(payload,at) # subtype
             _,at=_walk_int(payload,at) # owner
@@ -418,3 +426,40 @@ def decode_clientless_room_observation(release, packet_id, payload):
     except (ValueError,UnicodeError,struct.error,OverflowError):
         return None
     return None
+
+
+# Read-only, pinned AIR room-unit hand-item and removal parsers.
+def decode_clientless_hand_observation(release, packet_id, payload):
+    if release!=BUNDLED_AIR_RELEASE or not isinstance(payload,bytes):
+        return None
+    try:
+        if packet_id==_ROOM_ENTER and len(payload)==4:
+            room=struct.unpack(">i",payload)[0]
+            return ("room",room) if room>0 else None
+        if packet_id==_ROOM_UNITS and 4<=len(payload)<=16384:
+            return ("players",_walk_user_roster(payload,include_names=True))
+        if packet_id==1548 and len(payload)==8:
+            index,item=struct.unpack(">ii",payload)
+            return ("carry",(index,item)) if 0<=index<=100000 and 0<=item<=100000 else None
+        if packet_id==2675 and 2<=len(payload)<=10:
+            value,end=_walk_string(payload,0)
+            if end==len(payload) and value.isascii() and value.isdecimal() and 0<=int(value)<=100000:
+                return ("remove",int(value))
+    except (ValueError,UnicodeError,struct.error,OverflowError):
+        return None
+    return None
+
+
+def validate_clientless_coffee_settings(cup_one,cup_two,delay,count):
+    """Validate typed controls without permitting unbounded repetition."""
+    try:
+        ids=tuple(_int_arg(int(str(v).strip()),"furniture") for v in (cup_one,cup_two))
+        seconds=float(str(delay).strip())
+        quantity=int(str(count).strip())
+    except (ValueError,TypeError,OverflowError) as exc:
+        raise ClientlessBotError("Enter valid furniture IDs, delay and quantity.") from exc
+    if ids[0]==ids[1]:
+        raise ClientlessBotError("Choose two different furniture IDs.")
+    if not 10<=seconds<=3600 or not 1<=quantity<=5:
+        raise ClientlessBotError("Enter a delay from 10 to 3600 seconds and 1 to 5 cups.")
+    return ids,seconds,quantity

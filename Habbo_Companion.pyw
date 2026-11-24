@@ -18,7 +18,8 @@ from clientless_gearth_bridge import (
 from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
     encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,
-    clientless_walk_positions, decode_clientless_room_observation)
+    clientless_walk_positions, decode_clientless_room_observation,
+    decode_clientless_hand_observation, validate_clientless_coffee_settings)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -652,6 +653,7 @@ DEFAULT = dict(
     # Optional overrides for each saved account; fallback is room-wide preset.
     clientless_account_walk_presets={},
     clientless_anti_afk_profiles={},
+    clientless_coffee_presets={},
     responder_persona='Mario35',
     responder_target='',
     responder_rotation=False,
@@ -5342,6 +5344,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_walk_plans={}
         self._bot_self_ids={}
         self._bot_user_roster={}
+        self._coffee_room_state={}
+        self._coffee_run=None
+        self._coffee_last_pass=0.0
+        self._coffee_last_pickup=0.0
         # Read-only, generation-scoped avatar location for stationary anti-AFK.
         self._bot_anti_afk_rooms={}
         self._bot_anti_afk_positions={}
@@ -6405,6 +6411,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
         ttk.Label(frame,textvariable=self.bot_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        self._make_clientless_coffee_panel(frame)
         ttk.Label(frame,text='Incoming text-only chat (when current-release '
                   'incoming headers are mapped). The original AIR bubble '
                   'feed remains separate. No automatic replies or bulk actions.',
@@ -6431,8 +6438,265 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_account_var.set(items[0] if items else '')
         self._bot_anti_afk_load_selected()
         self._bot_refresh_action_accounts()
+        self._coffee_refresh_accounts()
         if hasattr(self,'bot_multi_tree'):
             self._bot_multi_refresh()
+
+    def _make_clientless_coffee_panel(self,frame):
+        panel=ttk.LabelFrame(frame,text='COFFEE PASS — CLIENTLESS',padding=10)
+        panel.pack(fill='x',pady=(4,12))
+        self.coffee_account_var=tk.StringVar(value='')
+        self.coffee_account_picker=ttk.Combobox(panel,textvariable=self.coffee_account_var,state='readonly')
+        ttk.Label(panel,text='Connected account',style='Panel.TLabel').pack(anchor='w')
+        self.coffee_account_picker.pack(fill='x',pady=(3,7))
+        self.coffee_account_picker.bind('<<ComboboxSelected>>',lambda _event:self._coffee_load_settings())
+        self.coffee_recipient_var=tk.StringVar(value='')
+        self.coffee_one_var=tk.StringVar(value='476989081')
+        self.coffee_two_var=tk.StringVar(value='476989024')
+        self.coffee_delay_var=tk.StringVar(value='10')
+        self.coffee_count_var=tk.StringVar(value='5')
+        self.coffee_alternate_var=tk.BooleanVar(value=True)
+        self.coffee_consent_var=tk.BooleanVar(value=False)
+        self.coffee_status_var=tk.StringVar(value='Select a connected account in a room.')
+        for label,var in (('Recipient username or room player ID',self.coffee_recipient_var),
+                          ('Cup 1 furniture ID',self.coffee_one_var),
+                          ('Cup 2 furniture ID',self.coffee_two_var),
+                          ('Delay between cups (seconds)',self.coffee_delay_var),
+                          ('Cups per run',self.coffee_count_var)):
+            row=ttk.Frame(panel)
+            row.pack(fill='x',pady=2)
+            ttk.Label(row,text=label,width=36,style='Panel.TLabel').pack(side='left')
+            ttk.Entry(row,textvariable=var,width=22).pack(side='left')
+        ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var).pack(anchor='w')
+        ttk.Checkbutton(panel,text='I control both accounts and agree to the transfer',variable=self.coffee_consent_var).pack(anchor='w')
+        buttons=ttk.Frame(panel)
+        buttons.pack(fill='x',pady=(6,3))
+        for text,command in (('Collect cup 1',lambda:self._coffee_manual('Collect hand item',1)),
+                             ('Collect cup 2',lambda:self._coffee_manual('Collect hand item',2)),
+                             ('Pass held cup',lambda:self._coffee_manual('Pass hand item')),
+                             ('Save settings',self._coffee_save_settings)):
+            ttk.Button(buttons,text=text,command=command).pack(side='left',padx=(0,4))
+        runs=ttk.Frame(panel)
+        runs.pack(fill='x',pady=3)
+        ttk.Button(runs,text='Start run (own accounts)',command=self._coffee_start_run).pack(side='left',padx=(0,4))
+        ttk.Button(runs,text='STOP',command=self._coffee_stop_run).pack(side='left')
+        ttk.Label(panel,textvariable=self.coffee_status_var,style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,0))
+
+    def _coffee_refresh_accounts(self):
+        picker=getattr(self,'coffee_account_picker',None)
+        if picker is None:return
+        items=[a['label']+' ['+a['id'][:6]+']' for a in self._account_profiles
+               if self._coffee_session(a['id']) is not None]
+        picker.configure(values=items)
+        if self.coffee_account_var.get() not in items:
+            self.coffee_account_var.set('')
+            self.coffee_consent_var.set(False)
+        run=self._coffee_run
+        if run and (self._coffee_session(run['id']) is None or self._coffee_session(run['peer']) is None):
+            self._coffee_stop_run('Run stopped: account disconnected.')
+
+    def _coffee_session(self,ident):
+        session=self._tcp_sessions.get(ident)
+        if (session is None or not session.authenticated or session.stop.is_set()
+                or getattr(session,'gameplay_bridge',None) is not None):
+            return None
+        return session
+
+    def _coffee_selected(self):
+        selected=self.coffee_account_var.get()
+        return next((a for a in self._account_profiles
+                     if a['label']+' ['+a['id'][:6]+']'==selected and
+                     self._coffee_session(a['id']) is not None),None)
+
+    def _coffee_load_settings(self):
+        account=self._coffee_selected()
+        if account is None:return
+        raw=self.config.get('clientless_coffee_presets',{})
+        preset=raw.get(account['id'],{}) if isinstance(raw,dict) else {}
+        if not isinstance(preset,dict):preset={}
+        for key,var,default in (
+                ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024'),
+                ('delay',self.coffee_delay_var,'10'),('count',self.coffee_count_var,'5')):
+            var.set(str(preset.get(key,default)))
+        self.coffee_recipient_var.set('')
+        self.coffee_alternate_var.set(preset.get('alternate',True) is True)
+        self.coffee_consent_var.set(False)
+        self.coffee_status_var.set('Selected '+account['label']+'.')
+
+    def _coffee_settings(self):
+        return validate_clientless_coffee_settings(self.coffee_one_var.get(),
+            self.coffee_two_var.get(),self.coffee_delay_var.get(),self.coffee_count_var.get())
+
+    def _coffee_save_settings(self):
+        account=self._coffee_selected()
+        if account is None:
+            self.coffee_status_var.set('Select a connected account first.')
+            return
+        try:ids,seconds,count=self._coffee_settings()
+        except ClientlessBotError as exc:
+            self.coffee_status_var.set(str(exc));return
+        raw=self.config.get('clientless_coffee_presets',{})
+        presets=dict(raw) if isinstance(raw,dict) else {}
+        presets[account['id']]=dict(one=ids[0],two=ids[1],delay=seconds,count=count,
+                                    alternate=bool(self.coffee_alternate_var.get()))
+        self.config['clientless_coffee_presets']=presets
+        self.save()
+        self.coffee_status_var.set('Coffee settings saved for '+account['label']+'.')
+
+    def _coffee_observe(self,ident,generation,observation):
+        kind,value=observation
+        state=self._coffee_room_state.get(ident)
+        if kind=='room':
+            self._coffee_room_state[ident]=dict(generation=generation,room=value,players={},carry={})
+            if self._coffee_run and ident in (self._coffee_run['id'],self._coffee_run['peer']):
+                self._coffee_stop_run('Run stopped: room changed.')
+            return
+        if not state or state['generation']!=generation:return
+        if kind=='players':
+            state['players'].update(value)
+            if len(state['players'])>200:state['players'].clear()
+        elif kind=='remove':
+            state['players']={uid:unit for uid,unit in state['players'].items() if unit[0]!=value}
+            state['carry'].pop(value,None)
+        elif kind=='carry':
+            index,item=value
+            if any(unit[0]==index for unit in state['players'].values()):
+                state['carry'][index]=(item,time.monotonic())
+
+    def _coffee_context(self,ident):
+        state=self._coffee_room_state.get(ident)
+        if (self._coffee_session(ident) is None or not state or
+            state['generation']!=self._tcp_generation.get(ident,0)):
+            raise ClientlessBotError('Join a room and wait for the server room roster.')
+        own=self._bot_self_ids.get(ident)
+        unit=state['players'].get(own)
+        if unit is None:raise ClientlessBotError('Your avatar has not been identified in this room.')
+        return state,own,unit[0]
+
+    def _coffee_target(self,state,own):
+        text=self.coffee_recipient_var.get().strip()
+        matches=[uid for uid,unit in state['players'].items() if uid!=own and
+                 (str(uid)==text or unit[1].casefold()==text.casefold())]
+        if not text or len(matches)!=1:
+            raise ClientlessBotError('Enter an unambiguous player currently in the room.')
+        return matches[0]
+
+    def _coffee_send(self,ident,action,**kwargs):
+        session=self._coffee_session(ident)
+        if session is None:raise ClientlessBotError('Account is not connected by Direct TCP.')
+        if ident in self._bot_action_inflight:raise ClientlessBotError('Previous action is still sending.')
+        now=time.monotonic()
+        if now-self._bot_last_action_at.get(ident,0)<0.4:
+            raise ClientlessBotError('Previous action is still settling.')
+        last=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
+        if now-last<10:raise ClientlessBotError('Please wait before sending another hand-item action.')
+        packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
+        generation=self._tcp_generation.get(ident,0)
+        self._bot_action_inflight.add(ident)
+        self._bot_last_action_at[ident]=now
+        if action=='Pass hand item':self._coffee_last_pass=now
+        else:self._coffee_last_pickup=now
+        threading.Thread(target=self._bot_action_worker,
+            args=(ident,generation,session,action,packets),daemon=True).start()
+        return now
+
+    def _coffee_manual(self,action,source=1):
+        if self._coffee_run:
+            self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
+        account=self._coffee_selected()
+        if account is None:
+            self.coffee_status_var.set('Select a connected account.');return
+        ident=account['id']
+        try:
+            state,own,index=self._coffee_context(ident)
+            if action=='Pass hand item':
+                if state['carry'].get(index,(0,0))[0]<=0:
+                    raise ClientlessBotError('Wait for your avatar to receive a hand item.')
+                target=self._coffee_target(state,own)
+                self._coffee_send(ident,action,recipient_id=target)
+                state['carry'].pop(index,None)
+            else:
+                ids,_,_=self._coffee_settings()
+                self._coffee_send(ident,action,furniture=ids[source-1])
+                state['carry'].pop(index,None)
+            self.coffee_status_var.set(account['label']+': request sent; waiting for server activity.')
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self.coffee_status_var.set(str(exc)[:180])
+
+    def _coffee_start_run(self):
+        if self._coffee_run:
+            self.coffee_status_var.set('A coffee run is already active.');return
+        account=self._coffee_selected()
+        if account is None:
+            self.coffee_status_var.set('Select a connected account.');return
+        ident=account['id']
+        try:
+            ids,seconds,count=self._coffee_settings()
+            state,own,index=self._coffee_context(ident)
+            target=self._coffee_target(state,own)
+            if not self.coffee_consent_var.get():
+                raise ClientlessBotError('Confirm you control both accounts before starting a run.')
+            peer=next((a['id'] for a in self._account_profiles
+                       if a['id']!=ident and self._coffee_session(a['id']) is not None
+                       and self._bot_self_ids.get(a['id'])==target),None)
+            if peer is None:
+                raise ClientlessBotError('Automated runs require a second connected account you control. Use manual Pass for other players.')
+            other,_,_=self._coffee_context(peer)
+            if other['room']!=state['room'] or own not in other['players']:
+                raise ClientlessBotError('Both accounts must be confirmed in the same room.')
+            self._coffee_run=dict(id=ident,peer=peer,target=target,
+                generation=state['generation'],peer_generation=other['generation'],
+                room=state['room'],ids=ids,delay=seconds,count=count,done=0,
+                alternate=bool(self.coffee_alternate_var.get()),phase='next',at=time.monotonic())
+            self._coffee_tick(self._coffee_run)
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self._coffee_stop_run(str(exc)[:180])
+
+    def _coffee_stop_run(self,message='Coffee run stopped.'):
+        self._coffee_run=None
+        self.coffee_status_var.set(message)
+
+    def _coffee_tick(self,run):
+        if self._coffee_run is not run:return
+        try:
+            ident=run['id']
+            state,own,index=self._coffee_context(ident)
+            other,peer_id,_=self._coffee_context(run['peer'])
+            if (state['generation']!=run['generation'] or other['generation']!=run['peer_generation']
+                or state['room']!=run['room'] or other['room']!=run['room']
+                or peer_id!=run['target'] or peer_id not in state['players'] or own not in other['players']):
+                raise ClientlessBotError('Run stopped: account or room changed.')
+            now=time.monotonic()
+            phase=run['phase']
+            if phase=='next' and now>=max(run['at'],self._coffee_last_pickup+10):
+                if state['carry'].get(index,(0,0))[0]>0:
+                    raise ClientlessBotError('Run stopped: avatar already holds an item.')
+                slot=run['done']%2 if run['alternate'] else 0
+                run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot])
+                run['phase']='pickup'
+            elif phase=='pickup':
+                item,seen=state['carry'].get(index,(0,0))
+                if now-run['at']>20:
+                    raise ClientlessBotError('Run stopped: pickup was not confirmed.')
+                if (item>0 and seen>=run['at'] and ident not in self._bot_action_inflight
+                    and now>=self._coffee_last_pass+10 and now>=run['at']+0.4):
+                    run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
+                    run['phase']='pass'
+            elif phase=='pass':
+                item,seen=state['carry'].get(index,(0,0))
+                if now-run['at']>20:
+                    raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
+                if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
+                    run['done']+=1
+                    if run['done']>=run['count']:
+                        self._coffee_stop_run('Run complete: '+str(run['done'])+' releases observed. Receipt not verified.')
+                        return
+                    run['phase']='next'
+                    run['at']=now+run['delay']
+            self.coffee_status_var.set('Coffee run: '+str(run['done'])+'/'+str(run['count'])+' — '+run['phase'])
+            self.root.after(250,lambda:self._coffee_tick(run))
+        except (ValueError,TypeError,RuntimeError,OSError) as exc:
+            self._coffee_stop_run(str(exc)[:180])
 
     def _bot_select_only(self):
         self._bot_anti_afk_load_selected()
@@ -7398,6 +7662,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         observed=decode_clientless_room_observation(session.release,packet_id,body)
         if observed is not None:
             self._packet_put(('bot_walk_observation',ident,generation,observed))
+        hand=decode_clientless_hand_observation(session.release,packet_id,body)
+        if hand is not None:
+            self._packet_put(('bot_hand_observation',ident,generation,hand))
         try:
             parsed=decode_clientless_chat(mapping,session.release,packet_id,body)
         except (ClientlessBotError,ValueError,TypeError):
@@ -7707,6 +7974,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_pending_room.pop(ident,None)
         self._bot_run_room_targets.pop(ident,None)
         self._bot_multi_direct_ids.discard(ident)
+        getattr(self,'_coffee_room_state',{}).pop(ident,None)
         bridge=self._bot_gearth_bridges.pop(ident,None)
         if bridge is not None:bridge.close()
         self._bot_walk_plans.pop(ident,None)
@@ -12403,6 +12671,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 self._bot_action_inflight.discard(ident)
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
+                if action in ('Collect hand item','Pass hand item'):
+                    if error is not None:
+                        if self._coffee_run and self._coffee_run['id']==ident:
+                            self._coffee_stop_run('Run stopped: '+error)
+                        else:self.coffee_status_var.set('Hand-item action failed: '+error)
                 if error is None and action!='Anti-AFK':
                     # Ordinary user actions postpone automatic idle refreshes.
                     self._bot_anti_afk_last[ident]=time.monotonic()
@@ -12429,6 +12702,11 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                     (label+': Direct TCP local send accepted: '+action+
                      f' ({count} packet(s)). Server application not verified.'
                      if error is None else label+': Clientless action failed: '+error))
+                continue
+            if item[0]=='bot_hand_observation':
+                _,ident,generation,observation=item
+                if generation==self._tcp_generation.get(ident,0):
+                    self._coffee_observe(ident,generation,observation)
                 continue
             if item[0]=='bot_walk_observation':
                 _,ident,generation,observation=item

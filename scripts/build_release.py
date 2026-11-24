@@ -29,7 +29,8 @@ BOT_IMPORT = (
     "from clientless_bot import (ClientlessBotError, build_clientless_action,\n"
     "    capture_clientless_headers, validate_clientless_headers,\n"
     "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,\n"
-    "    clientless_walk_positions, decode_clientless_room_observation)\n"
+    "    clientless_walk_positions, decode_clientless_room_observation,\n"
+    "    decode_clientless_hand_observation, validate_clientless_coffee_settings)\n"
 )
 BRIDGE_IMPORT = (
     "from clientless_gearth_bridge import (\n"

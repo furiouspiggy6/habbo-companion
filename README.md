@@ -1423,3 +1423,8 @@ from an unrecognised signed-in page, saved-login fallback, vault-write
 ordering, missing saved credentials, and cross-profile isolation.
 
 **Live Windows validation of the new account recovery branch is pending.**
+
+
+## v1.1.108 — Clientless Coffee Pass
+
+Direct TCP accounts can select a room player, collect a hand item from either editable furniture source, or manually pass a held item. Furniture defaults are 476989081 and 476989024. A bounded transfer run is available only between two authenticated accounts controlled by the user, with confirmed shared room membership and own-avatar hand-item observations. One run at a time; no retry or bulk start. Source-pinned WIN63 hand-item mappings are not live-verified. The existing G-Earth panel is unchanged.
