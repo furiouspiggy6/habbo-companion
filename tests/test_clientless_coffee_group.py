@@ -119,7 +119,7 @@ class CoffeeGroupTests(TestCase):
         scope['_coffee_tick'](app,batch)
         app._coffee_advance.assert_not_called()
 
-    def test_loop_alternates_to_room_player_without_a_companion_session(self):
+    def test_loop_alternates_to_room_player_without_release_confirmations(self):
         sender={'generation':1,'room':9,'players':{1:(0,'A'),2:(3,'B')},'carry':{}}
         app=SimpleNamespace(
             _coffee_run=None,_account_profiles=[{'id':'a','label':'A'}],
@@ -150,6 +150,8 @@ class CoffeeGroupTests(TestCase):
         def send(ident,action,**_args):
             cooldown=app._coffee_last_pickup if action=='Collect hand item' else app._coffee_last_pass
             cooldown[ident]=app._bot_last_action_at[ident]=clock.now
+            if action=='Pass hand item':
+                app._bot_action_inflight.add(ident)
             return clock.now
 
         app._coffee_send=Mock(side_effect=send)
@@ -175,12 +177,14 @@ class CoffeeGroupTests(TestCase):
                 clock.now+=0.5
                 app._coffee_tick(batch)
                 self.assertEqual(batch['runs'][0]['phase'],'pass')
-                sender['carry'][0]=(0,clock.now)
+                app._bot_action_inflight.remove('a')
                 app._coffee_tick(batch)
+                self.assertEqual(batch['runs'][0]['phase'],'next')
+                self.assertNotIn(0,sender['carry'])
 
             self.assertEqual(batch['runs'][0]['phase'],'next')
             self.assertIs(app._coffee_run,batch)
-            app.coffee_status_var.set.assert_called_with('Cup loop: 6 releases observed — 1/1 active sender(s)')
+            app.coffee_status_var.set.assert_called_with('Cup loop: 6 cup passes sent — 1/1 active sender(s)')
             pending_tick=app.root.after.call_args.args[1]
             app._coffee_stop_run()
             clock.now+=10
@@ -204,7 +208,7 @@ class CoffeeGroupTests(TestCase):
         app._coffee_stop_run.assert_called_once_with('Run stopped: recipient is no longer in the room.')
         app._coffee_send.assert_not_called()
 
-    def test_loop_passes_held_item_then_collects_the_scheduled_cup(self):
+    def test_loop_continues_after_sending_held_item_without_release_confirmation(self):
         advance=scope['_coffee_advance']
         for completed,next_cup in ((0,101),(1,202)):
             with self.subTest(completed=completed):
@@ -225,15 +229,15 @@ class CoffeeGroupTests(TestCase):
                 app._coffee_send.assert_called_once_with('a','Pass hand item',recipient_id=2)
                 self.assertEqual(run['phase'],'pass held item')
 
+                app._bot_action_inflight.add('a')
                 advance(app,run,105)
-                state['carry'][0]=(0,100.5)
-                advance(app,run,106)
                 self.assertEqual(run['phase'],'pass held item')
                 app._coffee_send.assert_called_once()
 
-                state['carry'][0]=(0,106)
+                app._bot_action_inflight.remove('a')
                 advance(app,run,106)
                 self.assertEqual((run['phase'],run['done']),('next',completed))
+                self.assertNotIn(0,state['carry'])
                 advance(app,run,107)
                 app._coffee_send.assert_called_once()
                 advance(app,run,108)
@@ -267,8 +271,8 @@ class CoffeeGroupTests(TestCase):
         self.assertEqual(c['phase'],'pickup')
         app._coffee_send.assert_called_once_with('c','Collect hand item',furniture=1)
 
-    def test_zero_extra_delay_retains_pickup_cooldown(self):
-        state={'generation':1,'room':1,'players':{2:(0,'B')},'carry':{0:(0,101)}}
+    def test_fixed_run_waits_for_release_and_retains_pickup_cooldown(self):
+        state={'generation':1,'room':1,'players':{2:(0,'B')},'carry':{0:(5,99)}}
         other={'generation':1,'room':1,'players':{1:(0,'A')},'carry':{}}
         app=SimpleNamespace(_coffee_context=lambda ident:(state,1,0) if ident=='a' else (other,2,0),
             _coffee_last_pickup={'a':95},_coffee_last_pass={'a':100},
@@ -276,6 +280,9 @@ class CoffeeGroupTests(TestCase):
             _coffee_send=Mock(return_value=105))
         run=dict(id='a',peer='b',target=2,generation=1,peer_generation=1,room=1,
             phase='pass',at=100,done=0,count=2,alternate=False,ids=(1,2),delay=0)
+        scope['_coffee_advance'](app,run,101)
+        self.assertEqual((run['phase'],run['done']),('pass',0))
+        state['carry'][0]=(0,101)
         scope['_coffee_advance'](app,run,101)
         self.assertEqual((run['phase'],run['at'],run['done']),('next',101,1))
         scope['_coffee_advance'](app,run,102)

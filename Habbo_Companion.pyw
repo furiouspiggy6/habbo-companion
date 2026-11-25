@@ -6491,7 +6491,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
         ttk.Button(panel,text='Copy Packet Manipulator delay',
                    command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
-        ttk.Label(panel,text='Requested minimum delay between actions; 0 removes extra waiting. Per-account cooldown and server confirmations still apply.',
+        ttk.Label(panel,text='The loop waits for pickup confirmation and continues after sending the pass. Delay and cooldowns still apply.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
         ttk.Checkbutton(panel,text='Alternate machines in fixed runs',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
@@ -6908,16 +6908,25 @@ class ChatOverlayApp(PersonaResponderMixin):
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
                 run['phase']='pass'
         elif phase in ('pass','pass held item'):
-            if now-run['at']>20:
-                raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
-            if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
-                if phase=='pass':
-                    run['done']+=1
-                if run['count'] is not None and run['done']>=run['count']:
-                    run['phase']='complete'
-                else:
-                    run['phase']='next'
-                    run['at']=now+run['delay']
+            if run['count'] is not None:
+                if now-run['at']>20:
+                    raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
+                if item!=0 or seen<run['at']:
+                    return
+            if ident in self._bot_action_inflight:
+                if now-run['at']>20:
+                    raise ClientlessBotError('Run stopped: pass send did not finish.')
+                return
+            if run['count'] is None and seen<=run['at']:
+                # Drop the pre-pass observation so it cannot trigger a second pass.
+                state['carry'].pop(index,None)
+            if phase=='pass':
+                run['done']+=1
+            if run['count'] is not None and run['done']>=run['count']:
+                run['phase']='complete'
+            else:
+                run['phase']='next'
+                run['at']=now+run['delay']
 
     def _coffee_tick(self,batch):
         if self._coffee_run is not batch:return
@@ -6934,7 +6943,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                     str(len(runs))+' sender(s); '+str(batch['skipped'])+' skipped. Receipt not verified.')
                 return
             if runs[0]['count'] is None:
-                progress=f'Cup loop: {done} releases observed'
+                progress=f'Cup loop: {done} cup passes sent'
             else:
                 total=sum(r['count'] for r in runs)
                 progress=f'Coffee run: {done}/{total}'
