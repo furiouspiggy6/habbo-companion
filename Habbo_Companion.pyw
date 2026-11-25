@@ -5327,6 +5327,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._tcp_inflight=set()
         self._tcp_generation={}
         self._tcp_states={}
+        self._tcp_log_packet_ids=False
         self._bot_headers=self.config.get('clientless_header_map')
         self._bot_action_inflight=set()
         self._bot_last_action_at={}
@@ -6187,8 +6188,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         tk.Label(f,textvariable=self.tcp_status_var,bg=COMPANION_UI['background'],
                  fg=COMPANION_UI['success'],justify='left',wraplength=615).pack(
                  anchor='w',fill='x',pady=(0,9))
-        ttk.Label(f,text='TCP connection steps and incoming packet IDs (secrets hidden)',
-                  style='Panel.TLabel').pack(anchor='w')
+        ttk.Label(f,text='TCP connection log',style='Panel.TLabel').pack(anchor='w')
+        show_packet_ids=tk.BooleanVar(value=self._tcp_log_packet_ids)
+
+        def update_packet_logging():
+            self._tcp_log_packet_ids=show_packet_ids.get()
+
+        ttk.Checkbutton(f,text='Show incoming packet IDs',variable=show_packet_ids,
+                        command=update_packet_logging,
+                        style='Panel.TCheckbutton').pack(anchor='w')
         self.tcp_log=tk.Text(f,height=5,state='disabled',
                              bg=COMPANION_UI['field'],fg=COMPANION_UI['muted'],
                              relief='flat',font=('Consolas',9))
@@ -8392,6 +8400,11 @@ class ChatOverlayApp(PersonaResponderMixin):
                             auto_capture=False):
         ident=account['id']
         session=None
+
+        def log_packet(packet_id,size):
+            if self._tcp_log_packet_ids:
+                self._packet_put(('tcp_packet',ident,generation,packet_id,size))
+
         try:
             if auto_capture and ticket is None:
                 ticket=account_import_session_automatically(
@@ -8438,8 +8451,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                 ident,
                 status=lambda msg:self._packet_put(
                     ('tcp_state',ident,generation,msg)),
-                packet=lambda packet_id,size:self._packet_put(
-                    ('tcp_packet',ident,generation,packet_id,size)),
+                packet=log_packet,
                 content=lambda packet_id,body:self._bot_observe_packet(
                     ident,generation,session,packet_id,body),
                 gameplay_bridge=bridge)

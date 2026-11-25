@@ -56,6 +56,10 @@ class HabboTcpError(Exception):
     """A valid TCP connection does not imply game authentication."""
 
 
+class _GameSocketClosed(HabboTcpError):
+    """The remote end closed the game connection."""
+
+
 def _valid_gamedata_redirect(url):
     """Only follow Habbo's same-origin content-hashed external variables."""
     try:
@@ -406,7 +410,7 @@ class HabboTcpSession:
             # from being prefetched past the DH -> encrypted framing boundary.
             block = sock.recv(amount - len(self._recv_pending))
             if not block:
-                raise HabboTcpError("Game socket closed by server")
+                raise _GameSocketClosed("Game socket closed by server")
             self._recv_bytes += len(block)
             self._recv_pending.extend(block)
         result = bytes(self._recv_pending[:amount])
@@ -475,6 +479,8 @@ class HabboTcpSession:
                 packet_id, payload = self._read()
             except socket.timeout:
                 continue
+            except _GameSocketClosed as exc:
+                raise HabboTcpError(f"Server closed during {stage}") from exc
             if packet_id == wanted:
                 return payload
             if packet_id == TCP_IN["ping"]:

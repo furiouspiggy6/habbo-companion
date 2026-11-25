@@ -90,6 +90,14 @@ try:
     app.arcturus_cases_var.set('20')
     assert app.rules_tree.winfo_exists(), 'Packet Manipulator failed to build'
     assert app.tcp_log.winfo_exists(), 'Server log failed to build'
+    packet_logging=next(widget for widget in app.tcp_log.master.winfo_children()
+                        if isinstance(widget,ttk.Checkbutton)
+                        and widget.cget('text')=='Show incoming packet IDs')
+    assert not app._tcp_log_packet_ids, 'Packet-ID logging should start off'
+    packet_logging.invoke()
+    assert app._tcp_log_packet_ids, 'Packet-ID logging could not be enabled'
+    packet_logging.invoke()
+    assert not app._tcp_log_packet_ids, 'Packet-ID logging could not be disabled'
     assert app.responder_log_text.winfo_exists(), (
         'AI Responder activity log missing')
     assert not app.responder.enabled, 'AI must start OFF'
