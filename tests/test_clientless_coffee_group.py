@@ -15,7 +15,7 @@ names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
        '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
        '_coffee_collect_all','_coffee_tick','_coffee_advance','_coffee_build_run',
-       '_coffee_settings','_coffee_stop_run')
+       '_coffee_settings','_coffee_stop_run','_coffee_context','_coffee_target','_coffee_observe')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
 
@@ -119,28 +119,30 @@ class CoffeeGroupTests(TestCase):
         scope['_coffee_tick'](app,batch)
         app._coffee_advance.assert_not_called()
 
-    def test_loop_alternates_beyond_fixed_run_limit_and_stop_cancels_next_tick(self):
-        sender={'generation':1,'room':9,'players':{2:(0,'B')},'carry':{}}
-        recipient={'generation':1,'room':9,'players':{1:(0,'A')},'carry':{}}
-        contexts={'a':(sender,1,0),'b':(recipient,2,0)}
+    def test_loop_alternates_to_room_player_without_a_companion_session(self):
+        sender={'generation':1,'room':9,'players':{1:(0,'A'),2:(3,'B')},'carry':{}}
         app=SimpleNamespace(
-            _coffee_run=None,_account_profiles=[{'id':'a'},{'id':'b'}],
-            _coffee_selected_accounts=lambda:[{'id':'a'}],_bot_self_ids={'a':1,'b':2},
-            _coffee_context=contexts.__getitem__,_coffee_target=Mock(return_value=2),
-            _coffee_session=Mock(return_value=object()),_bot_action_inflight=set(),
+            _coffee_run=None,_account_profiles=[{'id':'a','label':'A'}],
+            _coffee_selected_accounts=lambda:[{'id':'a'}],_bot_self_ids={'a':1},
+            _coffee_room_state={'a':sender},_tcp_generation={'a':1},
+            _coffee_session=lambda ident:object() if ident=='a' else None,
+            _bot_action_inflight=set(),
             _bot_last_action_at={},_coffee_last_pickup={},_coffee_last_pass={},
             coffee_one_var=Mock(**{'get.return_value':'101'}),
             coffee_two_var=Mock(**{'get.return_value':'202'}),
             coffee_delay_var=Mock(**{'get.return_value':'0'}),
             coffee_count_var=Mock(**{'get.return_value':''}),
             coffee_account_var=Mock(**{'get.return_value':'A [a]'}),
+            coffee_account_picker=Mock(),
+            coffee_recipient_var=Mock(**{'get.return_value':' b '}),
             coffee_alternate_var=Mock(**{'get.return_value':False}),
             coffee_consent_var=Mock(**{'get.return_value':True}),
             coffee_status_var=Mock(),coffee_group_status_var=Mock(),
             _coffee_group_refresh=Mock(),root=Mock(),
         )
         for name in ('_coffee_settings','_coffee_build_run','_coffee_start_run',
-                     '_coffee_advance','_coffee_tick','_coffee_stop_run'):
+                     '_coffee_advance','_coffee_tick','_coffee_stop_run',
+                     '_coffee_context','_coffee_target','_coffee_refresh_accounts'):
             setattr(app,name,MethodType(scope[name],app))
 
         clock=SimpleNamespace(now=100)
@@ -152,8 +154,12 @@ class CoffeeGroupTests(TestCase):
 
         app._coffee_send=Mock(side_effect=send)
         with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:clock.now)):
+            with self.assertRaisesRegex(ClientlessBotError,'Fixed runs require a second connected account'):
+                app._coffee_build_run('a',(101,202),0,1)
             app._coffee_start_run(loop=True)
             batch=app._coffee_run
+            app._coffee_refresh_accounts()
+            self.assertIs(app._coffee_run,batch)
             expected=[]
             for index,furniture in enumerate((101,202,101,202,101,202)):
                 clock.now=100+index*10+0.5
@@ -180,6 +186,23 @@ class CoffeeGroupTests(TestCase):
             clock.now+=10
             pending_tick()
             self.assertEqual(app._coffee_send.call_args_list,expected)
+
+    def test_loop_stops_when_room_recipient_leaves_before_pass(self):
+        state={'room':9,'generation':1,'players':{1:(0,'A'),2:(3,'B')},'carry':{0:(5,99.5)}}
+        run=dict(id='a',peer=None,target=2,room=9,generation=1,phase='pickup',at=99,delay=0)
+        batch={'runs':[run]}
+        app=SimpleNamespace(
+            _coffee_run=batch,_coffee_room_state={'a':state},
+            _coffee_context=lambda ident:(state,1,0),_coffee_send=Mock(),
+            _bot_action_inflight=set(),_bot_last_action_at={},_coffee_last_pass={},
+            _coffee_group_refresh=Mock(),_coffee_stop_run=Mock(),
+        )
+        app._coffee_advance=MethodType(scope['_coffee_advance'],app)
+        scope['_coffee_observe'](app,'a',1,('remove',3))
+        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100)):
+            scope['_coffee_tick'](app,batch)
+        app._coffee_stop_run.assert_called_once_with('Run stopped: recipient is no longer in the room.')
+        app._coffee_send.assert_not_called()
 
     def test_manual_collect_all_dispatches_both(self):
         accounts=[{'id':i} for i in ('a','c')]
