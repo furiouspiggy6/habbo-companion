@@ -6883,28 +6883,36 @@ class ChatOverlayApp(PersonaResponderMixin):
         phase=run['phase']
         ready=(ident not in self._bot_action_inflight and
                now-self._bot_last_action_at.get(ident,0)>=0.4)
-        if phase=='next' and ready and now>=max(run['at'],self._coffee_last_pickup.get(ident,0)+10):
-            if state['carry'].get(index,(0,0))[0]>0:
+        ready_to_pass=ready and now>=self._coffee_last_pass.get(ident,0)+10
+        item,seen=state['carry'].get(index,(0,0))
+        if phase=='next':
+            if not ready or now<run['at']:
+                return
+            if item>0 and run['count'] is None:
+                if ready_to_pass:
+                    run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
+                    run['phase']='pass held item'
+                return
+            if now<self._coffee_last_pickup.get(ident,0)+10:
+                return
+            if item>0:
                 raise ClientlessBotError('Run stopped: avatar already holds an item.')
             slot=run['done']%2 if run['alternate'] else 0
             run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot])
             run['phase']='pickup'
         elif phase=='pickup':
-            item,seen=state['carry'].get(index,(0,0))
             confirmed=item>0 and seen>=run['at']
             if not confirmed and now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
-            if (confirmed and ready
-                and now>=self._coffee_last_pass.get(ident,0)+10
-                and now>=run['at']+max(0.4,run['delay'])):
+            if confirmed and ready_to_pass and now>=run['at']+max(0.4,run['delay']):
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
                 run['phase']='pass'
-        elif phase=='pass':
-            item,seen=state['carry'].get(index,(0,0))
+        elif phase in ('pass','pass held item'):
             if now-run['at']>20:
                 raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
             if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
-                run['done']+=1
+                if phase=='pass':
+                    run['done']+=1
                 if run['count'] is not None and run['done']>=run['count']:
                     run['phase']='complete'
                 else:

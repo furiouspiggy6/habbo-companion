@@ -204,6 +204,44 @@ class CoffeeGroupTests(TestCase):
         app._coffee_stop_run.assert_called_once_with('Run stopped: recipient is no longer in the room.')
         app._coffee_send.assert_not_called()
 
+    def test_loop_passes_held_item_then_collects_the_scheduled_cup(self):
+        advance=scope['_coffee_advance']
+        for completed,next_cup in ((0,101),(1,202)):
+            with self.subTest(completed=completed):
+                state={'room':9,'generation':1,'players':{2:(3,'B')},'carry':{0:(5,99)}}
+                run=dict(id='a',peer=None,target=2,room=9,generation=1,
+                    phase='next',at=100,delay=2,count=None,done=completed,
+                    ids=(101,202),alternate=True)
+                app=SimpleNamespace(
+                    _coffee_context=lambda ident:(state,1,0),
+                    _coffee_send=Mock(side_effect=[101,108]),
+                    _bot_action_inflight=set(),_bot_last_action_at={},
+                    _coffee_last_pass={'a':91},_coffee_last_pickup={'a':95},
+                )
+
+                advance(app,run,100)
+                app._coffee_send.assert_not_called()
+                advance(app,run,101)
+                app._coffee_send.assert_called_once_with('a','Pass hand item',recipient_id=2)
+                self.assertEqual(run['phase'],'pass held item')
+
+                advance(app,run,105)
+                state['carry'][0]=(0,100.5)
+                advance(app,run,106)
+                self.assertEqual(run['phase'],'pass held item')
+                app._coffee_send.assert_called_once()
+
+                state['carry'][0]=(0,106)
+                advance(app,run,106)
+                self.assertEqual((run['phase'],run['done']),('next',completed))
+                advance(app,run,107)
+                app._coffee_send.assert_called_once()
+                advance(app,run,108)
+                self.assertEqual(app._coffee_send.call_args_list,[
+                    call('a','Pass hand item',recipient_id=2),
+                    call('a','Collect hand item',furniture=next_cup),
+                ])
+
     def test_manual_collect_all_dispatches_both(self):
         accounts=[{'id':i} for i in ('a','c')]
         app=SimpleNamespace(_coffee_selected_accounts=lambda:accounts,
