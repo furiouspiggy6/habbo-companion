@@ -52,6 +52,12 @@ class LegacyUpdaterCompatibilityTests(unittest.TestCase):
                          "clientless_bot.py", "clientless_gearth_bridge.py",
                          "persona_responder.py", "persona_responder_ui.py"):
                 shutil.copy2(ROOT/path,target/path)
+            app=target/"Habbo_Companion.pyw"
+            source=app.read_text(encoding="utf-8")
+            app.write_text(source.replace(
+                "from clientless_bot import (ClientlessBotError,",
+                "from clientless_bot import (\n    ClientlessBotError,",
+            ),encoding="utf-8")
             build(target)
             version=(target/"VERSION").read_text(encoding="utf-8").strip()
             package=target/f"Habbo_Companion_Update_v{version}.zip"
@@ -83,7 +89,7 @@ class LegacyUpdaterCompatibilityTests(unittest.TestCase):
             feed=json.loads((target/"latest.json").read_text(encoding="utf-8"))
             self.assertEqual(feed["sha256"],sha256(package.read_bytes()).hexdigest())
 
-    def test_import_anchor_changes_cause_build_failure(self):
+    def test_missing_local_import_causes_build_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
             target=Path(tmp)
             for path in ("Habbo_Companion.pyw", "headless_transport.py",

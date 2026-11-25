@@ -1,4 +1,4 @@
-"""Windows Tk UI smoke test for the modern-dark Habbo Companion workspace.
+"""Offline Tk UI smoke test for the Habbo Companion workspace.
 
 This instantiates the real controls with background processing disabled. It
 never starts G-Earth, a browser, the real Habbo client, or a network request.
@@ -9,6 +9,7 @@ import time
 import runpy
 import sys
 import tkinter as tk
+from tkinter import ttk
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
@@ -261,17 +262,47 @@ try:
     assert not app.responder.enabled
     assert app._ui_scroll_canvases.keys()>=PAGES, 'Scrollable page missing'
     for page in PAGES:
-        app._ui_show_page(page)
+        app._ui_nav_buttons[page].invoke()
         root.update_idletasks()
         assert app._ui_active==page, 'Sidebar navigation failed: '+page
         title=app._ui_title_var.get()
         assert title, 'Empty page title: '+page
-    app._ui_show_page('accounts')
+    root.geometry('940x620')
+    app._ui_nav_buttons['accounts'].invoke()
+    root.update_idletasks()
     assert app._ui_title_var.get()=='Accounts'
+
+    def descendants(parent):
+        for child in parent.winfo_children():
+            yield child
+            yield from descendants(child)
+
+    for button in descendants(app._ui_pages['accounts']):
+        if isinstance(button, ttk.Button):
+            assert button.winfo_width() >= button.winfo_reqwidth(), (
+                'Account control clipped at minimum width: ' + button.cget('text'))
+
+    # Force sidebar overflow to model larger fonts at the minimum height.
+    for button in app._ui_nav_buttons.values():
+        button.configure(pady=12)
+    root.update_idletasks()
+    sidebar=app._ui_scroll_canvases['sidebar']
+    accounts=app._ui_scroll_canvases['accounts']
+    sidebar.yview_moveto(0)
+    accounts_scroll=accounts.yview()
+    app._ui_nav_buttons['accounts'].event_generate('<MouseWheel>', delta=-120)
+    assert sidebar.yview()[0]>0, 'Sidebar did not scroll on wheel input'
+    assert accounts.yview()==accounts_scroll, 'Sidebar input also scrolled the page'
+    updates=app._ui_nav_buttons['updates']
+    updates.event_generate('<FocusIn>')
+    assert updates.winfo_y()+updates.winfo_height() <= sidebar.canvasy(sidebar.winfo_height()), (
+        'Keyboard focus did not reveal the last sidebar destination')
+    updates.invoke()
+    assert app._ui_active=='updates', 'Last sidebar destination failed at minimum height'
     app._ui_show_page('overview')
     app._ui_refresh_dashboard()
     assert app._ui_dashboard_vars['accounts'].get().isdigit()
     assert root.winfo_width()>=940, 'Workspace width collapsed'
-    print('Modern-dark Tkinter workspace and all twelve navigation pages: PASS')
+    print(f'Tkinter workspace and all {len(PAGES)} navigation pages: PASS')
 finally:
     root.destroy()

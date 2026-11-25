@@ -98,8 +98,8 @@ class AutoPlayAllBatchTests(unittest.TestCase):
         self.assertFalse(self.selections)
         self.assertEqual(self.events[-1],('account_auto_finished',4))
 
-    def test_ui_explains_g_earth_is_not_multi_proxy(self):
-        self.assertIn('routing to multiple game clients is NOT yet implemented.',TEXT)
+    def test_ui_explains_g_earth_connection_limit(self):
+        self.assertIn('Companion supports one G-Earth connection at a time.',TEXT)
         self.assertIn('account_browser_pages(debug_port)',TEXT)
 
 

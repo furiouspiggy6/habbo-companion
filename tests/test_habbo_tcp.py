@@ -436,7 +436,7 @@ class RepositoryIntegrationTests(unittest.TestCase):
         from pathlib import Path
         source = (Path(__file__).resolve().parents[1] /
                   "Habbo_Companion.pyw").read_text(encoding="utf-8")
-        self.assertIn("'tcp':('Direct TCP'", source)
+        self.assertIn("('tcp', 'Direct TCP'", source)
         self.assertIn("self._make_live_tcp_panel(self._ui_scroll_area(", source)
         self.assertIn("if item[0] in ('tcp_state','tcp_connected'", source)
         self.assertIn("self._tcp_disconnect_all()", source)
