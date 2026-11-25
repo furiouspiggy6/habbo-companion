@@ -230,7 +230,7 @@ class DanceControllerTests(unittest.TestCase):
         self.assertEqual(a._dance_sent,0)
 
     def test_integration_hooks_and_packet_viewer(self):
-        self.assertIn("'dance':('Dance Controller'",SRC)
+        self.assertIn("('dance', 'Dance Controller'",SRC)
         self.assertIn("self._make_dance_panel(",SRC)
         self.assertIn("self._stop_dance_cycle('Room changed",SRC)
         self.assertIn("self._stop_dance_cycle('Habbo disconnected",SRC)

@@ -13,12 +13,12 @@ TREE=ast.parse(SOURCE)
 APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
          and n.name=='ChatOverlayApp')
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
-PAGE_NAMES={'overview','accounts','tcp','chat','packet','manip',
-            'classic','headless','updates'}
+PAGE_NAMES={'overview','accounts','tcp','bot','chat','responder','packet',
+            'outfits','face','dance','fuzz','manip','classic','headless','updates'}
 
 
 class ModernWorkspaceTests(unittest.TestCase):
-    def test_nine_sections_are_accessible_from_sidebar(self):
+    def test_workspace_pages_are_accessible_from_sidebar(self):
         for name in ('_ui_styles','_ui_add_nav','_ui_show_page',
                      '_ui_scroll_area','_ui_mousewheel',
                      '_make_dashboard_panel','_make_settings',
@@ -54,7 +54,7 @@ class ModernWorkspaceTests(unittest.TestCase):
 
     def test_scroll_dispatch_is_page_specific(self):
         settings=ast.get_source_segment(SOURCE,METHODS['_make_settings'])
-        self.assertIn("self._ui_scroll_canvases['chat']=content",settings)
+        self.assertIn("self._make_chat_panel(self._ui_scroll_area(",settings)
         self.assertIn("self.root.bind('<MouseWheel>',self._ui_mousewheel)",
                       settings)
         self.assertNotIn("self.root.bind('<MouseWheel>',scroll_panel)",settings)

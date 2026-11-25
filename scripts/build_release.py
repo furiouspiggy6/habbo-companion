@@ -7,9 +7,10 @@ Habbo_Companion.pyw for ZIP updates to install without manual bootstrapping.
 
 Fresh installs from source still use the normal independent .py modules.
 """
-from pathlib import Path
+import ast
 import hashlib
 import json
+from pathlib import Path
 import re
 import zipfile
 
@@ -17,96 +18,64 @@ ROOT = Path(__file__).resolve().parent.parent
 APP_FILES = ("Habbo_Companion.pyw", "Habbo_Update_Helper.py", "README.txt")
 MANIFEST = "habbo-update.json"
 
-# Anchors intentionally exact: a renamed import must make packaging fail
-# loudly, rather than silently ship an app with missing dependencies.
-HEADLESS_IMPORT = (
-    "from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,\n"
-    "                                MAX_ACCOUNTS as HEADLESS_TEST_MAX_ACCOUNTS)\n"
-)
-TCP_IMPORT = ("from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,\n"
-              "                       probe_classic_websocket, TCP_FALLBACK_RELEASE)\n")
-BOT_IMPORT = (
-    "from clientless_bot import (ClientlessBotError, build_clientless_action,\n"
-    "    capture_clientless_headers, validate_clientless_headers,\n"
-    "    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,\n"
-    "    clientless_walk_positions, decode_clientless_room_observation,\n"
-    "    decode_clientless_hand_observation, validate_clientless_coffee_settings)\n"
-)
-BRIDGE_IMPORT = (
-    "from clientless_gearth_bridge import (\n"
-    "    ClientlessGearthBridge, GearthBridgeError, DEFAULT_BRIDGE_PORT,\n"
-    "    DEFAULT_BRIDGE_HOST, verify_bridge_alias)\n"
-)
-DIRECT_IMPORT = (
-    "from local_classic_launch import (parse_classic_ticket, official_local_executable,\n"
-    "                                  launch_local_classic)\n"
-)
-PERSONA_IMPORT = "from persona_responder import chat_expression_from_template\n"
-PERSONA_UI_IMPORT = "from persona_responder_ui import PersonaResponderMixin\n"
-PERSONA_UI_ENGINE_IMPORT = (
-    "from persona_responder import (\n"
-    "    PersonaResponder, chat_expression_from_template, generate_persona_reply,\n"
-    "    list_style_usernames, matching_style_usernames, clamp_reply_interval,\n"
-    "    selected_usernames, current_room_player_names,\n"
-    "    ROOM_FALLBACK_PRESENCE_SECONDS,\n"
-    ")\n"
+BUNDLED_FILES = (
+    "headless_transport.py",
+    "local_classic_launch.py",
+    "habbo_tcp.py",
+    "clientless_bot.py",
+    "clientless_gearth_bridge.py",
+    "persona_responder.py",
+    "persona_responder_ui.py",
 )
 APP_ANCHOR = "\nAPP_NAME = 'Habbo View Chat'\n"
+
+
+def _remove_local_imports(source, modules):
+    """Remove the expected top-level imports and retain any alias bindings."""
+    lines = source.splitlines(keepends=True)
+    imports = {}
+    for node in ast.parse(source).body:
+        if not isinstance(node, ast.ImportFrom) or node.level or node.module not in modules:
+            continue
+        if node.module in imports or any(name.name == "*" for name in node.names):
+            raise ValueError(f"Companion module imports changed: {node.module}")
+        tail = lines[node.end_lineno - 1].encode("utf-8")[node.end_col_offset:].strip()
+        if node.col_offset or (tail and not tail.startswith(b"#")):
+            raise ValueError(f"Expected a standalone import for {node.module}")
+        imports[node.module] = "".join(
+            f"{name.asname} = {name.name}\n" for name in node.names if name.asname
+        )
+        for index in range(node.lineno - 1, node.end_lineno):
+            lines[index] = ""
+    if missing := set(modules) - imports.keys():
+        raise ValueError(f"Companion module imports changed: missing {', '.join(sorted(missing))}")
+    return "".join(lines), imports
 
 
 def bundled_application(root=ROOT):
     """Generate a single-file application using our own local module sources."""
     root = Path(root)
     app = (root / APP_FILES[0]).read_text(encoding="utf-8")
-    if (app.count(HEADLESS_IMPORT) != 1 or app.count(DIRECT_IMPORT) != 1
-        or app.count(TCP_IMPORT) != 1 or app.count(BOT_IMPORT) != 1
-        or app.count(BRIDGE_IMPORT) != 1
-        or app.count(PERSONA_IMPORT) != 1
-        or app.count(PERSONA_UI_IMPORT) != 1):
-        raise ValueError("Companion module imports changed; update bundle anchors")
+    module_names = [Path(filename).stem for filename in BUNDLED_FILES]
+    app, aliases = _remove_local_imports(app, module_names)
     if app.count(APP_ANCHOR) != 1:
         raise ValueError("Companion app constant anchor changed")
 
-    modules = []
-    for filename in ("headless_transport.py", "local_classic_launch.py", "habbo_tcp.py",
-                     "clientless_bot.py", "clientless_gearth_bridge.py",
-                     "persona_responder.py", "persona_responder_ui.py"):
+    modules = ["# Bundled local modules for compatibility with old updaters.\n"]
+    for filename, module in zip(BUNDLED_FILES, module_names):
         source = (root / filename).read_text(encoding="utf-8")
         marker = "from __future__ import annotations\n"
         if source.count(marker) != 1:
             raise ValueError("Unexpected module header: " + filename)
         source = source.replace(marker, "", 1)
-        if filename == "persona_responder_ui.py":
-            if source.count(PERSONA_UI_ENGINE_IMPORT) != 1:
-                raise ValueError("Responder UI engine import changed")
-            source = source.replace(PERSONA_UI_ENGINE_IMPORT, "", 1)
-        modules.append("# Bundled source: " + filename + "\n" + source.strip() + "\n")
+        if module == "persona_responder_ui":
+            source, dependencies = _remove_local_imports(source, ("persona_responder",))
+            source = dependencies["persona_responder"] + source
+        modules.append(f"\n# Bundled source: {filename}\n{source.strip()}\n{aliases[module]}")
 
-    app = app.replace(HEADLESS_IMPORT, "", 1)
-    app = app.replace(DIRECT_IMPORT, "", 1)
-    app = app.replace(TCP_IMPORT, "", 1)
-    app = app.replace(BOT_IMPORT, "", 1)
-    app = app.replace(BRIDGE_IMPORT, "", 1)
-    app = app.replace(PERSONA_IMPORT, "", 1)
-    app = app.replace(PERSONA_UI_IMPORT, "", 1)
-    embedded = (
-        "\n# Bundled local modules for compatibility with old updaters.\n"
-        + modules[0]
-        + "\nHEADLESS_TEST_MAX_ACCOUNTS = MAX_ACCOUNTS\n"
-        + modules[1]
-        + "\n" + modules[2]
-        + "\n" + modules[3]
-        + "\n" + modules[4]
-        + "\n" + modules[5]
-        + "\n" + modules[6]
-    )
-    app = app.replace(APP_ANCHOR, "\n" + embedded + APP_ANCHOR, 1)
+    app = app.replace(APP_ANCHOR, "\n" + "".join(modules) + APP_ANCHOR, 1)
     compile(app, str(root / APP_FILES[0]), "exec")
-    if any(text in app for text in ("from headless_transport import",
-            "from local_classic_launch import", "from habbo_tcp import",
-            "from clientless_bot import", "from clientless_gearth_bridge import",
-            "from persona_responder import",
-            "from persona_responder_ui import")):
+    if any(f"from {module} import" in app for module in module_names):
         raise ValueError("Unbundled application dependency remains")
     return app.encode("utf-8")
 
