@@ -278,6 +278,21 @@ class IdentityStream:
 
 
 class AuthenticationDiagnosticsTests(unittest.TestCase):
+    def test_socket_close_includes_the_connection_stage(self):
+        for packet, stage in (
+            ("init_dh", "initial Diffie-Hellman handshake"),
+            ("finish_dh", "Diffie-Hellman key confirmation"),
+            ("auth_ok", "SSO authentication"),
+        ):
+            with self.subTest(stage=stage):
+                session = tcp.HabboTcpSession("012345abcdef")
+                session.sock = FakeGameSocket(b"")
+                session.sock.closed = True
+                with self.assertRaises(tcp.HabboTcpError) as caught:
+                    session._await_packet(tcp.TCP_IN[packet], limit=1)
+                self.assertEqual(str(caught.exception), f"Server closed during {stage}")
+                session.close()
+
     def test_disconnect_during_handshake_has_stage_and_reason_code(self):
         fake = FakeGameSocket(
             tcp._frame(tcp.TCP_IN["disconnect"], struct.pack(">i",122)))
@@ -445,7 +460,7 @@ class RepositoryIntegrationTests(unittest.TestCase):
         self.assertIn("actual=ticket.secret", source)
         self.assertNotIn("actual=ticket.secret + ('.'+ticket.username", source)
         self.assertIn("self._tcp_log_event(ident,self._tcp_states[ident])", source)
-        self.assertIn("TCP connection steps and incoming packet IDs", source)
+        self.assertIn("Show incoming packet IDs", source)
         self.assertIn("tcp_auto_connect=False", source)
         self.assertIn("self.root.after(1200,self._tcp_auto_connect_startup)", source)
         self.assertIn("Automatically connect saved TCP accounts", source)
