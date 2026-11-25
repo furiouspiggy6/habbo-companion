@@ -1,4 +1,4 @@
-"""Offline hand-item schema and bounded settings tests."""
+"""Offline hand-item schema and Coffee Pass settings tests."""
 import unittest
 import struct
 import clientless_bot as bot
@@ -12,10 +12,11 @@ class CoffeeTests(unittest.TestCase):
                          ((3129,struct.pack(">i",123),"PassCarryItem"),))
         with self.assertRaises(bot.ClientlessBotError):
             bot.encode_clientless_action(None,"WIN63-202611251140-12345","Pass hand item",recipient_id=123)
-    def test_settings_are_bounded(self):
+    def test_fixed_counts_and_loop_settings(self):
         self.assertEqual(bot.validate_clientless_coffee_settings("476989081","476989024","15","3"),
                          ((476989081,476989024),15.,3))
         self.assertEqual(bot.validate_clientless_coffee_settings("1","2","0","5"),((1,2),0.,5))
+        self.assertEqual(bot.validate_clientless_coffee_settings("1","2","0",None),((1,2),0.,None))
         for delay,count in [("-1","5"),("nan","5"),("10","0"),("10","6"),("inf","1"),("3601","1")]:
             with self.assertRaises(bot.ClientlessBotError):
                 bot.validate_clientless_coffee_settings("1","2",delay,count)

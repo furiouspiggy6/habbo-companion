@@ -466,15 +466,17 @@ def decode_clientless_hand_observation(release, packet_id, payload):
 
 
 def validate_clientless_coffee_settings(cup_one,cup_two,delay,count):
-    """Validate typed controls without permitting unbounded repetition."""
+    """Validate the two sources and delay, with None for a continuous loop."""
     try:
         ids=tuple(_int_arg(int(str(v).strip()),"furniture") for v in (cup_one,cup_two))
         seconds=float(str(delay).strip())
-        quantity=int(str(count).strip())
+        quantity=None if count is None else int(str(count).strip())
     except (ValueError,TypeError,OverflowError) as exc:
         raise ClientlessBotError("Enter valid furniture IDs, delay and quantity.") from exc
     if ids[0]==ids[1]:
         raise ClientlessBotError("Choose two different furniture IDs.")
-    if not 0<=seconds<=3600 or not 1<=quantity<=5:
-        raise ClientlessBotError("Enter an extra delay from 0 to 3600 seconds and 1 to 5 cups.")
+    if not 0<=seconds<=3600:
+        raise ClientlessBotError("Enter an extra delay from 0 to 3600 seconds.")
+    if quantity is not None and not 1<=quantity<=5:
+        raise ClientlessBotError("Enter 1 to 5 cups for a fixed run.")
     return ids,seconds,quantity

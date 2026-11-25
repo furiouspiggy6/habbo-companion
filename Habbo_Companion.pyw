@@ -6484,7 +6484,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                           ('Cup 1 furniture ID',self.coffee_one_var),
                           ('Cup 2 furniture ID',self.coffee_two_var),
                           ('Delay per action (seconds)',self.coffee_delay_var),
-                          ('Cups per run',self.coffee_count_var)):
+                          ('Cups per fixed run',self.coffee_count_var)):
             row=ttk.Frame(panel,style='Panel.TFrame')
             row.pack(anchor='w',pady=3)
             ttk.Label(row,text=label,width=34,style='Panel.TLabel').pack(side='left',padx=(0,12))
@@ -6493,7 +6493,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
         ttk.Label(panel,text='Requested minimum delay between actions; 0 removes extra waiting. Per-account cooldown and server confirmations still apply.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
-        ttk.Checkbutton(panel,text='Alternate coffee machines',variable=self.coffee_alternate_var,
+        ttk.Checkbutton(panel,text='Alternate machines in fixed runs',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
         ttk.Checkbutton(panel,text='I control the participating accounts and agree to the transfers',variable=self.coffee_consent_var,
                         style='Panel.TCheckbutton').pack(anchor='w')
@@ -6506,7 +6506,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Button(buttons,text=text,command=command).pack(side='left',padx=(0,4))
         runs=ttk.Frame(panel,style='Panel.TFrame')
         runs.pack(anchor='w',pady=(5,8))
-        ttk.Button(runs,text='Start run (own accounts)',style='Primary.TButton',
+        ttk.Button(runs,text='Loop cups 1 and 2',style='Primary.TButton',
+                   command=lambda:self._coffee_start_run(loop=True)).pack(side='left',padx=(0,7))
+        ttk.Button(runs,text='Start fixed run',
                    command=self._coffee_start_run).pack(side='left',padx=(0,7))
         ttk.Button(runs,text='STOP',style='Danger.TButton',
                    command=self._coffee_stop_run).pack(side='left')
@@ -6670,9 +6672,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_delay_var.set(str(interval))
         self.coffee_status_var.set('Packet Manipulator delay copied. Save settings to keep it for selected accounts.')
 
-    def _coffee_settings(self):
+    def _coffee_settings(self,*,loop=False):
         return validate_clientless_coffee_settings(self.coffee_one_var.get(),
-            self.coffee_two_var.get(),self.coffee_delay_var.get(),self.coffee_count_var.get())
+            self.coffee_two_var.get(),self.coffee_delay_var.get(),
+            None if loop else self.coffee_count_var.get())
 
     def _coffee_save_settings(self):
         accounts=self._coffee_selected_accounts()
@@ -6758,7 +6761,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
         if self.coffee_account_var.get()=='All connected accounts':
             if action!='Collect hand item':
-                self.coffee_status_var.set('Use Start run for group transfers, or select one sender for manual Pass.');return
+                self.coffee_status_var.set('Start a fixed run or cup loop for group transfers, or select one sender for manual Pass.');return
             self._coffee_collect_all(source)
             return
         account=self._coffee_selected()
@@ -6817,16 +6820,17 @@ class ChatOverlayApp(PersonaResponderMixin):
         return dict(id=ident,peer=peer,target=target,
             generation=state['generation'],peer_generation=other['generation'],
             room=state['room'],ids=ids,delay=seconds,count=count,done=0,
-            alternate=bool(self.coffee_alternate_var.get()),phase='next',at=time.monotonic())
+            alternate=count is None or bool(self.coffee_alternate_var.get()),
+            phase='next',at=time.monotonic())
 
-    def _coffee_start_run(self):
+    def _coffee_start_run(self,*,loop=False):
         if self._coffee_run:
             self.coffee_status_var.set('A coffee run is already active.');return
         accounts=self._coffee_selected_accounts()
         if not accounts:
             self.coffee_status_var.set('Select a connected account.');return
         try:
-            ids,seconds,count=self._coffee_settings()
+            ids,seconds,count=self._coffee_settings(loop=loop)
             if not self.coffee_consent_var.get():
                 raise ClientlessBotError('Confirm you control the participating accounts before starting a run.')
             group=self.coffee_account_var.get()=='All connected accounts'
@@ -6875,9 +6879,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             run['phase']='pickup'
         elif phase=='pickup':
             item,seen=state['carry'].get(index,(0,0))
-            if now-run['at']>20:
+            confirmed=item>0 and seen>=run['at']
+            if not confirmed and now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
-            if (item>0 and seen>=run['at'] and ready
+            if (confirmed and ready
                 and now>=self._coffee_last_pass.get(ident,0)+10
                 and now>=run['at']+max(0.4,run['delay'])):
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
@@ -6888,7 +6893,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                 raise ClientlessBotError('Run stopped: hand-item release was not confirmed.')
             if item==0 and seen>=run['at'] and ident not in self._bot_action_inflight:
                 run['done']+=1
-                if run['done']>=run['count']:
+                if run['count'] is not None and run['done']>=run['count']:
                     run['phase']='complete'
                 else:
                     run['phase']='next'
@@ -6903,14 +6908,17 @@ class ChatOverlayApp(PersonaResponderMixin):
                 if run['phase']!='complete':
                     self._coffee_advance(run,now)
             done=sum(r['done'] for r in runs)
-            total=sum(r['count'] for r in runs)
             active=sum(r['phase']!='complete' for r in runs)
             if not active:
                 self._coffee_stop_run('Run complete: '+str(done)+' releases observed across '+
                     str(len(runs))+' sender(s); '+str(batch['skipped'])+' skipped. Receipt not verified.')
                 return
-            self.coffee_status_var.set('Coffee run: '+str(done)+'/'+str(total)+' — '+
-                str(active)+'/'+str(len(runs))+' active sender(s)')
+            if runs[0]['count'] is None:
+                progress=f'Cup loop: {done} releases observed'
+            else:
+                total=sum(r['count'] for r in runs)
+                progress=f'Coffee run: {done}/{total}'
+            self.coffee_status_var.set(f'{progress} — {active}/{len(runs)} active sender(s)')
             self._coffee_group_refresh()
             self.root.after(250,lambda:self._coffee_tick(batch))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
