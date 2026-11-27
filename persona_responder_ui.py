@@ -16,7 +16,7 @@ from persona_responder import (
     PersonaResponder, chat_expression_from_template, generate_persona_reply,
     list_style_usernames, matching_style_usernames, clamp_reply_interval,
     selected_usernames, current_room_player_names,
-    ROOM_FALLBACK_PRESENCE_SECONDS,
+    ROOM_FALLBACK_PRESENCE_SECONDS, generate_gpt4chan_preview,
 )
 
 
@@ -99,6 +99,8 @@ class PersonaResponderMixin:
         self.responder_log_dir_var=tk.StringVar(value=str(self.responder.log_dir))
         self.responder_model_var=tk.StringVar(value=str(
             self.config.get('responder_model','gpt-5-mini')))
+        self.responder_gpt4chan_var=tk.BooleanVar(
+            value=self.config.get('responder_gpt4chan_preview',False) is True)
         self.responder_test_user_var=tk.StringVar(value='TestUser')
         self.responder_test_message_var=tk.StringVar(value='hey, what are you up to?')
         self.responder_status_var=tk.StringVar(
@@ -134,6 +136,22 @@ class PersonaResponderMixin:
                   'Turn AI off to stop replies; no extra send switch is needed.',
                   style='Panel.TLabel',wraplength=660).pack(
                       anchor='w',pady=(0,15))
+
+        ttk.Checkbutton(frame,text='GPT-4chan (local preview mode)',
+                        variable=self.responder_gpt4chan_var,
+                        command=self._responder_toggle_gpt4chan).pack(anchor='w')
+        ttk.Label(frame,text='Uses a local completion server on port 5000. '
+                  'Preview only; live AI sending is disabled in this mode.',
+                  style='Panel.TLabel',wraplength=650).pack(anchor='w',pady=(2,5))
+        preview_row=ttk.Frame(frame,style='Panel.TFrame')
+        preview_row.pack(fill='x',pady=(0,12))
+        self.responder_gpt4chan_input=ttk.Entry(
+            preview_row,textvariable=self.responder_test_message_var)
+        self.responder_gpt4chan_input.pack(side='left',fill='x',expand=True)
+        self.responder_gpt4chan_button=ttk.Button(
+            preview_row,text='Test GPT-4chan',command=self._responder_gpt4chan_test)
+        self.responder_gpt4chan_button.pack(side='left',padx=(8,0))
+        self._responder_update_gpt4chan_controls()
 
         style_row=ttk.Frame(frame,style='Panel.TFrame')
         style_row.pack(fill='x',pady=(0,6))
@@ -707,6 +725,32 @@ class PersonaResponderMixin:
         self.responder.save_history=True
         self.responder.log_dir=self._responder_style_directory()
 
+    def _responder_update_gpt4chan_controls(self):
+        state='normal' if self.responder_gpt4chan_var.get() else 'disabled'
+        if hasattr(self,'responder_gpt4chan_button'):
+            self.responder_gpt4chan_button.configure(state=state)
+            self.responder_gpt4chan_input.configure(state=state)
+
+    def _responder_toggle_gpt4chan(self):
+        self.responder_enabled_var.set(False)
+        self._responder_last_draft=None
+        self._responder_apply()
+        self._responder_update_gpt4chan_controls()
+
+    def _responder_gpt4chan_test(self):
+        if not self.responder_gpt4chan_var.get() or self._responder_test_running:
+            return
+        sample=self.responder_test_message_var.get().strip()
+        if not sample or len(sample)>500:
+            self.responder_status_var.set('Enter a sample message of 1–500 characters.')
+            return
+        self._responder_test_running=True
+        self.responder_status_var.set('Generating local GPT-4chan preview...')
+        threading.Thread(target=self._responder_worker,
+                         args=({'sample':sample},'gpt4chan',
+                               self._responder_generation,True,True),
+                         daemon=True).start()
+
     def _responder_apply(self):
         self._responder_generation+=1
         self._responder_scheduled_send=None
@@ -720,8 +764,13 @@ class PersonaResponderMixin:
         self.responder.reset_room()
         valid_selection=(self.responder.target_mode!='Selected users'
                          or bool(selected_usernames(self.responder.selected_users)))
+        gpt4chan_preview=self.responder_gpt4chan_var.get()
+        if gpt4chan_preview:
+            self.responder_enabled_var.set(False)
+            self._responder_last_draft=None
         self.responder.enabled=(
-            bool(self.responder_enabled_var.get()) and valid_selection)
+            bool(self.responder_enabled_var.get()) and valid_selection
+            and not gpt4chan_preview)
         # Enabling the responder means replying through G-Earth—no separate
         # auto-send switch that could silently leave it in preview mode.
         self.responder_send_var.set(self.responder.enabled)
@@ -741,6 +790,7 @@ class PersonaResponderMixin:
             background_public_chat_logging=True,
             responder_log_dir=str(self.responder.log_dir),
             responder_reply_interval=self.responder.reply_cooldown_seconds,
+            responder_gpt4chan_preview=bool(gpt4chan_preview),
         )
         self.save()
         if valid_selection:
@@ -753,9 +803,14 @@ class PersonaResponderMixin:
             'ON (sending through G-Earth)' if self.responder.enabled
             else 'OFF')+'.')
         self._responder_update_logging_status()
+        if gpt4chan_preview:
+            self.responder_status_var.set('GPT-4chan ON — local preview only. Live AI OFF.')
 
     def _responder_test_reply(self):
         """Test current unsaved personality settings with no game send side effects."""
+        if self.responder_gpt4chan_var.get():
+            self._responder_gpt4chan_test()
+            return
         if self._responder_test_running:
             self.responder_status_var.set('A preview request is already running.')
             return
@@ -799,6 +854,8 @@ class PersonaResponderMixin:
         self._responder_apply()
 
     def _responder_send(self,reply):
+        if getattr(self,'responder_gpt4chan_var',None) is not None and self.responder_gpt4chan_var.get():
+            return 'Not sent: GPT-4chan mode is preview only.'
         if (not self.packet_started or not self._habbo_session_connected
             or self.packet_extension is None):
             return 'Not sent: connect Habbo through G-Earth first.'
@@ -828,9 +885,14 @@ class PersonaResponderMixin:
         self.responder_status_var.set(outcome)
         self._responder_log(outcome)
 
-    def _responder_worker(self,payload,model,generation,test=False):
+    def _responder_worker(self,payload,model,generation,test=False,gpt4chan=False):
         try:
-            reply=generate_persona_reply(payload,model=model)
+            if gpt4chan:
+                if not test:
+                    raise ValueError('GPT-4chan is preview only.')
+                reply=generate_gpt4chan_preview(payload['sample'])
+            else:
+                reply=generate_persona_reply(payload,model=model)
             self._responder_results.put((generation,reply,None,test))
         except Exception as exc:
             self._responder_results.put((generation,None,str(exc)[:200],test))
