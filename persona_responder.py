@@ -14,6 +14,7 @@ from pathlib import Path
 import random
 import re
 import time
+from urllib import request, error
 
 BLOCKED_NAME_PARTS = ("dan",)
 MAX_REPLY_CHARS = 140
@@ -275,6 +276,46 @@ def clean_model_reply(raw):
         return None
     reply = re.sub(r"\s+", " ", reply)
     return reply[:MAX_REPLY_CHARS].rstrip() or None
+
+
+class _NoPreviewRedirect(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def generate_gpt4chan_preview(message):
+    """Generate a local test completion only; no room history or send path."""
+    message = str(message or "").strip()
+    if not message:
+        raise ValueError("Enter a sample message first.")
+    if len(message) > 500:
+        raise ValueError("Sample message must be at most 500 characters.")
+    body = json.dumps({
+        "model": "gpt4chan",
+        "prompt": message + "\n",
+        "max_tokens": 48,
+        "temperature": 0.7,
+        "stop": ["\n"],
+        "stream": False,
+    }).encode("utf-8")
+    req = request.Request(
+        "http://127.0.0.1:5000/v1/completions", data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    opener = request.build_opener(request.ProxyHandler({}), _NoPreviewRedirect())
+    try:
+        with opener.open(req, timeout=60) as response:
+            raw = response.read(65537)
+        if len(raw) > 65536:
+            raise RuntimeError("Local model response is too large.")
+        result = json.loads(raw)
+        completion = result["choices"][0]["text"]
+        if not isinstance(completion, str):
+            raise ValueError("Invalid completion.")
+    except (error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError("GPT-4chan local backend unavailable at 127.0.0.1:5000.") from exc
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Invalid local model completion response.") from exc
+    return clean_model_reply(completion)
 
 
 def generate_persona_reply(payload, model="gpt-5-mini"):
