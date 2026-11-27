@@ -13,7 +13,7 @@ TREE=ast.parse(SOURCE)
 APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
          and n.name=='ChatOverlayApp')
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
-PAGE_NAMES={'overview','accounts','tcp','bot','chat','responder','packet',
+PAGE_NAMES={'overview','accounts','bot','chat','responder','packet',
             'outfits','face','dance','fuzz','manip','classic','headless','updates'}
 
 
@@ -31,7 +31,8 @@ class ModernWorkspaceTests(unittest.TestCase):
         self.assertIn("self._ui_show_page('overview')",settings)
         self.assertIn('self._make_packet_panel(',settings)
         self.assertIn('self._make_accounts_panel(',settings)
-        self.assertIn('self._make_live_tcp_panel(',settings)
+        self.assertNotIn("('tcp', 'Direct TCP'",settings)
+        self.assertIn('self._make_clientless_tabs(',settings)
         self.assertIn('self._make_direct_classic_panel(',settings)
         self.assertIn('self._make_manipulator_panel(',settings)
         self.assertIn('self._make_headless_panel(',settings)
@@ -47,10 +48,14 @@ class ModernWorkspaceTests(unittest.TestCase):
             self.assertIn('self.'+callback,accounts)
         self.assertIn("show='*' if secret else ''",accounts)
         self.assertIn('self._accounts_render()',accounts)
-        tcp=ast.get_source_segment(SOURCE,METHODS['_make_live_tcp_panel'])
-        for callback in ('_tcp_auto_import_selected','_tcp_connect_all',
-                         '_tcp_disconnect_all','_tcp_test_classic_websocket'):
+        tcp=ast.get_source_segment(SOURCE,METHODS['_make_clientless_connection_panel'])
+        for callback in ('_tcp_proxy_changed','_tcp_autostart_changed',
+                         '_tcp_forget_session','_tcp_test_classic_websocket'):
             self.assertIn('self.'+callback,tcp)
+        for removed in ('self.tcp_ticket_var','self.tcp_session_id_var',
+                        'self.tcp_browser_token_var','self._tcp_save_session',
+                        'self._tcp_auto_import_selected','self._tcp_connect_all'):
+            self.assertNotIn(removed,tcp)
 
     def test_scroll_dispatch_is_page_specific(self):
         settings=ast.get_source_segment(SOURCE,METHODS['_make_settings'])

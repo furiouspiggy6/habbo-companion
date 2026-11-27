@@ -14,6 +14,11 @@ class ClientlessTabTests(TestCase):
         self.assertIn("self._ui_scroll_area(coffee,'bot_coffee')",code)
         self.assertIn("self._ui_scroll_area(main,'bot_controls')",code)
         self.assertIn("self._ui_scroll_canvases['bot']",code)
+        self.assertIn("tabs.add(connection,text='Connection settings')",code)
+        self.assertIn("self._ui_scroll_area(connection,'bot_connection')",code)
+        self.assertIn("str(connection):'bot_connection'",code)
+        self.assertLess(code.index("self._make_clientless_connection_panel("),
+                        code.index("self._make_clientless_bot_panel("))
         self.assertNotIn('_make_clientless_coffee_panel',METHODS['_make_clientless_bot_panel'])
     def test_coffee_panel_has_dark_frames_and_existing_controls(self):
         code=METHODS['_make_clientless_coffee_panel']

@@ -16,7 +16,7 @@ sys.path.insert(0,str(ROOT))
 scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
-PAGES={'overview','accounts','tcp','bot','chat','responder','packet','outfits','face','dance','fuzz','manip',
+PAGES={'overview','accounts','bot','chat','responder','packet','outfits','face','dance','fuzz','manip',
        'classic','headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
@@ -38,7 +38,7 @@ try:
     assert set(app._ui_nav_buttons)==PAGES, 'Missing sidebar destination'
     assert app._ui_active=='overview', 'Incorrect startup workspace'
     assert app.account_table.winfo_exists(), 'Accounts list failed to build'
-    assert app.tcp_table.winfo_exists(), 'Direct TCP list failed to build'
+    assert app.tcp_table.winfo_exists(), 'Clientless connection status list failed to build'
     assert app.bot_account_picker.winfo_exists(), 'Clientless Bot account list missing'
     assert app.bot_action_picker.winfo_exists(), 'Clientless Bot action list missing'
     assert app.bot_chat_log.winfo_exists(), 'Clientless chat display missing'

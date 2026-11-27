@@ -5920,8 +5920,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                    style='Primary.TButton',
                    command=lambda:self._ui_show_page('accounts')).pack(
                        side='left',padx=(0,10))
-        ttk.Button(buttons,text='Direct TCP',
-                   command=lambda:self._ui_show_page('tcp')).pack(
+        ttk.Button(buttons,text='Clientless Bot',
+                   command=lambda:self._ui_show_page('bot')).pack(
                        side='left',padx=(0,10))
         ttk.Button(buttons,text='Open updates',
                    command=lambda:self._ui_show_page('updates')).pack(side='left')
@@ -5944,7 +5944,6 @@ class ChatOverlayApp(PersonaResponderMixin):
                 ('responder', 'AI Responder', 'Writing style and room targets'),
             )),
             ('Connections', (
-                ('tcp', 'Direct TCP', 'Game-server connections and live diagnostics'),
                 ('classic', 'Direct Classic', 'Launch the installed Habbo client'),
             )),
             ('Avatar tools', (
@@ -6028,8 +6027,6 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._ui_pages['accounts'],'accounts'))
         self._make_direct_classic_panel(self._ui_scroll_area(
             self._ui_pages['classic'],'classic'))
-        self._make_live_tcp_panel(self._ui_scroll_area(
-            self._ui_pages['tcp'],'tcp'))
         self._make_clientless_tabs(self._ui_pages['bot'])
         self._make_headless_panel(self._ui_scroll_area(
             self._ui_pages['headless'],'headless'))
@@ -6110,19 +6107,17 @@ class ChatOverlayApp(PersonaResponderMixin):
         tk.Label(f,text='Messages do not expire. Only recent bubbles are drawn; scroll for older.\nHistory is bounded in memory and cleared on exit (unless logging is enabled).\nOriginal artwork comes from your existing modified Habbo client.',font=('Segoe UI',8),justify='left',bg=COMPANION_UI['background'],fg=COMPANION_UI['faint']).pack(anchor='w',pady=(8,0))
 
 
-    def _make_live_tcp_panel(self, parent):
-        """Authenticate a real Habbo socket without running a game client."""
+    def _make_clientless_connection_panel(self, parent):
+        """Connection preferences and diagnostics for the shared clientless backend."""
         f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
         f.pack(fill='both',expand=True)
-        tk.Label(f,text='DIRECT HABBO TCP (EXPERIMENTAL)',
+        tk.Label(f,text='CLIENTLESS CONNECTION SETTINGS',
                  font=('Segoe UI Semibold',17),bg=COMPANION_UI['background'],
                  fg=COMPANION_UI['text']).pack(anchor='w',pady=(0,8))
-        tk.Label(f,text='Connect directly to the official game server without '
-                 'launching Habbo.exe or G-Earth. Auto-import may briefly open '
-                 'your private Brave profile in the background to request an '
-                 'SSO ticket. Authentication is confirmed by Habbo, not the website.',
-                 bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',
-                 wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
+        ttk.Label(f,text='Use saved profiles from Accounts and start or disconnect '
+                  'them in Clientless controls. The existing sign-in workflow '
+                  'automatically obtains an official ticket when needed.',
+                  style='Panel.TLabel',wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
         proxy_row=ttk.Frame(f,style='Panel.TFrame')
         proxy_row.pack(fill='x',pady=(0,6))
         ttk.Checkbutton(proxy_row,text='Use SOCKS5 proxy',
@@ -6143,56 +6138,16 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.tcp_table.column('profile',width=170,stretch=False)
         self.tcp_table.column('state',width=380,stretch=True)
         self.tcp_table.pack(fill='x',pady=(0,8))
-        ttk.Label(f,text='Optional: paste an official SSO ticket (selected account)',
-                  style='Panel.TLabel').pack(anchor='w')
-        ttk.Entry(f,textvariable=self.tcp_ticket_var,show='*').pack(
-            fill='x',pady=(3,7))
-        tk.Label(f,text='Recommended: Auto-import a new ticket from the existing '
-                 'signed-in browser profile. Legacy session cookies are optional; '
-                 'an isolated headless browser can be started if needed. '
-                 'Habbo CAPTCHA or email verification remains manual.',
-                 bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',
-                 wraplength=615).pack(anchor='w',pady=(1,7))
-        for name,var in (('session.id',self.tcp_session_id_var),
-                         ('browser_token',self.tcp_browser_token_var)):
-            line=ttk.Frame(f,style='Panel.TFrame')
-            line.pack(fill='x',pady=(0,6))
-            ttk.Label(line,text=name,style='Panel.TLabel',width=18).pack(
-                side='left')
-            ttk.Entry(line,textvariable=var,show='*').pack(
-                side='left',fill='x',expand=True)
-        row=ttk.Frame(f,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,8))
-        ttk.Button(row,text='Save session in Windows vault',
-                   command=self._tcp_save_session).pack(side='left',padx=(0,7))
-        ttk.Button(row,text='Forget saved session',
-                   command=self._tcp_forget_session).pack(side='left')
-        ttk.Button(f,text='Auto-import session and connect (selected account)',
-                    style='Primary.TButton',
-                   command=self._tcp_auto_import_selected).pack(
-                   anchor='w',pady=(1,7))
+        ttk.Button(f,text='Forget selected saved website session',
+                   command=self._tcp_forget_session).pack(anchor='w',pady=(0,8))
         ttk.Checkbutton(
             f,
             text='Automatically connect saved TCP accounts when Companion opens',
             variable=self.tcp_autostart_var,
             command=self._tcp_autostart_changed,
             style='Panel.TCheckbutton').pack(anchor='w',pady=(3,9))
-        row=ttk.Frame(f,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,8))
-        ttk.Button(row,text='Connect selected',
-                   command=self._tcp_connect_selected).pack(side='left',padx=(0,7))
-        ttk.Button(row,text='Connect all saved',
-                   command=self._tcp_connect_all).pack(side='left',padx=(0,7))
-        ttk.Button(row,text='Disconnect selected',
-                   command=self._tcp_disconnect_selected).pack(side='left')
-        row=ttk.Frame(f,style='Panel.TFrame')
-        row.pack(fill='x',pady=(0,9))
-        ttk.Button(row,text='Disconnect all',
-                   command=self._tcp_disconnect_all).pack(side='left',padx=(0,7))
-        ttk.Button(row,text='Auto-import and connect all',
-                   command=self._tcp_auto_import_all).pack(side='left',padx=(0,7))
-        ttk.Button(row,text='Refresh account list',
-                   command=self._tcp_render).pack(side='left')
+        ttk.Button(f,text='Refresh connection status',
+                   command=self._tcp_render).pack(anchor='w',pady=(0,9))
         tk.Label(
             f,
             text='Habbo Classic (2026) uses a separate secure WebSocket '
@@ -6235,11 +6190,18 @@ class ChatOverlayApp(PersonaResponderMixin):
         main=ttk.Frame(tabs,style='Panel.TFrame')
         coffee=ttk.Frame(tabs,style='Panel.TFrame')
         tabs.add(main,text='Clientless controls')
+        connection=ttk.Frame(tabs,style='Panel.TFrame')
         tabs.add(coffee,text='Coffee Pass')
+        tabs.add(connection,text='Connection settings')
+        # Build connection widgets before the main controls, as the shared
+        # status renderer and existing callbacks expect them to exist.
+        self._make_clientless_connection_panel(
+            self._ui_scroll_area(connection,'bot_connection'))
         self._make_clientless_bot_panel(self._ui_scroll_area(main,'bot_controls'))
         self._make_clientless_coffee_panel(self._ui_scroll_area(coffee,'bot_coffee'))
         def select_scroll(_event=None):
-            key='bot_coffee' if tabs.select()==str(coffee) else 'bot_controls'
+            key={str(main):'bot_controls',str(coffee):'bot_coffee',
+                 str(connection):'bot_connection'}.get(tabs.select(),'bot_controls')
             self._ui_scroll_canvases['bot']=self._ui_scroll_canvases[key]
             if key=='bot_coffee':
                 self._coffee_refresh_accounts()
