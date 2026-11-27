@@ -368,6 +368,38 @@ def profile_fingerprint(account_id):
     return "~" + hashlib.md5(("HabboCompanion:profile:" + account_id).encode("ascii")).hexdigest()
 
 
+def validate_socks5_proxy(value):
+    """Validate a single user-configured, unauthenticated SOCKS5 endpoint."""
+    try:
+        if not isinstance(value, str) or any(c.isspace() for c in value):
+            raise ValueError
+        parsed = urllib.parse.urlsplit(value)
+        if (parsed.scheme != "socks5" or not parsed.hostname or
+                not parsed.port or parsed.username is not None or
+                parsed.password is not None or parsed.path or
+                parsed.query or parsed.fragment):
+            raise ValueError
+    except ValueError:
+        raise ValueError("Enter a SOCKS5 URL such as socks5://127.0.0.1:1080 (no credentials)") from None
+    return value
+
+
+def open_game_socket(timeout, proxy_url=None):
+    """Use direct TCP by default; never silently fall back if proxy fails."""
+    if proxy_url is None:
+        return socket.create_connection((TCP_HOST, TCP_PORT), timeout=timeout)
+    url = validate_socks5_proxy(proxy_url)
+    try:
+        from python_socks.sync import Proxy
+    except ImportError:
+        raise HabboTcpError("SOCKS5 support requires python-socks; install it with python -m pip install python-socks") from None
+    try:
+        return Proxy.from_url(url).connect(
+            dest_host=TCP_HOST, dest_port=TCP_PORT, timeout=timeout)
+    except Exception:
+        raise HabboTcpError("SOCKS5 connection failed; check your proxy service and endpoint") from None
+
+
 class HabboTcpSession:
     """A per-profile game socket, with independently maintained cipher state."""
     def __init__(self, account_id, status=None, packet=None, content=None,
@@ -517,7 +549,7 @@ class HabboTcpSession:
             detail += ")"
         raise HabboTcpError("Timed out during " + stage + detail)
 
-    def connect(self, ticket, release=None, timeout=12):
+    def connect(self, ticket, release=None, timeout=12, proxy_url=None):
         if self.sock:
             raise RuntimeError("Profile is already connected")
         if not isinstance(ticket, str) or not _TICKET.fullmatch(ticket):
@@ -532,7 +564,9 @@ class HabboTcpSession:
         self.stop.clear()
         started = time.monotonic()
         try:
-            self.sock = socket.create_connection((TCP_HOST, TCP_PORT), timeout=timeout)
+            self.sock = open_game_socket(timeout, proxy_url)
+            if proxy_url is not None:
+                self.on_status("Game TCP connected through configured SOCKS5 proxy")
             self.sock.settimeout(timeout)
             self.on_status(
                 "TCP connected (AIR " + release

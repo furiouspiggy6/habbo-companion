@@ -11,7 +11,7 @@ from headless_transport import (HeadlessLocalManager, LocalHeadlessTestServer,
 from local_classic_launch import (parse_classic_ticket, official_local_executable,
                                   launch_local_classic)
 from habbo_tcp import (HabboTcpSession, HabboTcpError, fetch_habbo_sso_ticket,
-                       probe_classic_websocket, TCP_FALLBACK_RELEASE)
+                       probe_classic_websocket, TCP_FALLBACK_RELEASE, validate_socks5_proxy)
 from clientless_gearth_bridge import (
     ClientlessGearthBridge, GearthBridgeError, DEFAULT_BRIDGE_PORT,
     DEFAULT_BRIDGE_HOST, verify_bridge_alias)
@@ -642,6 +642,8 @@ DEFAULT = dict(
     account_profiles=[],
     account_active_id='',
     tcp_auto_connect=False,
+    tcp_proxy_enabled=False,
+    tcp_proxy_url='socks5://127.0.0.1:1080',
     # Persistent clientless favorites and read-only AIR packet header mappings.
     clientless_last_room_id='69118545',
     clientless_header_map=None,
@@ -5391,6 +5393,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.tcp_browser_token_var=tk.StringVar(value='')
         self.tcp_autostart_var=tk.BooleanVar(
             value=bool(self.config.get('tcp_auto_connect',False)))
+        self.tcp_proxy_enabled_var=tk.BooleanVar(
+            value=self.config.get('tcp_proxy_enabled') is True)
+        self.tcp_proxy_url_var=tk.StringVar(
+            value=str(self.config.get('tcp_proxy_url','socks5://127.0.0.1:1080')))
         self._headless_manager=HeadlessLocalManager()
         self._headless_server=None
         self._headless_account_states={}
@@ -6117,6 +6123,18 @@ class ChatOverlayApp(PersonaResponderMixin):
                  'SSO ticket. Authentication is confirmed by Habbo, not the website.',
                  bg=COMPANION_UI['background'],fg=COMPANION_UI['muted'],justify='left',
                  wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
+        proxy_row=ttk.Frame(f,style='Panel.TFrame')
+        proxy_row.pack(fill='x',pady=(0,6))
+        ttk.Checkbutton(proxy_row,text='Use SOCKS5 proxy',
+            variable=self.tcp_proxy_enabled_var,command=self._tcp_proxy_changed,
+            style='Panel.TCheckbutton').pack(side='left',padx=(0,8))
+        ttk.Entry(proxy_row,textvariable=self.tcp_proxy_url_var,width=34).pack(
+            side='left',fill='x',expand=True,padx=(0,6))
+        ttk.Button(proxy_row,text='Save',command=self._tcp_proxy_changed).pack(side='left')
+        ttk.Label(f,text='Shared game TCP proxy for new connections only. '
+            'Browser sign-in is unchanged. Requires a trusted SOCKS5 service '
+            'and python-socks (python -m pip install python-socks).',
+            style='Panel.TLabel',wraplength=615).pack(anchor='w',pady=(0,8))
         self.tcp_table=ttk.Treeview(
             f,columns=('profile','state'),show='headings',
             height=5,selectmode='browse')
@@ -8291,6 +8309,24 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.tcp_browser_token_var.set('')
         self.tcp_status_var.set('Saved website session removed from Windows vault.')
 
+    def _tcp_proxy_changed(self):
+        enabled=bool(self.tcp_proxy_enabled_var.get())
+        value=self.tcp_proxy_url_var.get().strip()
+        if enabled:
+            try:
+                validate_socks5_proxy(value)
+            except ValueError as exc:
+                self.tcp_proxy_enabled_var.set(
+                    self.config.get('tcp_proxy_enabled') is True)
+                self.tcp_status_var.set(str(exc))
+                return
+        self.config['tcp_proxy_enabled']=enabled
+        self.config['tcp_proxy_url']=value
+        self.save()
+        self.tcp_status_var.set(
+            'SOCKS5 proxy '+('enabled' if enabled else 'disabled')+
+            ' for new game TCP connections. Reconnect to apply.')
+
     def _tcp_autostart_changed(self):
         enabled=bool(self.tcp_autostart_var.get())
         self.config['tcp_auto_connect']=enabled
@@ -8394,10 +8430,12 @@ class ChatOverlayApp(PersonaResponderMixin):
         threading.Thread(
             target=self._tcp_connect_worker,
             args=(dict(account),ticket,cookies,generation,auto_capture),
+            kwargs=({'proxy_url':self.config.get('tcp_proxy_url','')}
+                    if getattr(self,'config',{}).get('tcp_proxy_enabled') is True else {}),
             daemon=True,name='companion-live-tcp-'+ident).start()
 
     def _tcp_connect_worker(self,account,ticket,cookies,generation,
-                            auto_capture=False):
+                            auto_capture=False, proxy_url=None):
         ident=account['id']
         session=None
 
@@ -8457,7 +8495,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                 gameplay_bridge=bridge)
             if bridge is not None:
                 bridge.attach(session)
-            session.connect(actual)
+            if proxy_url is None:
+                session.connect(actual)
+            else:
+                session.connect(actual,proxy_url=proxy_url)
             self._packet_put(('tcp_connected',ident,generation,session))
         except (OSError,ValueError,RuntimeError,HabboTcpError,TimeoutError) as exc:
             if session:
