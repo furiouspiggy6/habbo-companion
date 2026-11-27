@@ -632,9 +632,24 @@ class AutomaticLoginAndImport(TestCase):
 
 class AppIntegration(TestCase):
     def test_direct_tcp_buttons_workers_and_no_secret_logging(self):
-        self.assertIn('Auto-import session and connect (selected account)',TEXT)
-        self.assertIn('Auto-import and connect all',TEXT)
-        self.assertIn('self._tcp_connect_one(account,auto_capture=True)',TEXT)
+        methods={node.name:ast.get_source_segment(TEXT,node)
+                 for node in ast.walk(TREE) if isinstance(node,ast.FunctionDef)}
+        panel=methods['_make_clientless_bot_panel']
+        self.assertIn('Run selected profile',panel)
+        self.assertIn('command=self._bot_run_selected',panel)
+        self.assertIn('Run highlighted (Direct TCP)',panel)
+        self.assertIn('command=self._bot_multi_run_selected',panel)
+        self.assertIn('self._bot_run_configured_account(account)',
+                      methods['_bot_run_selected'])
+        self.assertIn('self._bot_run_account(account,force_direct=',
+                      methods['_bot_run_configured_account'])
+        self.assertIn('self._bot_run_account(account,room_override=room,force_direct=True)',
+                      methods['_bot_multi_run_one'])
+        run=methods['_bot_run_account']
+        self.assertIn('self._tcp_connect_one(account)',run)
+        self.assertIn('self._tcp_connect_one(account,auto_capture=True)',run)
+        self.assertLess(run.index('self._tcp_connect_one(account)'),
+                        run.index('self._tcp_connect_one(account,auto_capture=True)'))
         self.assertIn('ticket=account_import_session_automatically(',TEXT)
         self.assertIn('account_session_cookie_write(ident,*cookies)',TEXT)
         self.assertIn("('tcp_state',ident,generation,message)",TEXT)

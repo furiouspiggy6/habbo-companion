@@ -1207,3 +1207,11 @@ No broad cookie extraction from regular browser profiles, no bypassing
 Habbo verification, and no extra packets for the already-authenticated
 account. The feature is tested offline; live second-account validation
 still depends on that account's normal Habbo login.
+
+
+v1.1.127 — Clientless connection workspace
+The former Direct TCP page is now Clientless Bot > Connection settings.
+Use saved accounts and the Clientless controls to start and stop sessions.
+Connection settings retains the shared optional SOCKS5 setting, saved-session
+startup option, session clearing, connection status and diagnostic log.
+Manual ticket and cookie input is no longer shown.
