@@ -39,7 +39,7 @@ class AccountAutoPlayTests(unittest.TestCase):
         self.assertIn('--remote-debugging-address=127.0.0.1',args)
         self.assertIn('--remote-debugging-port=44321',args)
         self.assertIn('--new-window',args)
-        self.assertIn('--user-data-dir=C:/AccountProfiles/ab1234567890',args)
+        self.assertIn('--user-data-dir=C:/AccountProfiles/ab1234567890', [arg.replace(chr(92), '/') for arg in args])
         self.assertNotIn('--incognito',args)
         self.assertEqual(args[-1],'https://www.habbo.com/')
 

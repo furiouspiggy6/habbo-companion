@@ -46,3 +46,4 @@ venv/
 .idea/
 
 # Note: release update ZIPs are deliberately tracked by publish.yml.
+.aider*
