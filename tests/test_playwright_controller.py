@@ -200,6 +200,33 @@ class PlaywrightRoutingTests(unittest.TestCase):
             self.assertEqual([x[1] for x in calls if x[0]=='click'],
                              ['play-app','launch'] if followup else ['play-app'])
 
+    def test_app_error_is_not_counted_as_native_launch(self):
+        ns=scope('account_playwright_auto_play',
+                 'account_playwright_is_official','account_playwright_safe_error')
+        calls=[]
+        page=FakePage(calls)
+        page.password_visible=False
+        clicked=[False]
+        def control(p,kind):
+            if kind=='play-app':
+                return FakeElement(calls,'play-app',lambda:clicked.__setitem__(0,True))
+            if kind=='app-error' and clicked[0]:
+                return FakeElement(calls,'app-error')
+            return None
+        ns.update({
+            'account_playwright_engine':lambda report:lambda:FakeManager(calls),
+            'account_playwright_select_page':lambda browser:page,
+            'account_playwright_login_form':lambda p:None,
+            'account_playwright_control':control,
+            'account_playwright_visible':lambda loc:False,
+            'AccountPlaywrightMonitor':FakeMonitor,
+        })
+        messages=[]
+        self.assertEqual(ns['account_playwright_auto_play'](
+            43111,messages.append,login_only=False),'app_error')
+        self.assertEqual([x[1] for x in calls if x[0]=='click'],['play-app'])
+        self.assertIn('No automatic launch retry',' '.join(messages))
+
     def test_official_origin_lock_rejects_lookalikes(self):
         ns=scope('account_playwright_is_official')
         official=ns['account_playwright_is_official']

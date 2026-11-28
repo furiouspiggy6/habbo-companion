@@ -1288,3 +1288,9 @@ restore that same browser once, wait for its signed-in UI and recheck without
 submitting credentials a second time. Keep failed sign-ins and unresolved
 launcher prompts visible for manual verification. Successful native launches
 still close only their temporary browser. Shift+grave panel is unchanged.
+
+v1.1.137 — Handle Habbo website launch rejection
+Recognise the visible Play in App error dialog before and after a launch click.
+Report it as a website launch failure rather than a successful native request;
+keep the account browser available and do not retry automatically. The website
+may still reject a manual launch; Companion cannot guarantee service recovery.

@@ -2642,8 +2642,15 @@ def account_playwright_visible(locator):
 
 def account_playwright_control(page,kind):
     """Find one visibly labelled Habbo control using Playwright locators."""
+    if kind=='app-error':
+        # Only report the known visible Habbo app error. Never read raw page
+        # contents or click through a failed launch dialog.
+        target=page.get_by_text(re.compile(
+            r'^an error occurred[.!]?\s*please try again later[.!]?$',re.I),
+            exact=True).filter(visible=True)
+        return target.first if account_playwright_visible(target) else None
     patterns={
-        'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?$',
+        'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?,
         'submit':r"^(?:let['’]?s\s+go|log\s*in|login|sign\s*in|continue)\s*!?$",
         'play':r'^play(?:\s+now)?(?:\s+h)?\s*!?$',
         'play-app':r'^play\s+in\s+app(?:\s+h)?\s*!?$',
@@ -3213,9 +3220,25 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                 # Native launcher approval remains a separate Windows action.
                 last_play=False
                 app_requested=False
+                def native_site_error():
+                    if account_playwright_control(page,'app-error') is None:
+                        return False
+                    # Report only HTTP status, never URLs, bodies or tickets.
+                    failures=[rec.get('status') for rec in getattr(
+                        monitor,'requests',{}).values()
+                        if rec.get('service')=='Habbo'
+                        and rec.get('method')=='POST'
+                        and isinstance(rec.get('status'),int)
+                        and rec['status']>=400]
+                    report('Habbo Play in App returned an error'+
+                           (' (HTTP '+str(failures[-1])+')' if failures else '')+
+                           '. No automatic launch retry.')
+                    return True
                 for _ in range(6):
                     if not account_playwright_is_official(page.url):
                         return 'launched' if app_requested else 'unknown'
+                    if native_site_error():
+                        return 'app_error'
                     launch=account_playwright_control(page,'launch')
                     if launch is not None:
                         try:
@@ -3258,6 +3281,8 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                         report('Playwright clicked the Habbo PLAY control.')
                         last_play=True
                     page.wait_for_timeout(850)
+                if account_playwright_is_official(page.url) and native_site_error():
+                    return 'app_error'
                 if app_requested:
                     return 'launched'  # Caller verifies the native window or launcher.
                 return 'waiting'
@@ -9243,14 +9268,18 @@ class ChatOverlayApp(PersonaResponderMixin):
                             debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
                             credentials=None,login_only=False)
                         if outcome!='launched':
-                            note='Play in App not confirmed ('+str(outcome)+')'
+                            note=('Habbo website rejected Play in App' if outcome=='app_error'
+                                  else 'Play in App not confirmed ('+str(outcome)+')')
                             stage(account,note)
                             failure_notes.append(label+': '+note)
                             # A click failure can leave an unresolved launcher
                             # or external-protocol prompt. Do not launch another.
                             keep_browser=True
                             account_show_login_browser(debug_port)
-                            unresolved=True
+                            unresolved=(outcome!='app_error')
+                            if outcome=='app_error':
+                                report(f'{label}: Habbo displayed its own app-launch error. '
+                                       'Close the error, reload the website and test Play in App manually.')
                             break
                         attempted_ids.add(ident)
                         if native_before is not None:
