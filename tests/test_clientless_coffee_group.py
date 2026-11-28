@@ -35,12 +35,18 @@ class CoffeeGroupTests(TestCase):
         scope['_coffee_group_apply'](app)
         presets=app.config['clientless_coffee_presets']
         self.assertEqual(presets['a'],presets['c'])
-        self.assertEqual(presets['a']['delay'],15)
+        self.assertEqual(presets['a'],{'one':476989081,'two':476989024})
         self.assertEqual(presets['b'],{'one':7})
         self.assertEqual(presets['d'],{'one':8})
         app.save.assert_called_once()
         app._coffee_send.assert_not_called()
         app._coffee_start_run.assert_not_called()
+    def test_clientless_settings_ignore_old_delay_and_fixed_count(self):
+        app=SimpleNamespace(coffee_one_var=Mock(**{'get.return_value':'101'}),
+            coffee_two_var=Mock(**{'get.return_value':'202'}))
+        self.assertEqual(scope['_coffee_settings'](app),((101,202),0.0,None))
+        self.assertEqual(scope['_coffee_settings'](app,loop=True),((101,202),0.0,None))
+
     def test_select_all_is_selection_only(self):
         widget=Mock()
         widget.get_children.return_value=('a','c')

@@ -6526,26 +6526,17 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_recipient_var=tk.StringVar(value='')
         self.coffee_one_var=tk.StringVar(value='476989081')
         self.coffee_two_var=tk.StringVar(value='476989024')
-        self.coffee_delay_var=tk.StringVar(value=str(self.config.get('coffee_interval','0.1')))
-        self.coffee_count_var=tk.StringVar(value='5')
-        self.coffee_alternate_var=tk.BooleanVar(value=True)
         self.coffee_consent_var=tk.BooleanVar(value=False)
         self.coffee_status_var=tk.StringVar(value='Select a connected account in a room.')
         for label,var in (('Recipient username or room player ID',self.coffee_recipient_var),
                           ('Cup 1 furniture ID',self.coffee_one_var),
-                          ('Cup 2 furniture ID',self.coffee_two_var),
-                          ('Delay per action (seconds)',self.coffee_delay_var),
-                          ('Cups per fixed run',self.coffee_count_var)):
+                          ('Cup 2 furniture ID',self.coffee_two_var)):
             row=ttk.Frame(panel,style='Panel.TFrame')
             row.pack(anchor='w',pady=3)
             ttk.Label(row,text=label,width=34,style='Panel.TLabel').pack(side='left',padx=(0,12))
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
-        ttk.Button(panel,text='Copy Packet Manipulator delay',
-                   command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
-        ttk.Label(panel,text='The continuous loop uses the configured delay and local packet-send results. Server pickup and delivery are not verified.',
+        ttk.Label(panel,text='The continuous loop alternates both furniture IDs until STOP. Local packet-send results do not verify server pickup or delivery.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
-        ttk.Checkbutton(panel,text='Alternate machines in fixed runs',variable=self.coffee_alternate_var,
-                        style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
         ttk.Checkbutton(panel,text='I control the sending accounts',variable=self.coffee_consent_var,
                         style='Panel.TCheckbutton').pack(anchor='w')
         buttons=ttk.Frame(panel,style='Panel.TFrame')
@@ -6559,8 +6550,6 @@ class ChatOverlayApp(PersonaResponderMixin):
         runs.pack(anchor='w',pady=(5,8))
         ttk.Button(runs,text='Loop cups 1 and 2',style='Primary.TButton',
                    command=lambda:self._coffee_start_run(loop=True)).pack(side='left',padx=(0,7))
-        ttk.Button(runs,text='Start fixed run',
-                   command=self._coffee_start_run).pack(side='left',padx=(0,7))
         ttk.Button(runs,text='STOP',style='Danger.TButton',
                    command=self._coffee_stop_run).pack(side='left')
         ttk.Label(panel,textvariable=self.coffee_status_var,style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(4,0))
@@ -6665,14 +6654,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not ids:
             self.coffee_group_status_var.set('Select connected accounts first.')
             return
-        try:machines,seconds,count=self._coffee_settings()
+        try:machines,_,_=self._coffee_settings()
         except ClientlessBotError as exc:
             self.coffee_group_status_var.set(str(exc));return
         raw=self.config.get('clientless_coffee_presets',{})
         presets=dict(raw) if isinstance(raw,dict) else {}
         for ident in ids:
-            presets[ident]=dict(one=machines[0],two=machines[1],delay=seconds,
-                                count=count,alternate=bool(self.coffee_alternate_var.get()))
+            presets[ident]=dict(one=machines[0],two=machines[1])
         self.config['clientless_coffee_presets']=presets
         self.save()
         self.coffee_group_status_var.set('Settings saved for '+str(len(ids))+' connected account(s).')
@@ -6717,39 +6705,28 @@ class ChatOverlayApp(PersonaResponderMixin):
         preset=raw.get(account['id'],{}) if isinstance(raw,dict) else {}
         if not isinstance(preset,dict):preset={}
         for key,var,default in (
-                ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024'),
-                ('delay',self.coffee_delay_var,self.config.get('coffee_interval','0.1')),('count',self.coffee_count_var,'5')):
+                ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024')):
             var.set(str(preset.get(key,default)))
-        self.coffee_alternate_var.set(preset.get('alternate',True) is True)
         self.coffee_consent_var.set(False)
         self.coffee_status_var.set('Selected '+account['label']+'.')
 
-    def _coffee_copy_packet_delay(self):
-        try:
-            interval=validate_coffee_interval(self.coffee_interval_var.get())
-        except ValueError as exc:
-            self.coffee_status_var.set(str(exc));return
-        self.coffee_delay_var.set(str(interval))
-        self.coffee_status_var.set('Packet Manipulator delay copied. Save settings to keep it for selected accounts.')
-
-    def _coffee_settings(self,*,loop=False):
+    def _coffee_settings(self,*,loop=True):
+        # The panel exposes only continuous mode and furniture IDs.
         return validate_clientless_coffee_settings(self.coffee_one_var.get(),
-            self.coffee_two_var.get(),self.coffee_delay_var.get(),
-            None if loop else self.coffee_count_var.get())
+            self.coffee_two_var.get(),'0',None if loop else '5')
 
     def _coffee_save_settings(self):
         accounts=self._coffee_selected_accounts()
         if not accounts:
             self.coffee_status_var.set('Select a connected account first.')
             return
-        try:ids,seconds,count=self._coffee_settings()
+        try:ids,_,_=self._coffee_settings()
         except ClientlessBotError as exc:
             self.coffee_status_var.set(str(exc));return
         raw=self.config.get('clientless_coffee_presets',{})
         presets=dict(raw) if isinstance(raw,dict) else {}
         for account in accounts:
-            presets[account['id']]=dict(one=ids[0],two=ids[1],delay=seconds,count=count,
-                                        alternate=bool(self.coffee_alternate_var.get()))
+            presets[account['id']]=dict(one=ids[0],two=ids[1])
         self.config['clientless_coffee_presets']=presets
         self.save()
         label=(str(len(accounts))+' connected account(s)' if self.coffee_account_var.get()=='All connected accounts'
@@ -7008,10 +6985,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         return dict(id=ident,peer=peer,target=target,
             generation=state['generation'],peer_generation=peer_generation,
             room=state['room'],ids=ids,delay=seconds,count=count,done=0,
-            alternate=count is None or bool(self.coffee_alternate_var.get()),
+            alternate=True,
             phase='next',at=time.monotonic())
 
-    def _coffee_start_run(self,*,loop=False):
+    def _coffee_start_run(self,*,loop=True):
         if self._coffee_run:
             self.coffee_status_var.set('A coffee run is already active.');return
         accounts=self._coffee_selected_accounts()
