@@ -111,6 +111,29 @@ class CoffeeGroupTests(TestCase):
         self.assertTrue(calls[0].kwargs['_start_gate'].is_set())
         self.assertEqual(app._coffee_manual_results['c']['status'],'Skipped: This account is the recipient.')
 
+    def test_group_pass_waits_for_settle_and_rechecks_carry_once(self):
+        roster={1:(0,'Alice'),2:(1,'Bob'),3:(2,'Receiver')}
+        state={'players':roster,'carry':{0:(85,99)},'generation':1,'room':9}
+        owners={'a':1,'b':2}
+        app=SimpleNamespace(
+            _coffee_selected_accounts=lambda:[{'id':i} for i in owners],
+            _coffee_context=lambda i:(state,owners[i],roster[owners[i]][0]),
+            coffee_recipient_var=Mock(**{'get.return_value':'Receiver'}),
+            _bot_last_action_at={'a':99.9,'b':99.95},_coffee_last_pass={},
+            _coffee_send=Mock(),_coffee_manual_report=Mock(),
+            coffee_status_var=Mock(),_coffee_group_refresh=Mock(),root=Mock())
+        app._coffee_target=MethodType(scope['_coffee_target'],app)
+        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100)):
+            scope['_coffee_pass_all'](app)
+        app._coffee_send.assert_not_called()
+        delay,dispatch=app.root.after.call_args.args
+        self.assertGreaterEqual(delay,350)
+        state['carry'][1]=(86,100.1)
+        dispatch()
+        self.assertEqual([c.args[0] for c in app._coffee_send.call_args_list],['a','b'])
+        self.assertTrue(all(c.kwargs['recipient_id']==3 for c in app._coffee_send.call_args_list))
+        app.root.after.assert_called_once()
+
     def test_all_starts_eligible_senders_together(self):
         accounts=[{'id':i,'label':i.upper()} for i in ('a','b','c')]
         def build(ident,ids,delay,count):

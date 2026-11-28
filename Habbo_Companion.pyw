@@ -6678,6 +6678,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_group_status_var.set('Settings saved for '+str(len(ids))+' connected account(s).')
 
     def _coffee_group_stop(self):
+        results=getattr(self,'_coffee_manual_results',{})
+        if any(r.get('status','').startswith('Queued') for r in results.values()):
+            self._coffee_manual_results={}
         self._coffee_stop_run('All coffee runs stopped.')
         self._coffee_group_refresh()
         self.coffee_group_status_var.set('All coffee runs stopped. Accounts remain connected.')
@@ -6904,7 +6907,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         dispatch()
 
     def _coffee_pass_all(self):
-        """Send a manual pass once per ready account to the same in-room recipient."""
+        """Prepare one manual group pass and send after existing local timing guards."""
         if not self.coffee_recipient_var.get().strip():
             self.coffee_status_var.set('Enter a recipient username or player ID.')
             return
@@ -6912,30 +6915,64 @@ class ChatOverlayApp(PersonaResponderMixin):
         results={a['id']:{'status':'Queued','pending':False,
                           'action':'Pass hand item'} for a in accounts}
         self._coffee_manual_results=results
-        gate=threading.Event()
+        prepared={}
         target_id=None
-        try:
-            for account in accounts:
-                ident=account['id']
-                result=results[ident]
-                try:
-                    state,own,index=self._coffee_context(ident)
-                    target=self._coffee_target(state,own)
-                    if target_id is not None and target!=target_id:
-                        raise ClientlessBotError('Recipient differs between senders.')
-                    target_id=target
-                    if state['carry'].get(index,(0,0))[0]<=0:
-                        raise ClientlessBotError('No held cup observed.')
-                    self._coffee_send(ident,'Pass hand item',
-                                      recipient_id=target,_start_gate=gate)
-                    result.update(status='Sending pass packet',pending=True,
-                                  generation=state['generation'])
-                except (ValueError,TypeError,RuntimeError,OSError) as exc:
-                    detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
-                    result['status']='Skipped: '+detail
-        finally:
-            gate.set()
-        self._coffee_manual_report(results)
+        for account in accounts:
+            ident=account['id']
+            result=results[ident]
+            try:
+                state,own,index=self._coffee_context(ident)
+                target=self._coffee_target(state,own)
+                if target_id is not None and target!=target_id:
+                    raise ClientlessBotError('Recipient differs between senders.')
+                target_id=target
+                prepared[ident]=(state['generation'],state['room'],own,index,target)
+            except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
+                result['status']='Skipped: '+detail
+
+        def dispatch():
+            if self._coffee_manual_results is not results:return
+            if getattr(self,'_coffee_run',None):
+                for ident in prepared:
+                    results[ident]['status']='Skipped: Active cup run.'
+                self._coffee_manual_report(results)
+                return
+            gate=threading.Event()
+            try:
+                for ident,(generation,room,own,index,target) in prepared.items():
+                    result=results[ident]
+                    try:
+                        state,current_own,current_index=self._coffee_context(ident)
+                        if (state['generation'],state['room'],current_own,current_index)!=(
+                                generation,room,own,index) or target not in state['players']:
+                            raise ClientlessBotError('Account or recipient changed rooms.')
+                        if state['carry'].get(index,(0,0))[0]<=0:
+                            raise ClientlessBotError('No held cup observed.')
+                        self._coffee_send(ident,'Pass hand item',
+                                          recipient_id=target,_start_gate=gate)
+                        result.update(status='Sending pass packet',pending=True,
+                                      generation=generation)
+                    except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                        detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
+                        result['status']='Skipped: '+detail
+            finally:
+                gate.set()
+            self._coffee_manual_report(results)
+
+        now=time.monotonic()
+        last_action=getattr(self,'_bot_last_action_at',{})
+        last_pass=getattr(self,'_coffee_last_pass',{})
+        deadline=max([now]+[max(last_action.get(i,0)+0.4,
+                                last_pass.get(i,0)+10) for i in prepared])
+        if deadline>now:
+            for ident in prepared:
+                results[ident]['status']='Queued — waiting for pass readiness'
+            self.coffee_status_var.set('Pass queued for selected accounts; sends once when ready.')
+            self._coffee_group_refresh()
+            self.root.after(int((deadline-now)*1000)+2,dispatch)
+        else:
+            dispatch()
 
     def _coffee_manual_send_result(self,ident,generation,error,action='Collect hand item'):
         """Complete manual collection on local send outcome, not server pickup."""
