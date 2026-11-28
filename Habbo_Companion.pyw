@@ -2650,7 +2650,7 @@ def account_playwright_control(page,kind):
             exact=True).filter(visible=True)
         return target.first if account_playwright_visible(target) else None
     patterns={
-        'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?,
+        'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?$',
         'submit':r"^(?:let['’]?s\s+go|log\s*in|login|sign\s*in|continue)\s*!?$",
         'play':r'^play(?:\s+now)?(?:\s+h)?\s*!?$',
         'play-app':r'^play\s+in\s+app(?:\s+h)?\s*!?$',
