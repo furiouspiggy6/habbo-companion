@@ -6804,17 +6804,18 @@ class ChatOverlayApp(PersonaResponderMixin):
             raise ClientlessBotError('Multiple matching players. Enter the exact player ID.')
         return matches[0]
 
-    def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,**kwargs):
+    def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,_manual_pass=False,**kwargs):
         session=self._coffee_session(ident)
         if session is None:raise ClientlessBotError('Account is not connected by Direct TCP.')
         if ident in self._bot_action_inflight:raise ClientlessBotError('Previous action is still sending.')
         now=time.monotonic()
-        manual_pickup=_manual_pickup and action=='Collect hand item'
-        if not manual_pickup and now-self._bot_last_action_at.get(ident,0)<0.4:
+        manual_action=(_manual_pickup and action=='Collect hand item') or (
+            _manual_pass and action=='Pass hand item')
+        if not manual_action and now-self._bot_last_action_at.get(ident,0)<0.4:
             raise ClientlessBotError('Previous action is still settling.')
         cooldowns=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
         last=cooldowns.get(ident,0.0)
-        if not manual_pickup and now-last<10:
+        if not manual_action and now-last<10:
             raise ClientlessBotError('Please wait before sending another hand-item action.')
         packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
         generation=self._tcp_generation.get(ident,0)
@@ -6907,7 +6908,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         dispatch()
 
     def _coffee_pass_all(self):
-        """Prepare one manual group pass and send after existing local timing guards."""
+        """Prepare and dispatch one explicit group pass without a local cooldown."""
         if not self.coffee_recipient_var.get().strip():
             self.coffee_status_var.set('Enter a recipient username or player ID.')
             return
@@ -6950,7 +6951,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                         if state['carry'].get(index,(0,0))[0]<=0:
                             raise ClientlessBotError('No held cup observed.')
                         self._coffee_send(ident,'Pass hand item',
-                                          recipient_id=target,_start_gate=gate)
+                                          recipient_id=target,_start_gate=gate,_manual_pass=True)
                         result.update(status='Sending pass packet',pending=True,
                                       generation=generation)
                     except (ValueError,TypeError,RuntimeError,OSError) as exc:
@@ -6960,19 +6961,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                 gate.set()
             self._coffee_manual_report(results)
 
-        now=time.monotonic()
-        last_action=getattr(self,'_bot_last_action_at',{})
-        last_pass=getattr(self,'_coffee_last_pass',{})
-        deadline=max([now]+[max(last_action.get(i,0)+0.4,
-                                last_pass.get(i,0)+10) for i in prepared])
-        if deadline>now:
-            for ident in prepared:
-                results[ident]['status']='Queued — waiting for pass readiness'
-            self.coffee_status_var.set('Pass queued for selected accounts; sends once when ready.')
-            self._coffee_group_refresh()
-            self.root.after(int((deadline-now)*1000)+2,dispatch)
-        else:
-            dispatch()
+        dispatch()
 
     def _coffee_manual_send_result(self,ident,generation,error,action='Collect hand item'):
         """Complete manual collection on local send outcome, not server pickup."""
