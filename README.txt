@@ -1254,3 +1254,11 @@ prefers it over the older Play control, and never selects Play in Browser.
 If a separate Launch and log in button appears, it is handled once. Otherwise
 the existing native window/Classic launcher checks verify the launch request.
 Windows/browser permission prompts still require normal user approval.
+
+v1.1.133 — Background HabboAIR launch
+Normal native launches obtain a fresh official ticket using the existing isolated
+background sign-in helper, then open the installed Windows habbo: launcher.
+Open account login remains the explicit visible browser workflow for verification.
+No visible browser is automatically opened when background authentication fails.
+The native protocol association must be installed; game login is not inferred
+from a launcher request. Existing G-Earth launch guards remain in place.

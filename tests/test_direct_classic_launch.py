@@ -81,6 +81,27 @@ class CompanionDirectUiContractTests(unittest.TestCase):
         cls.root=Path(__file__).resolve().parents[1]
         cls.app=(cls.root/"Habbo_Companion.pyw").read_text(encoding="utf-8")
 
+    def test_background_air_uses_validated_native_protocol(self):
+        tree=ast.parse(self.app)
+        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef)
+                  and n.name=='account_request_native_air_launch')
+        import urllib.parse
+        open_app=mock.Mock()
+        scope={'os':SimpleNamespace(name='nt',startfile=open_app),
+               'urllib':SimpleNamespace(parse=urllib.parse),
+               'parse_classic_ticket':launch.parse_classic_ticket}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),
+                     'native-launch-test','exec'),scope)
+        fn=scope[node.name]
+        ticket=launch.parse_classic_ticket('hhus.'+SAMPLE+'.V4.example')
+        fn(ticket)
+        uri=open_app.call_args.args[0]
+        self.assertEqual(launch.parse_classic_ticket(uri),ticket)
+        open_app.side_effect=OSError('secret '+SAMPLE)
+        with self.assertRaises(OSError) as error:
+            fn(ticket)
+        self.assertNotIn(SAMPLE,str(error.exception))
+
     def test_obsolete_launcher_ui_and_callbacks_are_removed(self):
         for name in ('_make_direct_classic_panel', '_direct_render',
                      '_direct_ticket_queue', 'direct_table', 'direct_ticket_var',
