@@ -6795,16 +6795,18 @@ class ChatOverlayApp(PersonaResponderMixin):
             raise ClientlessBotError('Enter an unambiguous player currently in the room.')
         return matches[0]
 
-    def _coffee_send(self,ident,action,*,_start_gate=None,**kwargs):
+    def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,**kwargs):
         session=self._coffee_session(ident)
         if session is None:raise ClientlessBotError('Account is not connected by Direct TCP.')
         if ident in self._bot_action_inflight:raise ClientlessBotError('Previous action is still sending.')
         now=time.monotonic()
-        if now-self._bot_last_action_at.get(ident,0)<0.4:
+        manual_pickup=_manual_pickup and action=='Collect hand item'
+        if not manual_pickup and now-self._bot_last_action_at.get(ident,0)<0.4:
             raise ClientlessBotError('Previous action is still settling.')
         cooldowns=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
         last=cooldowns.get(ident,0.0)
-        if now-last<10:raise ClientlessBotError('Please wait before sending another hand-item action.')
+        if not manual_pickup and now-last<10:
+            raise ClientlessBotError('Please wait before sending another hand-item action.')
         packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
         generation=self._tcp_generation.get(ident,0)
         previous_action=self._bot_last_action_at.get(ident)
@@ -6881,7 +6883,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                         # A manual pickup is an explicit request even if an item is held.
                         # Preserve observed carry state until the server updates it.
                         self._coffee_send(ident,'Collect hand item',
-                                          furniture=ids[source-1],_start_gate=gate)
+                                          furniture=ids[source-1],_start_gate=gate,
+                                          _manual_pickup=True)
                         result.update(status='Sending pickup packet',pending=True,
                                       generation=state['generation'])
                     except (ValueError,TypeError,RuntimeError,OSError) as exc:
@@ -6891,20 +6894,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                 gate.set()
             self._coffee_manual_report(results)
 
-        # Keep the manual batch together if one member is still cooling down.
-        now=time.monotonic()
-        last_pickup=getattr(self,'_coffee_last_pickup',{})
-        last_action=getattr(self,'_bot_last_action_at',{})
-        deadline=max([now]+[max(last_pickup.get(a['id'],0)+10,
-                                 last_action.get(a['id'],0)+0.4) for a in accounts])
-        if deadline>now:
-            for result in results.values():
-                result['status']='Queued — waiting for cooldown'
-            self.coffee_status_var.set('Pickup queued for all selected accounts.')
-            self._coffee_group_refresh()
-            self.root.after(int((deadline-now)*1000)+1,dispatch)
-        else:
-            dispatch()
+        dispatch()
 
     def _coffee_manual_send_result(self,ident,generation,error):
         """Complete manual collection on local send outcome, not server pickup."""

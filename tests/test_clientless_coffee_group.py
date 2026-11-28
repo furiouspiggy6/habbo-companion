@@ -15,7 +15,7 @@ scope={'ClientlessBotError':ClientlessBotError,'time':time,'threading':threading
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
        '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
-       '_coffee_collect_all','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
+       '_coffee_collect_all','_coffee_send','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
        '_coffee_settings','_coffee_stop_run','_coffee_context','_coffee_target','_coffee_observe')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
@@ -281,7 +281,7 @@ class CoffeeGroupTests(TestCase):
         self.assertTrue(seen[0][2].is_set())
 
 
-    def test_manual_group_waits_for_cooldown_then_sends_once_to_every_account(self):
+    def test_manual_group_sends_once_to_every_account_without_cooldown_queue(self):
         held={0:(86,99)}
         states={'a':{'carry':held,'generation':1,'room':9},
                 'b':{'carry':{},'generation':1,'room':9}}
@@ -294,19 +294,37 @@ class CoffeeGroupTests(TestCase):
             _coffee_group_refresh=Mock(),_coffee_manual_report=Mock(),root=Mock())
         with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100)):
             scope['_coffee_collect_all'](app,1)
-        app._coffee_send.assert_not_called()
-        delay,dispatch=app.root.after.call_args.args
-        self.assertGreaterEqual(delay,5000)
-        self.assertEqual(app._coffee_manual_results['a']['status'],
-                         'Queued — waiting for cooldown')
-        dispatch()
         self.assertEqual([c.args[0] for c in app._coffee_send.call_args_list],['a','b'])
+        self.assertTrue(all(c.kwargs['_manual_pickup'] for c in app._coffee_send.call_args_list))
         self.assertEqual([c.kwargs['furniture'] for c in app._coffee_send.call_args_list],[101,101])
         gates=[c.kwargs['_start_gate'] for c in app._coffee_send.call_args_list]
         self.assertIs(gates[0],gates[1])
         self.assertTrue(gates[0].is_set())
         self.assertEqual(held,{0:(86,99)})
-        app.root.after.assert_called_once()
+        app.root.after.assert_not_called()
+
+    def test_manual_pickup_skips_local_delays_but_retains_inflight_guard(self):
+        session=SimpleNamespace(release='test')
+        app=SimpleNamespace(_coffee_session=lambda ident:session,
+            _bot_action_inflight=set(),_bot_last_action_at={'a':99.9},
+            _coffee_last_pickup={'a':99.9},_coffee_last_pass={'a':99.9},
+            _bot_headers=None,_tcp_generation={'a':1},_bot_action_worker=Mock())
+        encode=Mock(return_value=((1,b'body','UseFurniture'),))
+        thread=Mock()
+        send=scope['_coffee_send']
+        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100),
+                        threading=SimpleNamespace(Thread=thread),
+                        encode_clientless_action=encode):
+            with self.assertRaises(ClientlessBotError):
+                send(app,'a','Collect hand item',furniture=101)
+            send(app,'a','Collect hand item',furniture=101,_manual_pickup=True)
+            encode.assert_called_once_with(None,'test','Collect hand item',furniture=101)
+            thread.return_value.start.assert_called_once()
+            with self.assertRaisesRegex(ClientlessBotError,'still sending'):
+                send(app,'a','Collect hand item',furniture=101,_manual_pickup=True)
+            app._bot_action_inflight.clear()
+            with self.assertRaises(ClientlessBotError):
+                send(app,'a','Pass hand item',recipient_id=2,_manual_pickup=True)
 
     def test_manual_pickup_completes_on_send_without_hand_item_confirmation(self):
         results={i:dict(status='Sending pickup packet',pending=True,generation=1)
