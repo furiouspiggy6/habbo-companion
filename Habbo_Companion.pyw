@@ -6542,7 +6542,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
         ttk.Button(panel,text='Copy Packet Manipulator delay',
                    command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
-        ttk.Label(panel,text='The loop waits for pickup confirmation and uses the configured delay. Fixed runs retain their cooldowns.',
+        ttk.Label(panel,text='The continuous loop uses the configured delay and local packet-send results. Server pickup and delivery are not verified.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
         ttk.Checkbutton(panel,text='Alternate machines in fixed runs',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
@@ -7046,7 +7046,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._coffee_stop_run(str(exc)[:180])
 
     def _coffee_stop_run(self,message='Coffee run stopped.'):
+        batch=self._coffee_run
         self._coffee_run=None
+        if batch and batch.get('loop_timer') is not None:
+            self.root.after_cancel(batch.pop('loop_timer'))
         self.coffee_status_var.set(message)
         self._coffee_group_refresh()
 
@@ -7069,17 +7072,20 @@ class ChatOverlayApp(PersonaResponderMixin):
         ready_to_pass=ready and (continuous or now>=self._coffee_last_pass.get(ident,0)+10)
         loop_options={'_loop_action':True} if continuous else {}
         item,seen=state['carry'].get(index,(0,0))
+        if continuous and not ready and now-run['at']>=20:
+            raise ClientlessBotError('Run stopped: local send did not finish.')
         if phase=='next':
             if not ready or now<run['at']:
                 return
-            if item>0 and run['count'] is None:
+            if continuous and item>0 and not run.get('loop_started') and not run['done']:
                 if ready_to_pass:
                     run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'],**loop_options)
                     run['phase']='pass held item'
+                    run['loop_started']=True
                 return
             if not continuous and now<self._coffee_last_pickup.get(ident,0)+10:
                 return
-            if item>0:
+            if not continuous and item>0:
                 raise ClientlessBotError('Run stopped: avatar already holds an item.')
             slot=run['done']%2 if run['alternate'] else 0
             options=dict(loop_options)
@@ -7087,12 +7093,14 @@ class ChatOverlayApp(PersonaResponderMixin):
                 options['_start_gate']=pickup_gate
             run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot],**options)
             run['phase']='pickup'
+            if continuous:
+                run['loop_started']=True
         elif phase=='pickup':
             confirmed=item>0 and seen>=run['at']
-            if not confirmed and now-run['at']>20:
+            if not continuous and not confirmed and now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
             required_delay=run['delay'] if continuous else max(0.4,run['delay'])
-            if confirmed and ready_to_pass and now>=run['at']+required_delay:
+            if (continuous or confirmed) and ready_to_pass and now>=run['at']+required_delay:
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'],**loop_options)
                 run['phase']='pass'
         elif phase in ('pass','pass held item'):
@@ -7115,6 +7123,18 @@ class ChatOverlayApp(PersonaResponderMixin):
             else:
                 run['phase']='next'
                 run['at']=now+run['delay']
+
+    def _coffee_schedule_loop_tick(self,batch,delay_ms):
+        """One replaceable UI timer, awakened by local send completions."""
+        if self._coffee_run is not batch:return
+        timer=batch.pop('loop_timer',None)
+        if timer is not None:
+            self.root.after_cancel(timer)
+        def wake():
+            if self._coffee_run is not batch:return
+            batch.pop('loop_timer',None)
+            self._coffee_tick(batch)
+        batch['loop_timer']=self.root.after(delay_ms,wake)
 
     def _coffee_tick(self,batch):
         if self._coffee_run is not batch:return
@@ -7145,7 +7165,24 @@ class ChatOverlayApp(PersonaResponderMixin):
                 progress=f'Coffee run: {done}/{total}'
             self.coffee_status_var.set(f'{progress} — {active}/{len(runs)} active sender(s)')
             self._coffee_group_refresh()
-            self.root.after(250,lambda:self._coffee_tick(batch))
+            if runs[0]['count'] is None:
+                # Wait for the next configured deadline, or a socket-send event.
+                # A watchdog still stops a stalled local send; no pickup ACK is required.
+                deadlines=[]
+                for run in runs:
+                    if run['phase']=='complete':continue
+                    if run['id'] in self._bot_action_inflight:
+                        deadlines.append(run['at']+20)
+                    elif run['phase']=='pickup':
+                        deadlines.append(run['at']+run['delay'])
+                    elif run['phase']=='next':
+                        deadlines.append(run['at'])
+                    else:
+                        deadlines.append(now)
+                remaining=max(0,min(deadlines)-time.monotonic())
+                self._coffee_schedule_loop_tick(batch,int(remaining*1000)+1 if remaining else 0)
+            else:
+                self.root.after(250,lambda:self._coffee_tick(batch))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
 
@@ -13206,6 +13243,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                                                     if r['phase']!='complete'):
                             self._coffee_stop_run('Run stopped: '+error)
                         else:self.coffee_status_var.set('Hand-item action failed: '+error)
+                batch=self._coffee_run
+                if batch and any(r['id']==ident and r['count'] is None
+                                 and r['phase']!='complete' for r in batch['runs']):
+                    self._coffee_schedule_loop_tick(batch,0)
                 if error is None and action!='Anti-AFK':
                     # Ordinary user actions postpone automatic idle refreshes.
                     self._bot_anti_afk_last[ident]=time.monotonic()

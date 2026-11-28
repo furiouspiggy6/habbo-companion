@@ -15,7 +15,7 @@ scope={'ClientlessBotError':ClientlessBotError,'time':time,'threading':threading
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
        '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
-       '_coffee_collect_all','_coffee_pass_all','_coffee_send','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
+       '_coffee_collect_all','_coffee_pass_all','_coffee_send','_coffee_manual_report','_coffee_manual_send_result','_coffee_schedule_loop_tick','_coffee_tick','_coffee_advance','_coffee_build_run',
        '_coffee_settings','_coffee_stop_run','_coffee_context','_coffee_target','_coffee_observe')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
@@ -185,7 +185,7 @@ class CoffeeGroupTests(TestCase):
             _coffee_group_refresh=Mock(),root=Mock(),
         )
         for name in ('_coffee_settings','_coffee_build_run','_coffee_start_run',
-                     '_coffee_advance','_coffee_tick','_coffee_stop_run',
+                     '_coffee_advance','_coffee_tick','_coffee_schedule_loop_tick','_coffee_stop_run',
                      '_coffee_context','_coffee_target','_coffee_refresh_accounts'):
             setattr(app,name,MethodType(scope[name],app))
 
@@ -214,7 +214,7 @@ class CoffeeGroupTests(TestCase):
                 self.assertEqual(app._coffee_send.call_args_list,expected)
                 self.assertEqual(batch['runs'][0]['phase'],'pickup')
                 clock.now+=0.5
-                sender['carry'][0]=(5,clock.now)
+                # No server hand-item observation is delivered.
                 app._coffee_tick(batch)
                 expected.append(call('a','Pass hand item',recipient_id=2,_loop_action=True))
                 self.assertEqual(app._coffee_send.call_args_list,expected)
@@ -225,6 +225,7 @@ class CoffeeGroupTests(TestCase):
                 app._coffee_tick(batch)
                 self.assertEqual(batch['runs'][0]['phase'],'next')
                 self.assertNotIn(0,sender['carry'])
+                self.assertEqual(app.root.after.call_args.args[0],0)
 
             self.assertEqual(batch['runs'][0]['phase'],'next')
             self.assertIs(app._coffee_run,batch)
@@ -254,7 +255,7 @@ class CoffeeGroupTests(TestCase):
 
     def test_loop_continues_after_sending_held_item_without_release_confirmation(self):
         advance=scope['_coffee_advance']
-        for completed,next_cup in ((0,101),(1,202)):
+        for completed,next_cup in ((0,101),):
             with self.subTest(completed=completed):
                 state={'room':9,'generation':1,'players':{2:(3,'B')},'carry':{0:(5,99)}}
                 run=dict(id='a',peer=None,target=2,room=9,generation=1,
@@ -394,8 +395,8 @@ class CoffeeGroupTests(TestCase):
             send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
             self.assertEqual(encode.call_count,2)
 
-    def test_continuous_loop_uses_configured_delay_without_settle_floor(self):
-        state={'generation':1,'room':1,'players':{2:(3,'B')},'carry':{0:(85,100.01)}}
+    def test_continuous_loop_uses_configured_delay_without_pickup_confirmation(self):
+        state={'generation':1,'room':1,'players':{2:(3,'B')},'carry':{}}
         app=SimpleNamespace(_coffee_context=lambda ident:(state,1,0),
             _coffee_last_pass={'a':100},_coffee_last_pickup={'a':100},
             _bot_action_inflight=set(),_bot_last_action_at={'a':100},
@@ -410,6 +411,20 @@ class CoffeeGroupTests(TestCase):
         app._coffee_send.assert_called_once_with('a','Pass hand item',
             recipient_id=2,_loop_action=True)
         self.assertEqual(run['phase'],'pass')
+
+    def test_loop_timer_is_replaced_on_local_send_completion(self):
+        batch={'runs':[]}
+        app=SimpleNamespace(_coffee_run=batch,root=Mock(),_coffee_tick=Mock())
+        app.root.after.side_effect=['deadline','completion']
+        schedule=scope['_coffee_schedule_loop_tick']
+        schedule(app,batch,20000)
+        schedule(app,batch,0)
+        app.root.after_cancel.assert_called_once_with('deadline')
+        self.assertEqual(batch['loop_timer'],'completion')
+        wake=app.root.after.call_args.args[1]
+        wake()
+        self.assertNotIn('loop_timer',batch)
+        app._coffee_tick.assert_called_once_with(batch)
 
     def test_manual_pickup_completes_on_send_without_hand_item_confirmation(self):
         results={i:dict(status='Sending pickup packet',pending=True,generation=1)
