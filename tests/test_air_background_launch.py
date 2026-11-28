@@ -19,3 +19,11 @@ class AirBackgroundLaunchTests(unittest.TestCase):
         self.assertIn('if spawned is not None and not keep_browser:',worker)
         self.assertIn("('game_panel_arm',generation,native_before)",worker)
         self.assertIn('account_show_login_browser(port)',worker)
+
+    def test_minimised_waiting_recovery_does_not_resubmit_password(self):
+        worker=METHODS['_account_auto_worker']
+        self.assertIn("outcome in ('waiting','no_habbo_tab','control_error')",worker)
+        self.assertIn('if account_show_login_browser(debug_port):',worker)
+        self.assertIn('debug_port,relay,max_checks=24',worker)
+        self.assertIn('debug_port,relay,credentials=None,login_only=True',worker)
+        self.assertIn('keep_browser=True',worker)

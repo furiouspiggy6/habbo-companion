@@ -1281,3 +1281,10 @@ remain available; Open account login restores an existing isolated browser.
 No verification bypass or repeated password submission. Shift+grave game
 panel attachment remains unchanged. Browser minimisation is not guaranteed
 by every Chromium build or Windows external-protocol prompt.
+
+v1.1.136 — Recover stalled minimised AIR login
+When the minimised browser reports waiting or cannot expose the account page,
+restore that same browser once, wait for its signed-in UI and recheck without
+submitting credentials a second time. Keep failed sign-ins and unresolved
+launcher prompts visible for manual verification. Successful native launches
+still close only their temporary browser. Shift+grave panel is unchanged.

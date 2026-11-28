@@ -3784,7 +3784,7 @@ def account_request_native_air_launch(ticket):
 
 
 def account_show_login_browser(debug_port):
-    """Restore an existing isolated browser only for explicit manual login."""
+    """Restore an isolated browser for manual login or a stalled AIR launch."""
     page=account_habbo_page(debug_port)
     if not page:
         return
@@ -3796,8 +3796,9 @@ def account_show_login_browser(debug_port):
             account_cdp_call(ws,'Browser.setWindowBounds',{
                 'windowId':window_id,'bounds':{'windowState':'normal'}})
         account_cdp_call(ws,'Page.bringToFront')
+        return True
     except (OSError,ValueError,RuntimeError,TimeoutError):
-        pass
+        return False
 
 
 def account_is_native_habbo_window(title):
@@ -9208,10 +9209,27 @@ class ChatOverlayApp(PersonaResponderMixin):
                                 raise RuntimeError('Account browser control unavailable.')
                             account_wait_for_background_session(debug_port,report,max_checks=12)
                         credentials=account_saved_login_read(ident)
+                        def relay(msg,name=label):
+                            report(f'{name}: {msg}')
                         outcome=account_attempt_auto_play(
-                            debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
-                            credentials=credentials,login_only=True)
+                            debug_port,relay,credentials=credentials,login_only=True)
+                        if outcome in ('waiting','no_habbo_tab','control_error'):
+                            # A minimised Chromium page can remain unrendered
+                            # or still be navigating. Restore it once and wait
+                            # for the actual signed-in controls. Never submit
+                            # a password again after the first attempt.
+                            stage(account,'Restoring browser to finish sign-in')
+                            relay('Sign-in UI not ready; restoring the account browser for one readiness check.')
+                            if account_show_login_browser(debug_port):
+                                account_wait_for_background_session(
+                                    debug_port,relay,max_checks=24)
+                                outcome=account_attempt_auto_play(
+                                    debug_port,relay,credentials=None,login_only=True)
                         if outcome!='signed_in':
+                            # Keep the failed profile available for inspection
+                            # or manual verification instead of closing it.
+                            keep_browser=True
+                            account_show_login_browser(debug_port)
                             note=('Sign-in / verification required' if outcome=='login'
                                   else 'Website sign-in not confirmed ('+str(outcome)+')')
                             stage(account,note)
@@ -9231,6 +9249,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                             # A click failure can leave an unresolved launcher
                             # or external-protocol prompt. Do not launch another.
                             keep_browser=True
+                            account_show_login_browser(debug_port)
                             unresolved=True
                             break
                         attempted_ids.add(ident)
@@ -9249,6 +9268,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                             stage(account,'New HabboAir window (account unverified)')
                         else:
                             keep_browser=True
+                            account_show_login_browser(debug_port)
                             unresolved=True
                             stage(account,'Needs manual Classic / permission')
                             for future in accounts[n:]:
