@@ -1,6 +1,7 @@
 """Offline Coffee Pass bulk settings and concurrent run tests."""
 import ast
 import time
+import threading
 from pathlib import Path
 from types import MethodType, SimpleNamespace
 from unittest import TestCase
@@ -9,7 +10,7 @@ from clientless_bot import ClientlessBotError, validate_clientless_coffee_settin
 
 p=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
 tree=ast.parse(p.read_text(encoding='utf-8'))
-scope={'ClientlessBotError':ClientlessBotError,'time':time,
+scope={'ClientlessBotError':ClientlessBotError,'time':time,'threading':threading,
        'validate_clientless_coffee_settings':validate_clientless_coffee_settings}
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
@@ -110,6 +111,9 @@ class CoffeeGroupTests(TestCase):
         app._coffee_tick.assert_called_once_with(batch)
         scope['_coffee_tick'](app,batch)
         self.assertEqual([call.args[0]['id'] for call in app._coffee_advance.call_args_list],['a','c'])
+        gates=[call.kwargs['pickup_gate'] for call in app._coffee_advance.call_args_list]
+        self.assertIs(gates[0],gates[1])
+        self.assertTrue(gates[0].is_set())
         for run in batch['runs']:
             run.update(phase='complete',done=3)
         scope['_coffee_tick'](app,batch)
@@ -253,6 +257,27 @@ class CoffeeGroupTests(TestCase):
             _coffee_send=Mock(),coffee_status_var=Mock(),_coffee_group_refresh=Mock())
         scope['_coffee_collect_all'](app,1)
         self.assertEqual([call.args[0] for call in app._coffee_send.call_args_list],['a','c'])
+        gates=[call.kwargs['_start_gate'] for call in app._coffee_send.call_args_list]
+        self.assertIs(gates[0],gates[1])
+        self.assertTrue(gates[0].is_set())
+
+    def test_manual_collection_releases_gate_only_after_all_prepared(self):
+        seen=[]
+        def prepare(ident,action,**kwargs):
+            gate=kwargs['_start_gate']
+            self.assertFalse(gate.is_set())
+            seen.append((ident,kwargs['furniture'],gate))
+        app=SimpleNamespace(
+            _coffee_selected_accounts=lambda:[{'id':'a'},{'id':'b'},{'id':'c'}],
+            _coffee_settings=lambda:((101,202),10,3),
+            _coffee_context=lambda ident:({'carry':{0:(1,0)} if ident=='b' else {}},1,0),
+            _coffee_send=prepare,coffee_status_var=Mock(),_coffee_group_refresh=Mock())
+        scope['_coffee_collect_all'](app,2)
+        self.assertEqual([(ident,furniture) for ident,furniture,_ in seen],
+                         [('a',202),('c',202)])
+        self.assertIs(seen[0][2],seen[1][2])
+        self.assertTrue(seen[0][2].is_set())
+
 
     def test_advance_uses_own_cooldown(self):
         states={'a':({'generation':1,'room':1,'players':{2:(0,'B')},'carry':{}},1,0),

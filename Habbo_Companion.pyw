@@ -6772,7 +6772,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             raise ClientlessBotError('Enter an unambiguous player currently in the room.')
         return matches[0]
 
-    def _coffee_send(self,ident,action,**kwargs):
+    def _coffee_send(self,ident,action,*,_start_gate=None,**kwargs):
         session=self._coffee_session(ident)
         if session is None:raise ClientlessBotError('Account is not connected by Direct TCP.')
         if ident in self._bot_action_inflight:raise ClientlessBotError('Previous action is still sending.')
@@ -6784,11 +6784,24 @@ class ChatOverlayApp(PersonaResponderMixin):
         if now-last<10:raise ClientlessBotError('Please wait before sending another hand-item action.')
         packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
         generation=self._tcp_generation.get(ident,0)
+        previous_action=self._bot_last_action_at.get(ident)
+        previous_cooldown=cooldowns.get(ident)
         self._bot_action_inflight.add(ident)
         self._bot_last_action_at[ident]=now
         cooldowns[ident]=now
-        threading.Thread(target=self._bot_action_worker,
-            args=(ident,generation,session,action,packets),daemon=True).start()
+        def send_when_ready():
+            if _start_gate is not None:
+                _start_gate.wait()
+            self._bot_action_worker(ident,generation,session,action,packets)
+        try:
+            threading.Thread(target=send_when_ready,daemon=True).start()
+        except (RuntimeError,OSError):
+            self._bot_action_inflight.discard(ident)
+            if previous_action is None:self._bot_last_action_at.pop(ident,None)
+            else:self._bot_last_action_at[ident]=previous_action
+            if previous_cooldown is None:cooldowns.pop(ident,None)
+            else:cooldowns[ident]=previous_cooldown
+            raise
         return now
 
     def _coffee_manual(self,action,source=1):
@@ -6826,18 +6839,26 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.coffee_status_var.set(str(exc)[:180]);return
         sent=0
         skipped=0
-        for account in self._coffee_selected_accounts():
-            ident=account['id']
-            try:
-                state,_,index=self._coffee_context(ident)
-                if state['carry'].get(index,(0,0))[0]>0:
-                    raise ClientlessBotError('Avatar already holds an item.')
-                self._coffee_send(ident,'Collect hand item',furniture=ids[source-1])
-                state['carry'].pop(index,None)
-                sent+=1
-            except (ValueError,TypeError,RuntimeError,OSError):
-                skipped+=1
-        self.coffee_status_var.set('Collect requested for '+str(sent)+' account(s); '+str(skipped)+
+        gate=threading.Event()
+        try:
+            for account in self._coffee_selected_accounts():
+                ident=account['id']
+                try:
+                    state,_,index=self._coffee_context(ident)
+                    if state['carry'].get(index,(0,0))[0]>0:
+                        raise ClientlessBotError('Avatar already holds an item.')
+                    self._coffee_send(ident,'Collect hand item',
+                                      furniture=ids[source-1],_start_gate=gate)
+                    state['carry'].pop(index,None)
+                    sent+=1
+                except (ValueError,TypeError,RuntimeError,OSError):
+                    skipped+=1
+        finally:
+            # Release all prepared pickup workers together, even if an
+            # individual account was unavailable or failed validation.
+            gate.set()
+        self.coffee_status_var.set('Simultaneous collection requested for '+str(sent)+
+                                   ' account(s); '+str(skipped)+
                                    ' skipped. Awaiting server activity.')
         self._coffee_group_refresh()
 
@@ -6890,7 +6911,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             batch=dict(runs=runs,skipped=skipped)
             self._coffee_run=batch
             self.coffee_group_status_var.set(str(len(runs))+' active sender(s); '+str(skipped)+
-                ' skipped (recipient or unavailable). Concurrent collection.')
+                ' skipped (recipient or unavailable). Synchronized ready pickups.')
             self._coffee_tick(batch)
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._coffee_stop_run(str(exc)[:180])
@@ -6900,7 +6921,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_status_var.set(message)
         self._coffee_group_refresh()
 
-    def _coffee_advance(self,run,now):
+    def _coffee_advance(self,run,now,pickup_gate=None):
         ident=run['id']
         state,own,index=self._coffee_context(ident)
         if state['generation']!=run['generation'] or state['room']!=run['room']:
@@ -6930,7 +6951,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             if item>0:
                 raise ClientlessBotError('Run stopped: avatar already holds an item.')
             slot=run['done']%2 if run['alternate'] else 0
-            run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot])
+            options={'_start_gate':pickup_gate} if pickup_gate is not None else {}
+            run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot],**options)
             run['phase']='pickup'
         elif phase=='pickup':
             confirmed=item>0 and seen>=run['at']
@@ -6965,9 +6987,17 @@ class ChatOverlayApp(PersonaResponderMixin):
         try:
             runs=batch['runs']
             now=time.monotonic()
-            for run in runs:
-                if run['phase']!='complete':
-                    self._coffee_advance(run,now)
+            pickup_gate=threading.Event() if len(runs)>1 else None
+            try:
+                for run in runs:
+                    if run['phase']!='complete':
+                        if pickup_gate is None:
+                            self._coffee_advance(run,now)
+                        else:
+                            self._coffee_advance(run,now,pickup_gate=pickup_gate)
+            finally:
+                if pickup_gate is not None:
+                    pickup_gate.set()
             done=sum(r['done'] for r in runs)
             active=sum(r['phase']!='complete' for r in runs)
             if not active:

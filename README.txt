@@ -1318,3 +1318,12 @@ Play in App labels with decorative Habbo icon text while excluding Play in
 Browser. Avoid waiting on incomplete diagnostic response bodies. Preserve
 specific Play in App failure details in the final Accounts status. Existing
 AIR launch modes, G-Earth guards, overlay and clientless chat remain unchanged.
+
+v1.1.141 — Synchronized clientless furniture collection
+Manual Collect cup 1/2 with All connected accounts prepares eligible sends and
+releases their workers with one shared start signal. Group coffee runs also
+release pickup requests that are ready in the same scheduler tick together.
+Each account retains its existing cooldowns, room/identity checks, in-flight
+protection and server confirmation logic. Ineligible accounts are skipped for
+manual collection; loop phases remain independent. Server receipt and pickup
+completion timing are not guaranteed to match.
