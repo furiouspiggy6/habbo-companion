@@ -1311,3 +1311,10 @@ occurrence. Preserve same-account repeats, separate rooms, whispers and unknown
 room observations. This is a display-only change; no packets or actions are
 modified. Without server message IDs, delayed or ambiguous deliveries are
 best-effort. The short-lived cache is memory-only and bounded.
+
+v1.1.140 — Native launch control and tab selection
+Prefer a healthy visible Habbo tab over a stale launch-error tab. Recognise
+Play in App labels with decorative Habbo icon text while excluding Play in
+Browser. Avoid waiting on incomplete diagnostic response bodies. Preserve
+specific Play in App failure details in the final Accounts status. Existing
+AIR launch modes, G-Earth guards, overlay and clientless chat remain unchanged.

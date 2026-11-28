@@ -166,6 +166,10 @@ class PlaywrightRoutingTests(unittest.TestCase):
         self.assertIsNotNone(ns['account_playwright_control'](Page(),'play-app'))
         self.assertTrue(patterns[0].fullmatch('PLAY IN APP'))
         self.assertFalse(patterns[0].fullmatch('PLAY IN BROWSER'))
+        self.assertTrue(patterns[0].fullmatch('PLAY IN APP Habbo'))
+        self.assertTrue(patterns[0].fullmatch('PLAY IN APP Ⓗ'))
+        self.assertTrue(patterns[0].fullmatch('PLAY IN APP Habbo icon'))
+        self.assertFalse(patterns[0].fullmatch('PLAY IN APP PLAY IN BROWSER'))
 
     def test_play_in_app_click_is_not_repeated_and_requests_native_launch(self):
         for followup in (False,True):
@@ -229,6 +233,24 @@ class PlaywrightRoutingTests(unittest.TestCase):
         self.assertEqual([x[1] for x in calls if x[0]=='click'],['play-app'])
         self.assertIn('No automatic launch retry',' '.join(messages))
 
+    def test_tab_selection_prefers_healthy_visible_tab_over_old_error(self):
+        ns=scope('account_playwright_select_page','account_playwright_is_official')
+        class Tab:
+            url='https://www.habbo.com/'
+            def __init__(self,kind,visible=False):
+                self.kind=kind
+                self.visible=visible
+            def locator(self,selector):return None
+            def evaluate(self,script):return self.visible
+        old=Tab('app-error',True)
+        hidden=Tab('play-app')
+        current=Tab('play-app',True)
+        ns['account_playwright_visible']=lambda locator:False
+        ns['account_playwright_control']=lambda page,kind:(
+            object() if page.kind==kind else None)
+        browser=SimpleNamespace(contexts=[SimpleNamespace(pages=[old,hidden,current])])
+        self.assertIs(ns['account_playwright_select_page'](browser),current)
+
     def test_official_origin_lock_rejects_lookalikes(self):
         ns=scope('account_playwright_is_official')
         official=ns['account_playwright_is_official']
@@ -279,6 +301,7 @@ class BrowserMonitoringTests(unittest.TestCase):
             headers={'content-type':'application/json','content-length':'99'},
             text=lambda:'{"password":"PRIVATE_PASSWORD","code":"INVALID_CREDENTIALS"}')
         calls['response'](response)
+        calls['requestfinished'](req)
         mon.finish()
         mon.stop()
         output=' '.join(messages)

@@ -2651,7 +2651,7 @@ def account_playwright_control(page,kind):
         'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?$',
         'submit':r"^(?:let['’]?s\s+go|log\s*in|login|sign\s*in|continue)\s*!?$",
         'play':r'^play(?:\s+now)?(?:\s+h)?\s*!?$',
-        'play-app':r'^play\s+in\s+app(?:\s+h)?\s*!?$',
+        'play-app':r'^\s*play\s*in\s*app\s*!?(?:\s*(?:h|habbo(?:\s*(?:icon|logo))?|[\u24bd\u24d7]))?\s*$',
         'launch':r'^launch\s*(?:and|&)\s*log\s*in\s*!?$',
     }
     pattern=re.compile(patterns[kind],re.I)
@@ -2660,7 +2660,7 @@ def account_playwright_control(page,kind):
         target=page.get_by_role(role,name=pattern).filter(visible=True)
         if account_playwright_visible(target):
             return target.first
-    target=page.locator('button,a,[role="button"],input[type="submit"]').filter(
+    target=page.locator('button,a,[role="button"],input[type="submit"],input[type="button"]').filter(
         has_text=pattern,visible=True)
     if account_playwright_visible(target):
         return target.first
@@ -2677,11 +2677,13 @@ def account_playwright_select_page(browser):
     """Select a Habbo tab from the already isolated browser context."""
     candidates=[]
     for context in browser.contexts:
-        for page in context.pages:
+        for page in reversed(context.pages):
             if not account_playwright_is_official(page.url):
                 continue
             try:
-                if account_playwright_visible(
+                if account_playwright_control(page,'app-error') is not None:
+                    priority=0
+                elif account_playwright_visible(
                         page.locator('input[type="password"]:visible')):
                     priority=3
                 elif account_playwright_control(page,'launch') is not None:
@@ -2694,12 +2696,18 @@ def account_playwright_select_page(browser):
                     priority=2
                 else:
                     priority=1
-                candidates.append((priority,page))
+                # Prefer the currently visible tab when equally suitable;
+                # do not select an old error dialog over a usable home page.
+                try:
+                    foreground=bool(page.evaluate("document.visibilityState === 'visible'"))
+                except Exception:
+                    foreground=False
+                candidates.append((priority,foreground,page))
             except (OSError,RuntimeError):
                 continue
     if not candidates:
         return None
-    return max(candidates,key=lambda pair:pair[0])[1]
+    return max(candidates,key=lambda entry:entry[:2])[2]
 
 
 def account_playwright_login_form(page):
@@ -2995,6 +3003,10 @@ class AccountPlaywrightMonitor:
         # not within network callbacks (which could re-enter Playwright).
         # A HTTP 200 may still contain an application-level login rejection.
         for rec,resp in self.response_candidates:
+            # A response with headers but no requestfinished event may still
+            # be streaming. Do not block the native launch waiting on it.
+            if not rec.get('completed') or rec.get('failed'):
+                continue
             try:
                 body=resp.text()
                 if not isinstance(body,str) or len(body)>8192:
@@ -3280,6 +3292,7 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                         continue
                     app=account_playwright_control(page,'play-app')
                     if app is not None:
+                        report('Play in App located; clicking the native app button.')
                         try:
                             app.click(timeout=9000)
                         except Exception as exc:
@@ -3309,6 +3322,7 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                     return 'app_error'
                 if app_requested:
                     return 'launched'  # Caller verifies the native window or launcher.
+                report('No recognised Play in App or Launch and log in control became available.')
                 return 'waiting'
             finally:
                 try:
@@ -9272,15 +9286,27 @@ class ChatOverlayApp(PersonaResponderMixin):
                         # One browser automation pass handles both sign-in and
                         # Play in App. A slow page cannot be rejected simply
                         # because the sign-in-only probe did not see a button.
+                        launch_details=[]
+                        def relay_launch(msg,name=label):
+                            safe=str(msg)
+                            if safe.startswith(('Playwright Play in App:',
+                                'Playwright PLAY:', 'Playwright launch:',
+                                'Playwright could not operate',
+                                'No recognised Play in App',
+                                'Habbo Play in App returned an error',
+                                'Website login or verification still required')):
+                                launch_details.append(safe[:180])
+                            report(f'{name}: {safe}')
                         outcome=account_attempt_auto_play(
-                            debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
+                            debug_port,relay_launch,
                             credentials=credentials,login_only=False)
                         if outcome!='launched':
                             note=('Habbo website rejected Play in App' if outcome=='app_error'
                                   else 'Sign-in / verification required' if outcome=='login'
                                   else 'Play in App not confirmed ('+str(outcome)+')')
                             stage(account,note)
-                            failure_notes.append(label+': '+note)
+                            failure_notes.append(label+': '+note+
+                                (' — '+launch_details[-1] if launch_details else ''))
                             # A click failure can leave an unresolved launcher
                             # or external-protocol prompt. Do not launch another.
                             keep_browser=True
