@@ -372,7 +372,7 @@ class CoffeeGroupTests(TestCase):
             with self.assertRaises(ClientlessBotError):
                 send(app,'a','Pass hand item',recipient_id=2)
 
-    def test_loop_send_retains_settle_and_inflight_but_not_ten_second_cooldown(self):
+    def test_loop_send_retains_inflight_but_not_fixed_local_delays(self):
         session=SimpleNamespace(release='test')
         app=SimpleNamespace(_coffee_session=lambda ident:session,
             _bot_action_inflight=set(),_bot_last_action_at={'a':99},
@@ -390,7 +390,26 @@ class CoffeeGroupTests(TestCase):
                 send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
             app._bot_action_inflight.clear()
             with self.assertRaisesRegex(ClientlessBotError,'still settling'):
-                send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
+                send(app,'a','Pass hand item',recipient_id=2)
+            send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
+            self.assertEqual(encode.call_count,2)
+
+    def test_continuous_loop_uses_configured_delay_without_settle_floor(self):
+        state={'generation':1,'room':1,'players':{2:(3,'B')},'carry':{0:(85,100.01)}}
+        app=SimpleNamespace(_coffee_context=lambda ident:(state,1,0),
+            _coffee_last_pass={'a':100},_coffee_last_pickup={'a':100},
+            _bot_action_inflight=set(),_bot_last_action_at={'a':100},
+            _coffee_send=Mock(return_value=100.1))
+        run=dict(id='a',peer=None,target=2,generation=1,room=1,
+            phase='pickup',at=100,done=0,count=None,alternate=True,ids=(101,202),
+            delay=0.1)
+        advance=scope['_coffee_advance']
+        advance(app,run,100.05)
+        app._coffee_send.assert_not_called()
+        advance(app,run,100.11)
+        app._coffee_send.assert_called_once_with('a','Pass hand item',
+            recipient_id=2,_loop_action=True)
+        self.assertEqual(run['phase'],'pass')
 
     def test_manual_pickup_completes_on_send_without_hand_item_confirmation(self):
         results={i:dict(status='Sending pickup packet',pending=True,generation=1)

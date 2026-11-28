@@ -6811,7 +6811,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         now=time.monotonic()
         manual_action=(_manual_pickup and action=='Collect hand item') or (
             _manual_pass and action=='Pass hand item')
-        if not manual_action and now-self._bot_last_action_at.get(ident,0)<0.4:
+        if not (manual_action or _loop_action) and now-self._bot_last_action_at.get(ident,0)<0.4:
             raise ClientlessBotError('Previous action is still settling.')
         cooldowns=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
         last=cooldowns.get(ident,0.0)
@@ -7063,9 +7063,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                 or peer_id!=run['target'] or own not in other['players']):
                 raise ClientlessBotError('Run stopped: account or room changed.')
         phase=run['phase']
-        ready=(ident not in self._bot_action_inflight and
-               now-self._bot_last_action_at.get(ident,0)>=0.4)
         continuous=run['count'] is None
+        ready=(ident not in self._bot_action_inflight and
+               (continuous or now-self._bot_last_action_at.get(ident,0)>=0.4))
         ready_to_pass=ready and (continuous or now>=self._coffee_last_pass.get(ident,0)+10)
         loop_options={'_loop_action':True} if continuous else {}
         item,seen=state['carry'].get(index,(0,0))
@@ -7091,7 +7091,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             confirmed=item>0 and seen>=run['at']
             if not confirmed and now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
-            if confirmed and ready_to_pass and now>=run['at']+max(0.4,run['delay']):
+            required_delay=run['delay'] if continuous else max(0.4,run['delay'])
+            if confirmed and ready_to_pass and now>=run['at']+required_delay:
                 run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'],**loop_options)
                 run['phase']='pass'
         elif phase in ('pass','pass held item'):
