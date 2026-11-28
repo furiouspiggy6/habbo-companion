@@ -231,6 +231,8 @@ def restore_previous(install_dir, backup_dir, wait_pid=0, restart_executable=Non
         for name in changed:
             if previous.get(name) and (safety/name).is_file():
                 shutil.copy2(safety/name,root/name)
+            elif previous.get(name) is False:
+                (root/name).unlink(missing_ok=True)
         raise
     if restart_executable and not no_restart:
         subprocess.Popen([str(restart_executable),str(root/'Habbo_Companion.pyw')],cwd=root,close_fds=True)
