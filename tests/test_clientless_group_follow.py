@@ -79,6 +79,28 @@ class GroupFollowTests(TestCase):
         self.assertIsNone(app._bot_follow_group_run)
         self.assertTrue(app.bot_follow_all_var.get())
         self.assertIn('No eligible followers',app.bot_follow_status_var.get())
+        self.assertIn('3 account(s): Target is visible but is not a room bot or another locally connected Direct TCP account.',app.bot_follow_status_var.get())
+        scope['threading'].Thread.assert_not_called()
+
+    def test_no_direct_sessions_reports_connection_requirement(self):
+        app=self.make_app()
+        app._coffee_session=lambda ident:None
+        app._bot_follow_start()
+        self.assertIn('no authenticated Direct TCP accounts',app.bot_follow_status_var.get())
+        self.assertTrue(app.bot_follow_all_var.get())
+        scope['threading'].Thread.assert_not_called()
+
+    def test_missing_positions_are_reported(self):
+        app=self.make_app()
+        app._bot_anti_afk_positions.clear()
+        app._bot_follow_start()
+        self.assertIn('3 account(s): Wait for a confirmed avatar position.',app.bot_follow_status_var.get())
+        scope['threading'].Thread.assert_not_called()
+
+    def test_unknown_username_reports_roster_failure(self):
+        app=self.make_app('Missing')
+        app._bot_follow_start()
+        self.assertIn('3 account(s): Target username not found in this room.',app.bot_follow_status_var.get())
         scope['threading'].Thread.assert_not_called()
 
     def test_empty_target_does_not_clear_checkbox(self):

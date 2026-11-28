@@ -7816,8 +7816,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         matches=[unit for unit in entries.values() if unit[0].casefold()==username]
         players=[uid for uid,unit in state['players'].items()
                  if unit[1].casefold()==username and uid!=own]
+        if not matches and not players:
+            own_unit=state['players'].get(own)
+            if own_unit and own_unit[1].casefold()==username:
+                raise ClientlessBotError('Account is the target itself.')
+            raise ClientlessBotError('Target username not found in this room.')
         if len(matches)+len(players)!=1:
-            raise ClientlessBotError('Target is not unambiguously visible.')
+            raise ClientlessBotError('Multiple matching room entities.')
         if matches:
             unit=matches[0]
             return (room,'bot',unit[3],None),generation,None,pos[1:],unit[1:3]
@@ -7826,7 +7831,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                and self._coffee_session(a['id']) is not None
                and self._bot_self_ids.get(a['id'])==target]
         if len(peers)!=1:
-            raise ClientlessBotError('Target must be a connected account or room bot.')
+            raise ClientlessBotError('Target is visible but is not a room bot or another locally connected Direct TCP account.')
         peer=peers[0]
         other,peer_uid,peer_index=self._coffee_context(peer)
         lead=self._bot_anti_afk_positions.get(peer)
@@ -7856,19 +7861,31 @@ class ChatOverlayApp(PersonaResponderMixin):
         key=None
         selected=self._bot_selected_profile()
         profiles=sorted(self._account_profiles,key=lambda a: a['id']!=(selected or {}).get('id'))
+        reasons={}
+        direct_count=0
+        def rejected(reason):
+            reasons[reason]=reasons.get(reason,0)+1
         for account in profiles:
             ident=account['id']
             if self._coffee_session(ident) is None:continue
+            direct_count+=1
             try:
                 candidate,generation,peer_generation,_,_=self._bot_follow_group_resolve(ident,username.casefold())
-            except (ValueError,TypeError,RuntimeError,OSError):
+            except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                rejected(str(exc) if isinstance(exc,ClientlessBotError) else type(exc).__name__)
                 continue
             if key is None:key=candidate
-            if candidate!=key:continue
+            if candidate!=key:
+                rejected('Target resolves to another room or identity.')
+                continue
             members[ident]=(generation,peer_generation)
         if not members:
-            self.bot_follow_status_var.set(
-                'No eligible followers: check direct TCP connections, same room, target identity and avatar positions.')
+            if not direct_count:
+                self.bot_follow_status_var.set(
+                    'No eligible followers: no authenticated Direct TCP accounts without G-Earth interception.')
+            else:
+                details='; '.join(f'{count} account(s): {reason}' for reason,count in reasons.items())
+                self.bot_follow_status_var.set('No eligible followers: '+details)
             return
         self._bot_follow_run=None
         for ident in members:self._bot_walk_plans.pop(ident,None)
