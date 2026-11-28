@@ -3133,6 +3133,24 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                     return 'unknown'
                 if not login_only:
                     page.bring_to_front()
+                    # Collapse restored duplicate home tabs in this isolated
+                    # account context. Never close a game, login route, or
+                    # unrelated page, and never clear cookies or storage.
+                    home_urls=('https://habbo.com','https://habbo.com/',
+                               'https://www.habbo.com','https://www.habbo.com/')
+                    if page.url in home_urls:
+                        closed=0
+                        for duplicate in tuple(getattr(page.context,'pages',())):
+                            if duplicate is page or duplicate.url not in home_urls:
+                                continue
+                            try:
+                                duplicate.close(run_before_unload=False)
+                                closed+=1
+                            except Exception:
+                                # A disappearing tab must not abort launch.
+                                continue
+                        if closed:
+                            report(f'Reused saved account browser; closed {closed} duplicate Habbo home tab(s).')
                     # Wait for a real recognised website control. Do not
                     # click coordinates, fabricate a login or repeat a request.
                     for _ in range(24):

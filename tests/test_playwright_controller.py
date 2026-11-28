@@ -178,6 +178,16 @@ class PlaywrightRoutingTests(unittest.TestCase):
             calls=[]
             page=FakePage(calls)
             page.password_visible=False
+            duplicate=FakePage(calls)
+            duplicate.url='https://habbo.com/'
+            duplicate.close=lambda **kw:calls.append(('duplicate-close',kw))
+            game=FakePage(calls)
+            game.url='https://www.habbo.com/hotel'
+            game.close=lambda **kw:calls.append(('game-close',kw))
+            other=FakePage(calls)
+            other.url='https://example.com/'
+            other.close=lambda **kw:calls.append(('other-close',kw))
+            page.context.pages=[duplicate,page,game,other]
             app_clicked=[False]
             def controls(p,kind):
                 if kind=='play-app':
@@ -205,6 +215,9 @@ class PlaywrightRoutingTests(unittest.TestCase):
                 43111,messages.append,login_only=False),'launched')
             self.assertEqual([x[1] for x in calls if x[0]=='click'],
                              ['play-app','launch'] if followup else ['play-app'])
+            self.assertEqual([x for x in calls if x[0]=='duplicate-close'],
+                             [('duplicate-close',{'run_before_unload':False})])
+            self.assertFalse([x for x in calls if x[0] in ('game-close','other-close')])
 
     def test_app_error_is_not_counted_as_native_launch(self):
         ns=scope('account_playwright_auto_play',
