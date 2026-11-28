@@ -5472,6 +5472,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_user_roster={}
         self._bot_chat_dedup=ClientlessChatDeduplicator()
         self._coffee_room_state={}
+        self._coffee_manual_results={}
         self._coffee_run=None
         self._coffee_last_pass={}
         self._coffee_last_pickup={}
@@ -6551,7 +6552,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.coffee_group_tree=ttk.Treeview(group,columns=('room','item','run'),
             show='tree headings',selectmode='extended',height=5)
         for key,label,width in (('#0','Account',180),('room','Room',90),
-                                ('item','Hand item',130),('run','Run',110)):
+                                ('item','Hand item',100),('run','Pickup / run status',260)):
             self.coffee_group_tree.heading(key,text=label)
             self.coffee_group_tree.column(key,width=width,minwidth=65,stretch=True)
         self.coffee_group_tree.pack(fill='x',pady=(0,5))
@@ -6612,6 +6613,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             run=next((r for r in runs if r['id']==ident),None)
             status=('Sender: '+run['phase'] if run else
                     'Receiver' if any(r['target']==self._bot_self_ids.get(ident) for r in runs) else 'Idle')
+            if not run and status=='Idle':
+                result=getattr(self,'_coffee_manual_results',{}).get(ident)
+                if result is not None:
+                    status=result['status']
             values=(room,item,status)
             if tree.exists(ident):
                 tree.item(ident,text=account['label'],values=values)
@@ -6837,30 +6842,63 @@ class ChatOverlayApp(PersonaResponderMixin):
             ids,_,_=self._coffee_settings()
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self.coffee_status_var.set(str(exc)[:180]);return
-        sent=0
-        skipped=0
+        results={}
+        self._coffee_manual_results=results
         gate=threading.Event()
         try:
             for account in self._coffee_selected_accounts():
                 ident=account['id']
+                result={'status':'Checking','pending':False}
+                results[ident]=result
                 try:
                     state,_,index=self._coffee_context(ident)
                     if state['carry'].get(index,(0,0))[0]>0:
                         raise ClientlessBotError('Avatar already holds an item.')
-                    self._coffee_send(ident,'Collect hand item',
+                    requested=self._coffee_send(ident,'Collect hand item',
                                       furniture=ids[source-1],_start_gate=gate)
                     state['carry'].pop(index,None)
-                    sent+=1
-                except (ValueError,TypeError,RuntimeError,OSError):
-                    skipped+=1
+                    result.update(status='Requested — awaiting pickup',pending=True,
+                                  generation=state['generation'],room=state['room'],
+                                  index=index,requested=requested)
+                except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                    # ClientlessBotError is a known, local validation message.
+                    detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
+                    result['status']='Skipped: '+detail
         finally:
-            # Release all prepared pickup workers together, even if an
-            # individual account was unavailable or failed validation.
             gate.set()
-        self.coffee_status_var.set('Simultaneous collection requested for '+str(sent)+
-                                   ' account(s); '+str(skipped)+
-                                   ' skipped. Awaiting server activity.')
+        self._coffee_manual_report(results)
+
+    def _coffee_manual_report(self,results):
+        """Track one explicitly requested pickup batch without automatic retries."""
+        if self._coffee_manual_results is not results:
+            return
+        now=time.monotonic()
+        for ident,result in results.items():
+            if not result['pending']:
+                continue
+            try:
+                state,_,index=self._coffee_context(ident)
+                if (state['generation']!=result['generation'] or
+                    state['room']!=result['room'] or index!=result['index']):
+                    raise ClientlessBotError('Room or account changed.')
+                item,seen=state['carry'].get(index,(0,0))
+                if item>0 and seen>=result['requested']:
+                    result.update(status='Pickup confirmed',pending=False)
+                elif now-result['requested']>=20:
+                    result.update(status='No pickup confirmation',pending=False)
+            except (ValueError,TypeError,RuntimeError,OSError):
+                result.update(status='Room/account no longer confirmed',pending=False)
+        confirmed=sum(r['status']=='Pickup confirmed' for r in results.values())
+        pending=sum(r['pending'] for r in results.values())
+        skipped=sum(r['status'].startswith('Skipped:') for r in results.values())
+        failed=len(results)-confirmed-pending-skipped
+        if not self._coffee_run:
+            self.coffee_status_var.set(
+                f'Pickup: {confirmed}/{len(results)} confirmed; {pending} waiting; '
+                f'{skipped} skipped; {failed} failed/unconfirmed. See account status below.')
         self._coffee_group_refresh()
+        if pending:
+            self.root.after(500,lambda:self._coffee_manual_report(results))
 
     def _coffee_build_run(self,ident,ids,seconds,count):
         state,own,_=self._coffee_context(ident)
@@ -13066,6 +13104,12 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
                 if action in ('Collect hand item','Pass hand item'):
+                    if action=='Collect hand item' and error is not None:
+                        results=getattr(self,'_coffee_manual_results',{})
+                        result=results.get(ident)
+                        if result and result.get('pending') and result.get('generation')==generation:
+                            result.update(status='Send failed: '+str(error)[:110],pending=False)
+                            self._coffee_manual_report(results)
                     if error is not None:
                         if self._coffee_run and any(r['id']==ident for r in self._coffee_run['runs']
                                                     if r['phase']!='complete'):

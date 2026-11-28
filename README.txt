@@ -1327,3 +1327,9 @@ Each account retains its existing cooldowns, room/identity checks, in-flight
 protection and server confirmation logic. Ineligible accounts are skipped for
 manual collection; loop phases remain independent. Server receipt and pickup
 completion timing are not guaranteed to match.
+
+v1.1.142 — Per-account manual pickup outcomes
+Show each connected sender's skip reason, send failure, confirmed hand item,
+or missing confirmation after 20 seconds in the Coffee Pass account table.
+Summarize confirmed, waiting, skipped and unconfirmed counts. This does not
+change cooldowns, room checks, server acceptance or retry behavior.
