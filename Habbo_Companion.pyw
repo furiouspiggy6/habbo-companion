@@ -6374,8 +6374,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='FOLLOW USER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Follow a named room bot or another connected account you control in the same room. '
-                  'Use the selected profile or all connected accounts; no automatic room changes.',
+        ttk.Label(frame,text='Follow the exact X/Y coordinates of a named room bot or another connected account you control. '
+                  'Coordinates update every 3 seconds in the same room.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         self.bot_follow_target_var=tk.StringVar(value='')
         self.bot_follow_status_var=tk.StringVar(value='Follow is off.')
@@ -7717,27 +7717,29 @@ class ChatOverlayApp(PersonaResponderMixin):
                 raise ClientlessBotError('Follow stopped: avatar position unavailable.')
             x,y=pos[1:]
             tx,ty=lead[1:]
-            # Walk towards a nearby tile rather than repeatedly clicking the leader.
-            if max(abs(x-tx),abs(y-ty))<=1:
-                run['last_target']=(tx,ty)
-                self.bot_follow_status_var.set('Following '+run['label']+' — nearby.')
-            elif (run['last_target']!=(tx,ty) and ident not in self._bot_action_inflight
+            dest=(tx,ty)
+            if not (0<=tx<=1023 and 0<=ty<=1023):
+                raise ClientlessBotError('Target coordinates are out of range.')
+            if (x,y)==dest:
+                self.bot_follow_status_var.set(f'Following {run["label"]} — at X={tx}, Y={ty}.')
+            elif (ident not in self._bot_action_inflight
                   and time.monotonic()-self._bot_last_action_at.get(ident,0)>=2):
-                choices=[(a,b) for a,b in ((tx-1,ty),(tx+1,ty),(tx,ty-1),(tx,ty+1))
-                         if 0<=a<=1023 and 0<=b<=1023]
-                dest=min(choices,key=lambda p:abs(p[0]-x)+abs(p[1]-y))
-                if dest!=run['last_sent']:
-                    session=self._coffee_session(ident)
-                    packets=encode_clientless_action(self._bot_headers,session.release,'Walk',x=dest[0],y=dest[1])
-                    self._bot_action_inflight.add(ident)
-                    self._bot_last_action_at[ident]=time.monotonic()
-                    run['last_sent']=dest
+                session=self._coffee_session(ident)
+                if session is None:raise ClientlessBotError('Follower disconnected.')
+                packets=encode_clientless_action(self._bot_headers,session.release,'Walk',x=tx,y=ty)
+                self._bot_action_inflight.add(ident)
+                self._bot_last_action_at[ident]=time.monotonic()
+                try:
                     threading.Thread(target=self._bot_action_worker,
                         args=(ident,run['generation'],session,'Follow Walk',packets),
                         daemon=True).start()
-                    self.bot_follow_status_var.set('Following '+run['label']+' — walking nearby.')
-                run['last_target']=(tx,ty)
-            self.root.after(2000,lambda:self._bot_follow_tick(run))
+                except (RuntimeError,OSError):
+                    self._bot_action_inflight.discard(ident)
+                    raise
+                run['last_sent']=dest
+                self.bot_follow_status_var.set(f'Following {run["label"]} — walking to X={tx}, Y={ty}.')
+            run['last_target']=dest
+            self.root.after(3000,lambda:self._bot_follow_tick(run))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._bot_follow_stop(str(exc)[:160])
 
@@ -7812,11 +7814,15 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._bot_follow_stop()
             return
         sent=0
+        latest_dest=None
         for ident,versions in tuple(run['members'].items()):
             try:
                 key,generation,peer_generation,pos,dest=self._bot_follow_group_resolve(ident,run['username'])
                 if key!=run['key'] or (generation,peer_generation)!=versions:
                     raise ClientlessBotError('Room or account changed.')
+                if not all(0<=coord<=1023 for coord in dest):
+                    raise ClientlessBotError('Target coordinates are out of range.')
+                latest_dest=dest
                 if (pos==dest or ident in self._bot_action_inflight or
                         time.monotonic()-self._bot_last_action_at.get(ident,0)<0.4):
                     continue
@@ -7837,7 +7843,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not run['members']:
             self._bot_follow_stop('All-account follow stopped: target or followers unavailable.')
             return
-        self.bot_follow_status_var.set('Following '+run['label']+' — '+str(len(run['members']))+
+        coordinates=(f' — X={latest_dest[0]}, Y={latest_dest[1]}' if latest_dest is not None else '')
+        self.bot_follow_status_var.set('Following '+run['label']+coordinates+' — '+str(len(run['members']))+
             ' connected follower(s); '+str(sent)+' movement request(s) this tick.')
         self.root.after(3000,lambda:self._bot_follow_group_tick(run))
 

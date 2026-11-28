@@ -54,6 +54,7 @@ class GroupFollowTests(TestCase):
         app._bot_follow_group_tick(run)
         self.assertEqual(scope['threading'].Thread.call_count,4)
         self.assertEqual(scope['encode_clientless_action'].call_args.kwargs,{'x':13,'y':9})
+        self.assertIn('X=13, Y=9',app.bot_follow_status_var.get())
         app.bot_follow_all_var.set(False)
         app._bot_follow_group_toggle()
         app._bot_follow_group_tick(run)

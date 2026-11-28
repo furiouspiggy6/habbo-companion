@@ -38,20 +38,37 @@ class FollowTests(TestCase):
         scope['encode_clientless_action'].reset_mock()
         return app
 
-    def test_walk_once_near_leader_and_stop(self):
+    def test_walk_to_exact_leader_coords_and_stop(self):
         app=self.make_app()
         app._bot_follow_start()
         run=app._bot_follow_run
         self.assertIsNotNone(run)
-        scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=4,y=5)
+        scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=5,y=5)
         app.root.after.assert_called_once()
-        self.assertEqual(app.root.after.call_args.args[0],2000)
+        self.assertEqual(app.root.after.call_args.args[0],3000)
         app._bot_action_inflight.clear()
         app._bot_follow_tick(run)
         self.assertEqual(scope['threading'].Thread.call_count,1)
         app._bot_follow_stop()
         app._bot_follow_tick(run)
         self.assertEqual(scope['threading'].Thread.call_count,1)
+
+    def test_follow_moves_to_updated_coordinates_not_adjacent_tile(self):
+        app=self.make_app()
+        app._bot_follow_start()
+        run=app._bot_follow_run
+        app._bot_action_inflight.clear()
+        app._bot_last_action_at.clear()
+        app._bot_anti_afk_positions['bcdefa']=(20,6,7)
+        app._bot_anti_afk_positions['abcdef']=(10,6,6)
+        app._bot_follow_tick(run)
+        scope['encode_clientless_action'].assert_called_with(None,'mapped','Walk',x=6,y=7)
+        self.assertIn('X=6, Y=7',app.bot_follow_status_var.set.call_args.args[0])
+        app._bot_action_inflight.clear()
+        app._bot_last_action_at.clear()
+        app._bot_anti_afk_positions['abcdef']=(10,6,7)
+        app._bot_follow_tick(run)
+        self.assertEqual(scope['threading'].Thread.call_count,2)
 
     def test_reject_unknown_or_self(self):
         for label in ('Unknown','A',''):
@@ -88,7 +105,7 @@ class FollowTests(TestCase):
         run=app._bot_follow_run
         self.assertIsNotNone(run)
         self.assertIsNone(run['peer'])
-        scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=4,y=5)
+        scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=5,y=5)
         app._bot_follow_observe('abcdef',1,'remove',30)
         app._bot_follow_tick(run)
         self.assertIsNone(app._bot_follow_run)
