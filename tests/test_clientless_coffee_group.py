@@ -275,10 +275,38 @@ class CoffeeGroupTests(TestCase):
             _coffee_send=prepare,coffee_status_var=Mock(),_coffee_group_refresh=Mock(),_coffee_manual_report=Mock())
         scope['_coffee_collect_all'](app,2)
         self.assertEqual([(ident,furniture) for ident,furniture,_ in seen],
-                         [('a',202),('c',202)])
+                         [('a',202),('b',202),('c',202)])
         self.assertIs(seen[0][2],seen[1][2])
+        self.assertIs(seen[0][2],seen[2][2])
         self.assertTrue(seen[0][2].is_set())
 
+
+    def test_manual_group_waits_for_cooldown_then_sends_once_to_every_account(self):
+        held={0:(86,99)}
+        states={'a':{'carry':held,'generation':1,'room':9},
+                'b':{'carry':{},'generation':1,'room':9}}
+        app=SimpleNamespace(
+            _coffee_selected_accounts=lambda:[{'id':'a'},{'id':'b'}],
+            _coffee_settings=lambda:((101,202),10,3),
+            _coffee_context=lambda ident:(states[ident],1,0),
+            _coffee_last_pickup={'b':95},_bot_last_action_at={},
+            _coffee_send=Mock(return_value=105.1),coffee_status_var=Mock(),
+            _coffee_group_refresh=Mock(),_coffee_manual_report=Mock(),root=Mock())
+        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100)):
+            scope['_coffee_collect_all'](app,1)
+        app._coffee_send.assert_not_called()
+        delay,dispatch=app.root.after.call_args.args
+        self.assertGreaterEqual(delay,5000)
+        self.assertEqual(app._coffee_manual_results['a']['status'],
+                         'Queued — waiting for cooldown')
+        dispatch()
+        self.assertEqual([c.args[0] for c in app._coffee_send.call_args_list],['a','b'])
+        self.assertEqual([c.kwargs['furniture'] for c in app._coffee_send.call_args_list],[101,101])
+        gates=[c.kwargs['_start_gate'] for c in app._coffee_send.call_args_list]
+        self.assertIs(gates[0],gates[1])
+        self.assertTrue(gates[0].is_set())
+        self.assertEqual(held,{0:(86,99)})
+        app.root.after.assert_called_once()
 
     def test_manual_pickup_distinguishes_confirmation_and_timeout(self):
         results={i:dict(status='Requested',pending=True,generation=1,room=9,

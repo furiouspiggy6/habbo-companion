@@ -6842,31 +6842,52 @@ class ChatOverlayApp(PersonaResponderMixin):
             ids,_,_=self._coffee_settings()
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self.coffee_status_var.set(str(exc)[:180]);return
-        results={}
+        accounts=tuple(self._coffee_selected_accounts())
+        results={a['id']:{'status':'Queued','pending':False} for a in accounts}
         self._coffee_manual_results=results
-        gate=threading.Event()
-        try:
-            for account in self._coffee_selected_accounts():
-                ident=account['id']
-                result={'status':'Checking','pending':False}
-                results[ident]=result
-                try:
-                    state,_,index=self._coffee_context(ident)
-                    if state['carry'].get(index,(0,0))[0]>0:
-                        raise ClientlessBotError('Avatar already holds an item.')
-                    requested=self._coffee_send(ident,'Collect hand item',
-                                      furniture=ids[source-1],_start_gate=gate)
-                    state['carry'].pop(index,None)
-                    result.update(status='Requested — awaiting pickup',pending=True,
-                                  generation=state['generation'],room=state['room'],
-                                  index=index,requested=requested)
-                except (ValueError,TypeError,RuntimeError,OSError) as exc:
-                    # ClientlessBotError is a known, local validation message.
-                    detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
-                    result['status']='Skipped: '+detail
-        finally:
-            gate.set()
-        self._coffee_manual_report(results)
+
+        def dispatch():
+            if self._coffee_manual_results is not results:return
+            if getattr(self,'_coffee_run',None):
+                for result in results.values():
+                    result['status']='Skipped: Active cup run.'
+                self._coffee_manual_report(results)
+                return
+            gate=threading.Event()
+            try:
+                for account in accounts:
+                    ident=account['id']
+                    result=results[ident]
+                    try:
+                        state,_,index=self._coffee_context(ident)
+                        # A manual pickup is an explicit request even if an item is held.
+                        # Preserve observed carry state until the server updates it.
+                        requested=self._coffee_send(ident,'Collect hand item',
+                                          furniture=ids[source-1],_start_gate=gate)
+                        result.update(status='Requested — awaiting pickup',pending=True,
+                                      generation=state['generation'],room=state['room'],
+                                      index=index,requested=requested)
+                    except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                        detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
+                        result['status']='Skipped: '+detail
+            finally:
+                gate.set()
+            self._coffee_manual_report(results)
+
+        # Keep the manual batch together if one member is still cooling down.
+        now=time.monotonic()
+        last_pickup=getattr(self,'_coffee_last_pickup',{})
+        last_action=getattr(self,'_bot_last_action_at',{})
+        deadline=max([now]+[max(last_pickup.get(a['id'],0)+10,
+                                 last_action.get(a['id'],0)+0.4) for a in accounts])
+        if deadline>now:
+            for result in results.values():
+                result['status']='Queued — waiting for cooldown'
+            self.coffee_status_var.set('Pickup queued for all selected accounts.')
+            self._coffee_group_refresh()
+            self.root.after(int((deadline-now)*1000)+1,dispatch)
+        else:
+            dispatch()
 
     def _coffee_manual_report(self,results):
         """Track one explicitly requested pickup batch without automatic retries."""
