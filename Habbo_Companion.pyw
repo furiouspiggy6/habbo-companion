@@ -999,10 +999,8 @@ def account_browser_command(browser,folder,url,debug_port=None):
 
 
 def account_air_browser_command(browser,folder,url,debug_port):
-    """Normal Chromium profile, minimised rather than headless for native handoff."""
-    cmd=account_browser_command(browser,folder,url,debug_port)
-    cmd.insert(-1,'--start-minimized')
-    return cmd
+    """Visible Chromium for the official native application handoff."""
+    return account_browser_command(browser,folder,url,debug_port)
 
 
 def account_browser_pages(debug_port):
@@ -3105,6 +3103,12 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
             browser=playwright.chromium.connect_over_cdp(
                 'http://127.0.0.1:'+str(int(debug_port)),timeout=12000)
             page=account_playwright_select_page(browser)
+            if not login_only:
+                for _ in range(12):
+                    if page is not None:
+                        break
+                    time.sleep(0.5)
+                    page=account_playwright_select_page(browser)
             if page is None:
                 report('Playwright could not find an official HTTPS Habbo tab '
                        'inside this account browser.')
@@ -3115,6 +3119,18 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                 # Never operate on a destination outside verified Habbo HTTPS.
                 if not account_playwright_is_official(page.url):
                     return 'unknown'
+                if not login_only:
+                    page.bring_to_front()
+                    # Wait for a real recognised website control. Do not
+                    # click coordinates, fabricate a login or repeat a request.
+                    for _ in range(24):
+                        if not account_playwright_is_official(page.url):
+                            return 'unknown'
+                        if account_playwright_login_form(page) is not None or any(
+                            account_playwright_control(page,kind) is not None
+                            for kind in ('play-app','play','launch','open-login','app-error')):
+                            break
+                        page.wait_for_timeout(500)
                 form=account_playwright_login_form(page)
                 if form is None:
                     prompt=account_playwright_control(page,'open-login')
@@ -3220,6 +3236,7 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                 # Native launcher approval remains a separate Windows action.
                 last_play=False
                 app_requested=False
+                app_waits=0
                 def native_site_error():
                     if account_playwright_control(page,'app-error') is None:
                         return False
@@ -3234,9 +3251,12 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                            (' (HTTP '+str(failures[-1])+')' if failures else '')+
                            '. No automatic launch retry.')
                     return True
-                for _ in range(6):
+                for _ in range(24):
                     if not account_playwright_is_official(page.url):
                         return 'launched' if app_requested else 'unknown'
+                    if not app_requested and account_playwright_login_form(page) is not None:
+                        report('Website login or verification still required. No additional login submitted.')
+                        return 'login'
                     if native_site_error():
                         return 'app_error'
                     launch=account_playwright_control(page,'launch')
@@ -3251,7 +3271,11 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                                'Select Classic/approve Windows prompt if shown.')
                         return 'launched'
                     if app_requested:
-                        # Do not repeat the native app launch request.
+                        # Wait briefly for the official launcher dialog, then
+                        # let the caller confirm the native window.
+                        app_waits+=1
+                        if app_waits>=6:
+                            break
                         page.wait_for_timeout(850)
                         continue
                     app=account_playwright_control(page,'play-app')
@@ -9156,7 +9180,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._accounts_render()
         self.account_status_var.set(
             (f'Opening {len(accounts)} browser profile(s) for manual sign-in.' if login_only
-             else f'Starting {len(accounts)} native launch(es) using a minimised browser.')
+             else f'Starting {len(accounts)} native launch(es) via Play in App.')
             +packet_note)
         threading.Thread(
             target=self._account_auto_worker,
@@ -9189,9 +9213,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                               account['id'],str(value)[:95]))
 
         if not login_only:
-            # Use the known working official website Play in App route.
-            # Headless ticket acquisition can fail despite a signed-in website;
-            # a normal minimised browser supports the native protocol handoff.
+            # Keep the official website in the foreground until the native
+            # client is confirmed. Do not gate this on headless ticket capture
+            # or a separate sign-in-only pass that can miss the Play control.
             attempted_ids=set()
             unresolved=False
             confirmed=0
@@ -9232,43 +9256,19 @@ class ChatOverlayApp(PersonaResponderMixin):
                                     continue
                             else:
                                 raise RuntimeError('Account browser control unavailable.')
-                            account_wait_for_background_session(debug_port,report,max_checks=12)
+                        account_show_login_browser(debug_port)
                         credentials=account_saved_login_read(ident)
-                        def relay(msg,name=label):
-                            report(f'{name}: {msg}')
-                        outcome=account_attempt_auto_play(
-                            debug_port,relay,credentials=credentials,login_only=True)
-                        if outcome in ('waiting','no_habbo_tab','control_error'):
-                            # A minimised Chromium page can remain unrendered
-                            # or still be navigating. Restore it once and wait
-                            # for the actual signed-in controls. Never submit
-                            # a password again after the first attempt.
-                            stage(account,'Restoring browser to finish sign-in')
-                            relay('Sign-in UI not ready; restoring the account browser for one readiness check.')
-                            if account_show_login_browser(debug_port):
-                                account_wait_for_background_session(
-                                    debug_port,relay,max_checks=24)
-                                outcome=account_attempt_auto_play(
-                                    debug_port,relay,credentials=None,login_only=True)
-                        if outcome!='signed_in':
-                            # Keep the failed profile available for inspection
-                            # or manual verification instead of closing it.
-                            keep_browser=True
-                            account_show_login_browser(debug_port)
-                            note=('Sign-in / verification required' if outcome=='login'
-                                  else 'Website sign-in not confirmed ('+str(outcome)+')')
-                            stage(account,note)
-                            failure_notes.append(label+': '+note)
-                            continue
                         native_before=account_native_client_windows()
-                        stage(account,'Requesting Play in App')
-                        # Do not submit credentials a second time if the website
-                        # has navigated back to a login form or verification.
+                        stage(account,'Signing in / Play in App')
+                        # One browser automation pass handles both sign-in and
+                        # Play in App. A slow page cannot be rejected simply
+                        # because the sign-in-only probe did not see a button.
                         outcome=account_attempt_auto_play(
                             debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
-                            credentials=None,login_only=False)
+                            credentials=credentials,login_only=False)
                         if outcome!='launched':
                             note=('Habbo website rejected Play in App' if outcome=='app_error'
+                                  else 'Sign-in / verification required' if outcome=='login'
                                   else 'Play in App not confirmed ('+str(outcome)+')')
                             stage(account,note)
                             failure_notes.append(label+': '+note)
@@ -9276,7 +9276,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                             # or external-protocol prompt. Do not launch another.
                             keep_browser=True
                             account_show_login_browser(debug_port)
-                            unresolved=(outcome!='app_error')
+                            unresolved=outcome in ('stalled','control_error')
                             if outcome=='app_error':
                                 report(f'{label}: Habbo displayed its own app-launch error. '
                                        'Close the error, reload the website and test Play in App manually.')

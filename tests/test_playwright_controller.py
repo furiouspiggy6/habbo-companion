@@ -55,6 +55,8 @@ class FakePage:
         self.signed_in=False
     def locator(self,selector):
         return FakeElement(self.logs,'password-wait')
+    def bring_to_front(self):
+        self.logs.append(('foreground',))
     def wait_for_timeout(self,timeout):
         pass
 

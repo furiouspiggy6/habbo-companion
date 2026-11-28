@@ -1294,3 +1294,11 @@ Recognise the visible Play in App error dialog before and after a launch click.
 Report it as a website launch failure rather than a successful native request;
 keep the account browser available and do not retry automatically. The website
 may still reject a manual launch; Companion cannot guarantee service recovery.
+
+v1.1.138 — Restore visible native Play in App flow
+Use a normal foreground isolated browser for native AIR launches. Sign in and
+click Play in App in a single Playwright pass, waiting for recognised controls
+rather than rejecting slow page loads at a separate login-only check. Keep the
+browser available if sign-in or launch fails, and close only a temporary browser
+owned by Companion after native window confirmation. Retain Shift+grave overlay.
+The browser may be visible during launch; no verification bypass is attempted.

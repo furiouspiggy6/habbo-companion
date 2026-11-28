@@ -1,4 +1,4 @@
-"""Offline checks for minimised native launch route."""
+"""Offline checks for the native launch route."""
 import ast
 from pathlib import Path
 import unittest
@@ -8,22 +8,22 @@ METHODS={n.name:ast.get_source_segment(SOURCE,n) for n in ast.walk(ast.parse(SOU
          if isinstance(n,ast.FunctionDef)}
 
 class AirBackgroundLaunchTests(unittest.TestCase):
-    def test_native_launch_uses_minimised_normal_browser(self):
+    def test_native_launch_uses_normal_browser_and_single_play_pass(self):
         code=METHODS['account_air_browser_command']
-        self.assertIn('--start-minimized',code)
+        self.assertNotIn('--start-minimized',code)
         self.assertNotIn('--headless',code)
         worker=METHODS['_account_auto_worker']
-        self.assertIn('account_air_browser_command(',worker)
-        self.assertIn('credentials=None,login_only=False',worker)
-        self.assertIn("outcome!='signed_in'",worker)
-        self.assertIn('if spawned is not None and not keep_browser:',worker)
-        self.assertIn("('game_panel_arm',generation,native_before)",worker)
-        self.assertIn('account_show_login_browser(port)',worker)
+        native=worker.split('prelaunched=set()',1)[0]
+        self.assertIn('account_air_browser_command(',native)
+        self.assertEqual(native.count('account_attempt_auto_play('),1)
+        self.assertIn('credentials=credentials,login_only=False',native)
+        self.assertIn('account_show_login_browser(debug_port)',native)
+        self.assertIn('if spawned is not None and not keep_browser:',native)
+        self.assertIn("('game_panel_arm',generation,native_before)",native)
 
-    def test_minimised_waiting_recovery_does_not_resubmit_password(self):
-        worker=METHODS['_account_auto_worker']
-        self.assertIn("outcome in ('waiting','no_habbo_tab','control_error')",worker)
-        self.assertIn('if account_show_login_browser(debug_port):',worker)
-        self.assertIn('debug_port,relay,max_checks=24',worker)
-        self.assertIn('debug_port,relay,credentials=None,login_only=True',worker)
-        self.assertIn('keep_browser=True',worker)
+    def test_native_controller_waits_for_visible_controls(self):
+        code=METHODS['account_playwright_auto_play']
+        self.assertIn('page.bring_to_front()',code)
+        self.assertIn('for _ in range(24):',code)
+        self.assertIn('No additional login submitted.',code)
+        self.assertIn('native_site_error()',code)
