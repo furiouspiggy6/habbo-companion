@@ -1302,3 +1302,12 @@ rather than rejecting slow page loads at a separate login-only check. Keep the
 browser available if sign-in or launch fails, and close only a temporary browser
 owned by Companion after native window confirmation. Retain Shift+grave overlay.
 The browser may be visible during launch; no verification bypass is attempted.
+
+v1.1.139 — Merge duplicate clientless room chat
+The shared incoming chat feed displays one public Chat/Shout occurrence across
+accounts in the same server-confirmed room. Match by room, kind, sender index,
+full text and a two-second delivery window, with one receipt per account per
+occurrence. Preserve same-account repeats, separate rooms, whispers and unknown
+room observations. This is a display-only change; no packets or actions are
+modified. Without server message IDs, delayed or ambiguous deliveries are
+best-effort. The short-lived cache is memory-only and bounded.

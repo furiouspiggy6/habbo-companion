@@ -16,7 +16,7 @@ from clientless_gearth_bridge import (
     DEFAULT_BRIDGE_HOST, verify_bridge_alias)
 from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
-    encode_clientless_action, decode_clientless_chat, OUTGOING_ACTION_NAMES,
+    encode_clientless_action, decode_clientless_chat, ClientlessChatDeduplicator, OUTGOING_ACTION_NAMES,
     clientless_walk_positions, decode_clientless_room_observation, decode_clientless_room_bots,
     decode_clientless_hand_observation, validate_clientless_coffee_settings)
 import ctypes
@@ -5456,6 +5456,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_follow_room_bots={}
         self._bot_self_ids={}
         self._bot_user_roster={}
+        self._bot_chat_dedup=ClientlessChatDeduplicator()
         self._coffee_room_state={}
         self._coffee_run=None
         self._coffee_last_pass={}
@@ -6433,7 +6434,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Button(frame,text='Send action as selected account',style='Primary.TButton',
                    command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
         ttk.Label(frame,text='Incoming chat',style='Section.TLabel').pack(anchor='w',pady=(0,5))
-        ttk.Label(frame,text='Text-only feed; requires mapped incoming headers.',
+        ttk.Label(frame,text='Public chat is merged per room; whispers stay account-specific.',
                   style='Muted.TLabel').pack(anchor='w',pady=(0,5))
         self.bot_chat_log=tk.Text(
             frame,height=7,state='disabled',
@@ -8148,6 +8149,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.save()
             self._bot_arm_walk(ident,self._tcp_generation.get(ident,0),
                                session,args['room'])
+        elif action=='Leave room':
+            self._bot_anti_afk_rooms.pop(ident,None)
         elif action=='Walk' and action_override is None:
             # Explicit manual movement cancels automatic walking.
             self._bot_walk_plans.pop(ident,None)
@@ -8200,11 +8203,17 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _bot_show_chat(self,ident,kind,index,message):
         if not hasattr(self,'bot_chat_log') or not self.bot_chat_log.winfo_exists():
             return
+        room=self._bot_anti_afk_rooms.get(ident)
+        if not self._bot_chat_dedup.should_display(
+                ident,room,kind,index,message,time.monotonic()):
+            return
         widget=self.bot_chat_log
         widget.configure(state='normal')
         clean=''.join(ch for ch in str(message) if ch.isprintable())[:300]
+        source=(f'Room {room}' if kind in ('Chat','Shout') and room is not None
+                else ident[:6])
         widget.insert('end',f'{time.strftime("%H:%M:%S")} '
-                      f'[{ident[:6]}] {kind} room index {index}: {clean}\n')
+                      f'[{source}] {kind} room index {index}: {clean}\n')
         if int(widget.index('end-1c').split('.')[0])>150:
             widget.delete('1.0','40.0')
         widget.see('end')

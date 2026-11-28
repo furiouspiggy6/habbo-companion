@@ -222,6 +222,32 @@ def encode_clientless_action(mapping, release, action, **kwargs):
     return tuple(result)
 
 
+class ClientlessChatDeduplicator:
+    """Merge short-lived public chat deliveries across accounts in one room.
+
+    One record represents one occurrence, with at most one delivery from
+    each account. Matching the oldest eligible occurrence preserves repeated
+    identical messages received by the same account. Unknown rooms and
+    private whispers are never merged. No chat is written to disk here.
+    """
+    def __init__(self):
+        self._recent=[]
+
+    def should_display(self, account, room, kind, index, message, now):
+        self._recent=[entry for entry in self._recent if now-entry[0]<=2.0]
+        if kind not in ('Chat','Shout') or type(room) is not int or room<=0:
+            return True
+        key=(room,kind,index,message)
+        for _when,previous,accounts in self._recent:
+            if previous==key and account not in accounts:
+                accounts.add(account)
+                return False
+        self._recent.append((now,key,{account}))
+        if len(self._recent)>512:
+            del self._recent[:-512]
+        return True
+
+
 def decode_clientless_chat(mapping, release, packet_id, payload):
     """Best-effort text-only room chat prefix; no user identity inference.
 
