@@ -6862,11 +6862,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                         state,_,index=self._coffee_context(ident)
                         # A manual pickup is an explicit request even if an item is held.
                         # Preserve observed carry state until the server updates it.
-                        requested=self._coffee_send(ident,'Collect hand item',
+                        self._coffee_send(ident,'Collect hand item',
                                           furniture=ids[source-1],_start_gate=gate)
-                        result.update(status='Requested — awaiting pickup',pending=True,
-                                      generation=state['generation'],room=state['room'],
-                                      index=index,requested=requested)
+                        result.update(status='Sending pickup packet',pending=True,
+                                      generation=state['generation'])
                     except (ValueError,TypeError,RuntimeError,OSError) as exc:
                         detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
                         result['status']='Skipped: '+detail
@@ -6889,37 +6888,29 @@ class ChatOverlayApp(PersonaResponderMixin):
         else:
             dispatch()
 
+    def _coffee_manual_send_result(self,ident,generation,error):
+        """Complete manual collection on local send outcome, not server pickup."""
+        results=getattr(self,'_coffee_manual_results',{})
+        result=results.get(ident)
+        if not result or not result.get('pending') or result.get('generation')!=generation:
+            return
+        result.update(status='Pickup packet sent' if error is None else
+                      'Send failed: '+str(error)[:110],pending=False)
+        self._coffee_manual_report(results)
+
     def _coffee_manual_report(self,results):
-        """Track one explicitly requested pickup batch without automatic retries."""
+        """Summarize local sends without polling for hand-item confirmation."""
         if self._coffee_manual_results is not results:
             return
-        now=time.monotonic()
-        for ident,result in results.items():
-            if not result['pending']:
-                continue
-            try:
-                state,_,index=self._coffee_context(ident)
-                if (state['generation']!=result['generation'] or
-                    state['room']!=result['room'] or index!=result['index']):
-                    raise ClientlessBotError('Room or account changed.')
-                item,seen=state['carry'].get(index,(0,0))
-                if item>0 and seen>=result['requested']:
-                    result.update(status='Pickup confirmed',pending=False)
-                elif now-result['requested']>=20:
-                    result.update(status='No pickup confirmation',pending=False)
-            except (ValueError,TypeError,RuntimeError,OSError):
-                result.update(status='Room/account no longer confirmed',pending=False)
-        confirmed=sum(r['status']=='Pickup confirmed' for r in results.values())
+        sent=sum(r['status']=='Pickup packet sent' for r in results.values())
         pending=sum(r['pending'] for r in results.values())
         skipped=sum(r['status'].startswith('Skipped:') for r in results.values())
-        failed=len(results)-confirmed-pending-skipped
+        failed=len(results)-sent-pending-skipped
         if not self._coffee_run:
             self.coffee_status_var.set(
-                f'Pickup: {confirmed}/{len(results)} confirmed; {pending} waiting; '
-                f'{skipped} skipped; {failed} failed/unconfirmed. See account status below.')
+                f'Pickup packets: {sent}/{len(results)} sent; {pending} sending; '
+                f'{skipped} skipped; {failed} failed. Server pickup not verified.')
         self._coffee_group_refresh()
-        if pending:
-            self.root.after(500,lambda:self._coffee_manual_report(results))
 
     def _coffee_build_run(self,ident,ids,seconds,count):
         state,own,_=self._coffee_context(ident)
@@ -13125,12 +13116,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
                 if action in ('Collect hand item','Pass hand item'):
-                    if action=='Collect hand item' and error is not None:
-                        results=getattr(self,'_coffee_manual_results',{})
-                        result=results.get(ident)
-                        if result and result.get('pending') and result.get('generation')==generation:
-                            result.update(status='Send failed: '+str(error)[:110],pending=False)
-                            self._coffee_manual_report(results)
+                    if action=='Collect hand item':
+                        self._coffee_manual_send_result(ident,generation,error)
                     if error is not None:
                         if self._coffee_run and any(r['id']==ident for r in self._coffee_run['runs']
                                                     if r['phase']!='complete'):

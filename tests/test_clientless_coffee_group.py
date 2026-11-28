@@ -15,7 +15,7 @@ scope={'ClientlessBotError':ClientlessBotError,'time':time,'threading':threading
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
        '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
-       '_coffee_collect_all','_coffee_manual_report','_coffee_tick','_coffee_advance','_coffee_build_run',
+       '_coffee_collect_all','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
        '_coffee_settings','_coffee_stop_run','_coffee_context','_coffee_target','_coffee_observe')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
@@ -308,19 +308,28 @@ class CoffeeGroupTests(TestCase):
         self.assertEqual(held,{0:(86,99)})
         app.root.after.assert_called_once()
 
-    def test_manual_pickup_distinguishes_confirmation_and_timeout(self):
-        results={i:dict(status='Requested',pending=True,generation=1,room=9,
-                        index=0,requested=100) for i in ('a','b')}
-        results['c']=dict(status='Skipped: Avatar already holds an item.',pending=False)
+    def test_manual_pickup_completes_on_send_without_hand_item_confirmation(self):
+        results={i:dict(status='Sending pickup packet',pending=True,generation=1)
+                 for i in ('a','b','d')}
+        results['c']=dict(status='Skipped: Account unavailable.',pending=False)
         app=SimpleNamespace(_coffee_manual_results=results,_coffee_run=None,
-            _coffee_context=lambda ident:({'room':9,'generation':1,
-                'carry':{0:(5,101)} if ident=='a' else {}},1,0),
-            coffee_status_var=Mock(),_coffee_group_refresh=Mock(),root=Mock())
-        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:121)):
-            scope['_coffee_manual_report'](app,results)
-        self.assertEqual(results['a']['status'],'Pickup confirmed')
-        self.assertEqual(results['b']['status'],'No pickup confirmation')
+            _coffee_context=Mock(),coffee_status_var=Mock(),_coffee_group_refresh=Mock(),
+            root=Mock())
+        app._coffee_manual_report=MethodType(scope['_coffee_manual_report'],app)
+        finish=scope['_coffee_manual_send_result']
+        finish(app,'a',2,None)
+        self.assertTrue(results['a']['pending'])
+        finish(app,'a',1,None)
+        finish(app,'b',1,'Connection closed')
+        finish(app,'d',1,None)
+        self.assertEqual(results['a']['status'],'Pickup packet sent')
+        self.assertEqual(results['b']['status'],'Send failed: Connection closed')
+        self.assertEqual(results['d']['status'],'Pickup packet sent')
         self.assertTrue(results['c']['status'].startswith('Skipped:'))
+        self.assertFalse(any(r['pending'] for r in results.values()))
+        app.coffee_status_var.set.assert_called_with(
+            'Pickup packets: 2/4 sent; 0 sending; 1 skipped; 1 failed. Server pickup not verified.')
+        app._coffee_context.assert_not_called()
         app.root.after.assert_not_called()
 
     def test_advance_uses_own_cooldown(self):
