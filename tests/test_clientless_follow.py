@@ -8,7 +8,7 @@ from clientless_bot import ClientlessBotError, decode_clientless_room_bots, BUND
 import struct
 
 source=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
-names={'_bot_follow_start','_bot_follow_tick','_bot_follow_stop','_bot_follow_observe'}
+names={'_bot_follow_start','_bot_follow_tick','_bot_follow_stop','_bot_follow_observe','_bot_follow_wake','_bot_follow_defer'}
 nodes=[n for n in ast.walk(ast.parse(source.read_text(encoding='utf-8')))
        if isinstance(n,ast.FunctionDef) and n.name in names]
 scope={'ClientlessBotError':ClientlessBotError,'time':SimpleNamespace(monotonic=lambda:100),
@@ -44,8 +44,7 @@ class FollowTests(TestCase):
         run=app._bot_follow_run
         self.assertIsNotNone(run)
         scope['encode_clientless_action'].assert_called_once_with(None,'mapped','Walk',x=5,y=5)
-        app.root.after.assert_called_once()
-        self.assertEqual(app.root.after.call_args.args[0],3000)
+        app.root.after.assert_not_called()
         app._bot_action_inflight.clear()
         app._bot_follow_tick(run)
         self.assertEqual(scope['threading'].Thread.call_count,1)
@@ -61,7 +60,7 @@ class FollowTests(TestCase):
         app._bot_last_action_at.clear()
         app._bot_anti_afk_positions['bcdefa']=(20,6,7)
         app._bot_anti_afk_positions['abcdef']=(10,6,6)
-        app._bot_follow_tick(run)
+        app._bot_follow_wake('bcdefa')
         scope['encode_clientless_action'].assert_called_with(None,'mapped','Walk',x=6,y=7)
         self.assertIn('X=6, Y=7',app.bot_follow_status_var.set.call_args.args[0])
         app._bot_action_inflight.clear()
@@ -69,6 +68,21 @@ class FollowTests(TestCase):
         app._bot_anti_afk_positions['abcdef']=(10,6,7)
         app._bot_follow_tick(run)
         self.assertEqual(scope['threading'].Thread.call_count,2)
+
+    def test_changes_during_inflight_coalesce_and_resume_after_send(self):
+        app=self.make_app()
+        app._bot_follow_start()
+        app._bot_anti_afk_positions['bcdefa']=(20,6,7)
+        app._bot_follow_wake('bcdefa')
+        app._bot_anti_afk_positions['bcdefa']=(20,8,9)
+        app._bot_follow_wake('bcdefa')
+        self.assertEqual(scope['threading'].Thread.call_count,1)
+        app._bot_action_inflight.clear()
+        app._bot_last_action_at.clear()
+        app._bot_follow_wake('abcdef')
+        scope['encode_clientless_action'].assert_called_with(None,'mapped','Walk',x=8,y=9)
+        self.assertEqual(scope['threading'].Thread.call_count,2)
+        app.root.after.assert_not_called()
 
     def test_reject_unknown_or_self(self):
         for label in ('Unknown','A',''):

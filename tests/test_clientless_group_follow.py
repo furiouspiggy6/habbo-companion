@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from clientless_bot import ClientlessBotError
 
 source=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
-names={'_bot_follow_group_resolve','_bot_follow_group_toggle','_bot_follow_group_tick','_bot_follow_stop'}
+names={'_bot_follow_group_resolve','_bot_follow_group_toggle','_bot_follow_group_tick','_bot_follow_stop','_bot_follow_wake','_bot_follow_defer'}
 nodes=[n for n in ast.walk(ast.parse(source.read_text(encoding='utf-8')))
        if isinstance(n,ast.FunctionDef) and n.name in names]
 scope={'ClientlessBotError':ClientlessBotError,'time':SimpleNamespace(monotonic=lambda:100),
@@ -47,14 +47,18 @@ class GroupFollowTests(TestCase):
         self.assertEqual(scope['threading'].Thread.call_count,2)
         for call in scope['encode_clientless_action'].call_args_list:
             self.assertEqual(call.kwargs,{'x':12,'y':8})
-        self.assertEqual(app.root.after.call_args.args[0],3000)
+        app.root.after.assert_not_called()
         app._bot_action_inflight.clear()
         app._bot_last_action_at.clear()
         app._bot_anti_afk_positions['c']=(30,13,9)
-        app._bot_follow_group_tick(run)
+        app._bot_follow_wake('c')
         self.assertEqual(scope['threading'].Thread.call_count,4)
         self.assertEqual(scope['encode_clientless_action'].call_args.kwargs,{'x':13,'y':9})
         self.assertIn('X=13, Y=9',app.bot_follow_status_var.get())
+        app._bot_action_inflight.clear()
+        app._bot_last_action_at.clear()
+        app._bot_follow_wake('c')
+        self.assertEqual(scope['threading'].Thread.call_count,4)
         app.bot_follow_all_var.set(False)
         app._bot_follow_group_toggle()
         app._bot_follow_group_tick(run)

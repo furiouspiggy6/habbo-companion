@@ -6375,14 +6375,14 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='FOLLOW USER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
         ttk.Label(frame,text='Follow the exact X/Y coordinates of a named room bot or another connected account you control. '
-                  'Coordinates update every 3 seconds in the same room.',
+                  'Coordinates update when the target moves in the same room.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         self.bot_follow_target_var=tk.StringVar(value='')
         self.bot_follow_status_var=tk.StringVar(value='Follow is off.')
         ttk.Label(frame,text='Target Habbo username',style='Panel.TLabel').pack(anchor='w')
         ttk.Entry(frame,textvariable=self.bot_follow_target_var,width=42).pack(anchor='w',pady=(3,5))
         self.bot_follow_all_var=tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame,text='All connected accounts — follow target coordinates every 3 seconds',
+        ttk.Checkbutton(frame,text='All connected accounts — follow target coordinate changes',
                         variable=self.bot_follow_all_var,command=self._bot_follow_group_toggle,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(0,5))
         follow_buttons=ttk.Frame(frame,style='Panel.TFrame')
@@ -7627,6 +7627,27 @@ class ChatOverlayApp(PersonaResponderMixin):
             for unit in value.values():
                 units.pop(unit[0],None)
 
+    def _bot_follow_wake(self,ident):
+        """Re-evaluate relevant follows after room observations or local sends."""
+        run=getattr(self,'_bot_follow_run',None)
+        if run and ident in (run['id'],run['peer']):
+            self._bot_follow_tick(run)
+        group=getattr(self,'_bot_follow_group_run',None)
+        if group and (ident in group['members'] or ident==group['key'][3]):
+            self._bot_follow_group_tick(group)
+
+    def _bot_follow_defer(self,run,seconds,group=False):
+        """Coalesce pending changes until the existing movement guard permits a send."""
+        if run.get('deferred'):return
+        run['deferred']=True
+        def wake():
+            run['deferred']=False
+            if group:
+                self._bot_follow_group_tick(run)
+            else:
+                self._bot_follow_tick(run)
+        self.root.after(max(1,int(seconds*1000)+1),wake)
+
     def _bot_follow_stop(self,message='Follow stopped.'):
         self._bot_follow_run=None
         self._bot_follow_group_run=None
@@ -7720,10 +7741,11 @@ class ChatOverlayApp(PersonaResponderMixin):
             dest=(tx,ty)
             if not (0<=tx<=1023 and 0<=ty<=1023):
                 raise ClientlessBotError('Target coordinates are out of range.')
+            remaining=2-(time.monotonic()-self._bot_last_action_at.get(ident,0))
             if (x,y)==dest:
+                run['last_sent']=dest
                 self.bot_follow_status_var.set(f'Following {run["label"]} — at X={tx}, Y={ty}.')
-            elif (ident not in self._bot_action_inflight
-                  and time.monotonic()-self._bot_last_action_at.get(ident,0)>=2):
+            elif dest!=run['last_sent'] and ident not in self._bot_action_inflight and remaining<=0:
                 session=self._coffee_session(ident)
                 if session is None:raise ClientlessBotError('Follower disconnected.')
                 packets=encode_clientless_action(self._bot_headers,session.release,'Walk',x=tx,y=ty)
@@ -7738,8 +7760,9 @@ class ChatOverlayApp(PersonaResponderMixin):
                     raise
                 run['last_sent']=dest
                 self.bot_follow_status_var.set(f'Following {run["label"]} — walking to X={tx}, Y={ty}.')
+            elif dest!=run['last_sent'] and ident not in self._bot_action_inflight:
+                self._bot_follow_defer(run,remaining)
             run['last_target']=dest
-            self.root.after(3000,lambda:self._bot_follow_tick(run))
         except (ValueError,TypeError,RuntimeError,OSError) as exc:
             self._bot_follow_stop(str(exc)[:160])
 
@@ -7815,6 +7838,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             return
         sent=0
         latest_dest=None
+        last_sent=run.setdefault('last_sent',{})
+        pending=[]
         for ident,versions in tuple(run['members'].items()):
             try:
                 key,generation,peer_generation,pos,dest=self._bot_follow_group_resolve(ident,run['username'])
@@ -7823,8 +7848,14 @@ class ChatOverlayApp(PersonaResponderMixin):
                 if not all(0<=coord<=1023 for coord in dest):
                     raise ClientlessBotError('Target coordinates are out of range.')
                 latest_dest=dest
-                if (pos==dest or ident in self._bot_action_inflight or
-                        time.monotonic()-self._bot_last_action_at.get(ident,0)<0.4):
+                if pos==dest:
+                    last_sent[ident]=dest
+                    continue
+                if last_sent.get(ident)==dest or ident in self._bot_action_inflight:
+                    continue
+                remaining=0.4-(time.monotonic()-self._bot_last_action_at.get(ident,0))
+                if remaining>0:
+                    pending.append(remaining)
                     continue
                 session=self._coffee_session(ident)
                 if session is None:raise ClientlessBotError('Account disconnected.')
@@ -7837,16 +7868,19 @@ class ChatOverlayApp(PersonaResponderMixin):
                 except (RuntimeError,OSError):
                     self._bot_action_inflight.discard(ident)
                     raise
+                last_sent[ident]=dest
                 sent+=1
             except (ValueError,TypeError,RuntimeError,OSError):
                 run['members'].pop(ident,None)
+                last_sent.pop(ident,None)
         if not run['members']:
             self._bot_follow_stop('All-account follow stopped: target or followers unavailable.')
             return
         coordinates=(f' — X={latest_dest[0]}, Y={latest_dest[1]}' if latest_dest is not None else '')
         self.bot_follow_status_var.set('Following '+run['label']+coordinates+' — '+str(len(run['members']))+
-            ' connected follower(s); '+str(sent)+' movement request(s) this tick.')
-        self.root.after(3000,lambda:self._bot_follow_group_tick(run))
+            ' connected follower(s); '+str(sent)+' new movement request(s).')
+        if pending:
+            self._bot_follow_defer(run,min(pending),group=True)
 
     def _bot_multi_refresh(self):
         """Keep multi-select rows in sync without losing highlighted profiles."""
@@ -8732,6 +8766,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         if session:
             session.close()
         self._tcp_states[ident]='Disconnected'
+        self._bot_follow_wake(ident)
 
     def _tcp_disconnect_selected(self):
         account=self._tcp_selected()
@@ -13255,6 +13290,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         group['members'].pop(ident,None)
                         if not group['members']:
                             self._bot_follow_stop('All-account follow stopped: '+error)
+                self._bot_follow_wake(ident)
                 if action=='Auto Walk' and error is not None:
                     self._bot_walk_next(ident,generation,'Walk request failed')
                 if (action=='Auto Walk' and error is None
@@ -13272,18 +13308,22 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 _,ident,generation,bots=item
                 if generation==self._tcp_generation.get(ident,0):
                     self._bot_follow_observe(ident,generation,'bots',bots)
+                    self._bot_follow_wake(ident)
                 continue
             if item[0]=='bot_hand_observation':
                 _,ident,generation,observation=item
                 if generation==self._tcp_generation.get(ident,0):
                     self._coffee_observe(ident,generation,observation)
                     self._bot_follow_observe(ident,generation,*observation)
+                    if observation[0] in ('remove','players','room'):
+                        self._bot_follow_wake(ident)
                 continue
             if item[0]=='bot_walk_observation':
                 _,ident,generation,observation=item
                 if generation==self._tcp_generation.get(ident,0):
                     self._bot_receive_walk_observation(ident,generation,observation)
                     self._bot_follow_observe(ident,generation,*observation)
+                    self._bot_follow_wake(ident)
                 continue
             if item[0]=='bot_chat':
                 _,ident,generation,kind,index,message=item
@@ -13339,6 +13379,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         self.bot_status_var.set(
                             'Clientless profile connection failed: '+item[3])
                     self._tcp_states[ident]='Connection failed: '+item[3]
+                    self._bot_follow_wake(ident)
                     self.tcp_status_var.set(self._tcp_states[ident])
                     self._tcp_log_event(ident,self._tcp_states[ident])
                     self._tcp_render()
