@@ -18,7 +18,7 @@ PAGE_NAMES={'accounts','bot','chat','responder','packet',
 
 
 class ModernWorkspaceTests(unittest.TestCase):
-    def test_workspace_pages_are_accessible_from_sidebar(self):
+    def test_workspace_pages_are_accessible_from_top_navigation(self):
         for name in ('_ui_styles','_ui_add_nav','_ui_show_page',
                      '_ui_scroll_area','_ui_mousewheel',
                      '_make_dashboard_panel','_make_settings',
@@ -29,6 +29,9 @@ class ModernWorkspaceTests(unittest.TestCase):
             self.assertIn("'"+key+"'",settings)
         self.assertNotIn('self.notebook=',settings)
         self.assertIn("self._ui_show_page('accounts')",settings)
+        self.assertNotIn('self._ui_sidebar',settings)
+        for group in ('Accounts','Clientless Bot','Chat & AI','Tools','Settings'):
+            self.assertIn("('"+group+"', (",settings)
         self.assertIn('self._make_packet_panel(',settings)
         self.assertIn('self._make_accounts_panel(',settings)
         self.assertNotIn("('overview',",settings)

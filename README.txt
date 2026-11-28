@@ -1240,3 +1240,10 @@ The same room setting is exposed as a launch target in Accounts and an action
 input in Clientless. Existing coffee sender scope and diagnostics remain separate.
 Accounts is now the startup page. The separate Overview dashboard was replaced
 by compact account totals above the existing account list.
+
+v1.1.131 — Compact black workspace
+Five top-level destinations: Accounts, Clientless Bot, Chat & AI, Tools and
+Settings. Only multi-page groups display a secondary navigation row; the last
+visited page in each group is remembered for the current session. Discord-inspired
+black and graphite palette, restrained indigo accent, smaller buttons and table
+rows, tighter account and clientless forms. Game overlays and behavior unchanged.

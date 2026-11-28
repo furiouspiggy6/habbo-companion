@@ -578,19 +578,19 @@ TRANSPARENT = '#ff00fe'
 # Companion control window; the original in-game Habbo bubble art and overlay
 # themes above remain independent.
 COMPANION_UI = {
-    'background': '#0B111C',
-    'sidebar': '#080E17',
-    'surface': '#141F2E',
-    'raised': '#1C2C40',
-    'field': '#101B29',
-    'border': '#29394D',
-    'text': '#F0F5FC',
-    'muted': '#A1B3C7',
-    'faint': '#71859E',
-    'accent': '#58B9F8',
-    'accent_hover': '#80D2FF',
-    'success': '#54D7B0',
-    'danger': '#E58B9B',
+    'background': '#111113',
+    'sidebar': '#09090B',
+    'surface': '#19191C',
+    'raised': '#26262B',
+    'field': '#0D0D10',
+    'border': '#333338',
+    'text': '#F1F1F4',
+    'muted': '#ABABB5',
+    'faint': '#777780',
+    'accent': '#5865F2',
+    'accent_hover': '#6875FF',
+    'success': '#57C89A',
+    'danger': '#F08A91',
 }
 
 DEFAULT = dict(
@@ -5284,7 +5284,7 @@ def install_managed_gearth(selected_executable, notify):
 class ChatOverlayApp(PersonaResponderMixin):
     def __init__(self,root):
         self.root=root;self.root.title('Habbo Companion')
-        self.root.geometry('1120x820')
+        self.root.geometry('1120x740')
         self.root.attributes('-topmost',False)  # behave like a normal app window
         self.root.minsize(940,620)
         self.root.configure(bg=COMPANION_UI['background'])
@@ -5683,64 +5683,67 @@ class ChatOverlayApp(PersonaResponderMixin):
             style.theme_use('clam')
         except tk.TclError:
             pass
+        style.configure('.',font=('Segoe UI',9),background=p['background'],foreground=p['text'])
+        style.configure('TRadiobutton',background=p['background'],foreground=p['text'],padding=2)
+        style.map('TRadiobutton',background=[('active',p['background'])],foreground=[('disabled',p['faint'])])
         style.configure('Panel.TFrame',background=p['background'])
         style.configure('Sidebar.TFrame',background=p['sidebar'])
         style.configure('Card.TFrame',background=p['surface'])
         style.configure('TLabel',background=p['background'],
-                        foreground=p['text'],font=('Segoe UI',10))
+                        foreground=p['text'],font=('Segoe UI',9))
         style.configure('Panel.TLabel',background=p['background'],
-                        foreground=p['text'],font=('Segoe UI',10))
+                        foreground=p['text'],font=('Segoe UI',9))
         style.configure('Card.TLabel',background=p['surface'],
-                        foreground=p['text'],font=('Segoe UI',10))
+                        foreground=p['text'],font=('Segoe UI',9))
         style.configure('Muted.TLabel',background=p['background'],
                         foreground=p['muted'],font=('Segoe UI',9))
         style.configure('TCheckbutton',background=p['background'],
-                        foreground=p['text'],font=('Segoe UI',10),padding=5)
+                        foreground=p['text'],font=('Segoe UI',9),padding=2)
         style.map('TCheckbutton',
                   background=[('active',p['background'])],
                   foreground=[('disabled',p['faint'])])
         style.configure('Panel.TCheckbutton',background=p['background'],
-                        foreground=p['text'],font=('Segoe UI',10),padding=5)
+                        foreground=p['text'],font=('Segoe UI',9),padding=2)
         style.map('Panel.TCheckbutton',
                   background=[('active',p['background'])],
                   foreground=[('disabled',p['faint'])])
         style.configure('TButton',font=('Segoe UI Semibold',9),
-                        padding=(13,9),background=p['raised'],
+                        padding=(8,4),background=p['raised'],
                         foreground=p['text'],borderwidth=0,relief='flat',
                         focusthickness=0,focuscolor=p['raised'])
         style.map('TButton',
                   background=[('disabled',p['surface']),
-                              ('pressed','#294662'),
-                              ('active','#293D54')],
+                              ('pressed','#383840'),
+                              ('active','#323239')],
                   foreground=[('disabled',p['faint'])])
         style.configure('Primary.TButton',
-                        font=('Segoe UI Semibold',10),padding=(14,10),
-                        background=p['accent'],foreground='#071522',
+                        font=('Segoe UI Semibold',9),padding=(10,5),
+                        background=p['accent'],foreground='#FFFFFF',
                         borderwidth=0,relief='flat')
         style.map('Primary.TButton',
-                  background=[('pressed','#3299D8'),
+                  background=[('pressed','#4752C4'),
                               ('active',p['accent_hover'])],
                   foreground=[('disabled',p['faint'])])
-        style.configure('Danger.TButton',background='#42283A',
+        style.configure('Danger.TButton',background='#402529',
                         foreground='#FFD4DB',font=('Segoe UI',9),
-                        padding=(12,9),borderwidth=0)
-        style.map('Danger.TButton',background=[('active','#5E324B')])
+                        padding=(8,4),borderwidth=0)
+        style.map('Danger.TButton',background=[('active','#563036')])
         style.configure('TEntry',fieldbackground=p['field'],
                         foreground=p['text'],insertcolor=p['text'],
                         bordercolor=p['border'],lightcolor=p['border'],
-                        darkcolor=p['border'],padding=(10,8))
+                        darkcolor=p['border'],padding=(6,4))
         style.map('TEntry',bordercolor=[('focus',p['accent'])])
         style.configure('TCombobox',fieldbackground=p['field'],
                         foreground=p['text'],arrowcolor=p['muted'],
-                        background=p['raised'],padding=5)
+                        background=p['raised'],padding=2)
         style.map('TCombobox',
                   fieldbackground=[('readonly',p['field']),('disabled',p['surface'])],
                   foreground=[('readonly',p['text']),('disabled',p['faint'])],
-                  selectbackground=[('readonly','#22415A')],
+                  selectbackground=[('readonly','#383F78')],
                   selectforeground=[('readonly',p['text'])])
         self.root.option_add('*TCombobox*Listbox.background',p['field'])
         self.root.option_add('*TCombobox*Listbox.foreground',p['text'])
-        self.root.option_add('*TCombobox*Listbox.selectBackground','#22415A')
+        self.root.option_add('*TCombobox*Listbox.selectBackground','#383F78')
         self.root.option_add('*TCombobox*Listbox.selectForeground',p['text'])
         style.configure('TScale',background=p['background'],
                         troughcolor=p['raised'])
@@ -5750,58 +5753,56 @@ class ChatOverlayApp(PersonaResponderMixin):
                         foreground=p['text'])
         style.configure('Treeview',background=p['surface'],
                         fieldbackground=p['surface'],foreground=p['text'],
-                        rowheight=34,borderwidth=0,relief='flat',
-                        font=('Segoe UI',10))
+                        rowheight=24,borderwidth=0,relief='flat',
+                        font=('Segoe UI',9))
         style.configure('Treeview.Heading',background=p['raised'],
-                        foreground=p['muted'],padding=(9,9),
+                        foreground=p['muted'],padding=(6,4),
                         font=('Segoe UI Semibold',9),relief='flat')
         style.map('Treeview',
-                  background=[('selected','#22415A')],
+                  background=[('selected','#383F78')],
                   foreground=[('selected',p['text'])])
         style.map('Treeview.Heading',
-                  background=[('active','#25394F')])
+                  background=[('active','#303036')])
         style.configure('Vertical.TScrollbar',
                         background=p['raised'],troughcolor=p['background'],
                         arrowcolor=p['muted'],borderwidth=0)
         style.configure('TNotebook',background=p['background'],borderwidth=0)
         style.configure('TNotebook.Tab',background=p['raised'],
-                        foreground=p['muted'],padding=(11,8))
+                        foreground=p['muted'],padding=(9,5))
         style.map('TNotebook.Tab',
                   background=[('selected',p['surface']),
-                              ('active','#25394F')],
+                              ('active','#303036')],
                   foreground=[('selected',p['text'])])
 
-    def _ui_add_nav(self, parent, group, items):
-        palette = COMPANION_UI
-        tk.Label(parent, text=group, font=('Segoe UI Semibold', 9),
-                 bg=palette['sidebar'], fg=palette['muted'], anchor='w').pack(
-                     fill='x', padx=18, pady=(10, 2))
-        for key, title, _subtitle in items:
-            button = tk.Button(
-                parent, text=title, font=('Segoe UI Semibold', 10), anchor='w',
-                bg=palette['sidebar'], fg=palette['muted'],
-                activebackground=palette['raised'], activeforeground=palette['text'],
-                highlightbackground=palette['sidebar'], highlightcolor=palette['accent'],
-                highlightthickness=1, relief='flat', borderwidth=0,
-                cursor='hand2', padx=9, pady=4, takefocus=True,
-                command=lambda dest=key: self._ui_show_page(dest))
-            button.pack(fill='x', padx=8)
-            button.bind('<FocusIn>', lambda event: self._ui_reveal_nav(event.widget))
-            self._ui_nav_buttons[key] = button
+    def _ui_nav_button(self,parent,title,callback,primary=False):
+        p=COMPANION_UI
+        return tk.Button(parent,text=title,command=callback,
+            font=('Segoe UI Semibold',10 if primary else 9),
+            bg=p['sidebar'],fg=p['muted'],activebackground=p['raised'],
+            activeforeground=p['text'],highlightbackground=p['sidebar'],
+            highlightcolor=p['accent'],highlightthickness=1,relief='flat',
+            borderwidth=0,cursor='hand2',padx=11 if primary else 9,
+            pady=6 if primary else 3,takefocus=True)
 
-    def _ui_reveal_nav(self, button):
-        canvas = self._ui_scroll_canvases['sidebar']
-        viewport = canvas.winfo_height()
-        if viewport <= 1:
+    def _ui_add_nav(self,parent,group,items):
+        keys=tuple(item[0] for item in items)
+        self._ui_group_pages[group]=keys
+        self._ui_group_last[group]=keys[0]
+        for key in keys:
+            self._ui_page_group[key]=group
+        button=self._ui_nav_button(parent,group,
+            lambda g=group:self._ui_show_page(self._ui_group_last[g]),True)
+        button.pack(side='left',padx=(0,3))
+        self._ui_group_buttons[group]=button
+        if len(items)==1:
+            self._ui_nav_buttons[keys[0]]=button
             return
-        top = canvas.canvasy(0)
-        button_top = button.winfo_y()
-        button_bottom = button_top + button.winfo_height()
-        content_height = button.master.winfo_height()
-        if button_top < top:
-            canvas.yview_moveto(button_top / content_height)
-        elif button_bottom > top + viewport:
-            canvas.yview_moveto((button_bottom - viewport) / content_height)
+        row=tk.Frame(self._ui_subnav,bg=COMPANION_UI['sidebar'])
+        self._ui_group_rows[group]=row
+        for key,title,_subtitle in items:
+            child=self._ui_nav_button(row,title,lambda dest=key:self._ui_show_page(dest))
+            child.pack(side='left',padx=(0,2))
+            self._ui_nav_buttons[key]=child
 
     def _ui_show_page(self,key):
         if key not in self._ui_pages:
@@ -5812,15 +5813,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         title,subtitle=self._ui_page_meta[key]
         self._ui_title_var.set(title)
         self._ui_subtitle_var.set(subtitle)
-        if subtitle:
-            self._ui_subtitle.pack(anchor='w',pady=(3,0))
-        else:
-            self._ui_subtitle.pack_forget()
-        for dest,button in self._ui_nav_buttons.items():
-            chosen=dest==key
+        group=self._ui_page_group[key]
+        self._ui_group_last[group]=key
+        for name,button in self._ui_group_buttons.items():
+            chosen=name==group
             button.configure(bg=p['raised'] if chosen else p['sidebar'],
                              fg=p['text'] if chosen else p['muted'])
-        self._ui_reveal_nav(self._ui_nav_buttons[key])
+        for dest,button in self._ui_nav_buttons.items():
+            if button in self._ui_group_buttons.values():
+                continue
+            chosen=dest==key
+            button.configure(bg=p['raised'] if chosen else p['sidebar'],
+                             fg=p['accent_hover'] if chosen else p['muted'])
+        for row in self._ui_group_rows.values():
+            row.pack_forget()
+        row=self._ui_group_rows.get(group)
+        if row is None:
+            self._ui_subnav.pack_forget()
+        else:
+            self._ui_subnav.pack(fill='x',before=self._ui_stack)
+            row.pack(fill='x',padx=10,pady=(2,3))
         if key=='accounts':
             self._ui_refresh_dashboard()
 
@@ -5859,8 +5871,6 @@ class ChatOverlayApp(PersonaResponderMixin):
         if isinstance(event.widget,(ttk.Treeview,tk.Text,ttk.Combobox,tk.Listbox)):
             return
         key=self._ui_active
-        if str(event.widget).startswith(f'{self._ui_sidebar}.'):
-            key='sidebar'
         canvas=self._ui_scroll_canvases.get(key)
         if canvas is not None and event.delta:
             steps=max(1,abs(event.delta)//120)
@@ -5897,7 +5907,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._ui_refresh_dashboard()
 
     def _make_settings(self):
-        """Build the workspace and its sidebar."""
+        """Build the compact top-navigation workspace."""
         self._ui_styles()
         p=COMPANION_UI
         self._ui_pages={}
@@ -5905,24 +5915,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._ui_nav_buttons={}
         self._ui_active='accounts'
         navigation = (
-            ('Workspace', (
+            ('Accounts', (
                 ('accounts', 'Accounts', 'Saved profiles and launch modes'),
+            )),
+            ('Clientless Bot', (
                 ('bot', 'Clientless Bot', 'Room, chat and avatar controls'),
+            )),
+            ('Chat & AI', (
                 ('chat', 'View Chat', 'Original Habbo bubbles and overlay settings'),
                 ('responder', 'AI Responder', 'Writing style and room targets'),
             )),
-            ('Avatar tools', (
-                ('outfits', 'Outfit Cycler', 'Capture and rotate through saved looks'),
-                ('face', 'Face Rotator', 'Turn in place without walking'),
-                ('dance', 'Dance Controller', 'Choose and cycle through dance moves'),
-            )),
-            ('Diagnostics', (
+            ('Tools', (
+                ('outfits', 'Outfits', 'Capture and rotate through saved looks'),
+                ('face', 'Face', 'Turn in place without walking'),
+                ('dance', 'Dance', 'Choose and cycle through dance moves'),
                 ('packet', 'Packet Viewer', 'G-Earth connection, filters and traffic'),
-                ('manip', 'Packet Manipulator', 'Packet rules and manual actions'),
+                ('manip', 'Packet Rules', 'Packet rules and manual actions'),
                 ('fuzz', 'Protocol Lab', 'Passive G-Earth reader and protocol tests'),
                 ('headless', 'Headless Test', 'Local connection testing'),
             )),
-            ('System', (
+            ('Settings', (
                 ('updates', 'Updates', 'Check, install and restore updates'),
             )),
         )
@@ -5931,43 +5943,28 @@ class ChatOverlayApp(PersonaResponderMixin):
             for _group, items in navigation
             for key, title, subtitle in items
         }
-        shell=tk.Frame(self.root,bg=p['background'])
-        shell.pack(fill='both',expand=True)
-        self._ui_sidebar=tk.Frame(shell,bg=p['sidebar'],width=214)
-        self._ui_sidebar.pack(side='left',fill='y')
-        self._ui_sidebar.pack_propagate(False)
-        tk.Frame(shell,bg=p['border'],width=1).pack(side='left',fill='y')
-        brand=tk.Frame(self._ui_sidebar,bg=p['sidebar'])
-        brand.pack(fill='x',padx=17,pady=(16,13))
-        tk.Label(brand,text='H',font=('Segoe UI Black',18),
-                 bg=p['accent'],fg='#071522',width=2,
-                 pady=3).pack(side='left',padx=(0,11))
-        tk.Label(brand,text='Habbo Companion',font=('Segoe UI Semibold',11),
-                 bg=p['sidebar'],fg=p['text']).pack(side='left')
-        tk.Frame(self._ui_sidebar,bg=p['border'],height=1).pack(
-            fill='x',padx=18)
-        nav = self._ui_scroll_area(self._ui_sidebar, 'sidebar',
-                                   style='Sidebar.TFrame', padding=(0, 0, 0, 8))
-        for group, items in navigation:
-            self._ui_add_nav(nav, group, items)
-        main=tk.Frame(shell,bg=p['background'])
-        main.pack(side='left',fill='both',expand=True)
-        top=tk.Frame(main,bg=p['background'])
-        top.pack(fill='x',padx=(27,23),pady=(23,12))
-        h=ttk.Frame(top,style='Panel.TFrame')
-        h.pack(side='left',fill='x',expand=True)
+        self._ui_group_pages={}
+        self._ui_group_last={}
+        self._ui_page_group={}
+        self._ui_group_buttons={}
+        self._ui_group_rows={}
         self._ui_title_var=tk.StringVar()
         self._ui_subtitle_var=tk.StringVar()
-        tk.Label(h,textvariable=self._ui_title_var,
-                 font=('Segoe UI Semibold',21),
-                 bg=p['background'],fg=p['text']).pack(anchor='w')
-        self._ui_subtitle=tk.Label(h,textvariable=self._ui_subtitle_var,
-                                   font=('Segoe UI',10),
-                                   bg=p['background'],fg=p['muted'])
-        tk.Frame(main,bg=p['border'],height=1).pack(
-            fill='x',padx=(27,23),pady=(0,4))
-        stack=tk.Frame(main,bg=p['background'])
-        stack.pack(fill='both',expand=True,padx=(9,9),pady=(0,7))
+        shell=tk.Frame(self.root,bg=p['background'])
+        shell.pack(fill='both',expand=True)
+        top=tk.Frame(shell,bg=p['sidebar'])
+        top.pack(fill='x')
+        tk.Label(top,text='H',font=('Segoe UI Black',13),bg=p['accent'],
+                 fg='#FFFFFF',width=2,pady=2).pack(side='left',padx=(9,8),pady=5)
+        nav=tk.Frame(top,bg=p['sidebar'])
+        nav.pack(side='left',fill='x',expand=True)
+        self._ui_subnav=tk.Frame(shell,bg=p['sidebar'])
+        for group,items in navigation:
+            self._ui_add_nav(nav,group,items)
+        tk.Frame(shell,bg=p['border'],height=1).pack(fill='x')
+        stack=tk.Frame(shell,bg=p['background'])
+        self._ui_stack=stack
+        stack.pack(fill='both',expand=True,padx=6,pady=4)
         stack.grid_rowconfigure(0,weight=1)
         stack.grid_columnconfigure(0,weight=1)
         for key in self._ui_page_meta:
@@ -6070,10 +6067,10 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _make_clientless_connection_panel(self, parent):
         """Connection preferences and diagnostics for the shared clientless backend."""
-        f=ttk.Frame(parent,style='Panel.TFrame',padding=16)
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=9)
         f.pack(fill='both',expand=True)
         tk.Label(f,text='CLIENTLESS CONNECTION SETTINGS',
-                 font=('Segoe UI Semibold',17),bg=COMPANION_UI['background'],
+                 font=('Segoe UI Semibold',13),bg=COMPANION_UI['background'],
                  fg=COMPANION_UI['text']).pack(anchor='w',pady=(0,8))
         ttk.Label(f,text='Manage account connections in Accounts.',
                   style='Panel.TLabel',wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
@@ -6132,10 +6129,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._tcp_render()
 
     def _make_clientless_tabs(self,parent):
-        header=ttk.Frame(parent,style='Panel.TFrame',padding=(16,8))
+        header=ttk.Frame(parent,style='Panel.TFrame',padding=(9,5))
         header.pack(fill='x')
         tabs=ttk.Notebook(parent)
-        tabs.pack(fill='both',expand=True,padx=(12,12),pady=(5,0))
+        tabs.pack(fill='both',expand=True,padx=7,pady=(2,0))
         actions=ttk.Frame(tabs,style='Panel.TFrame')
         automation=ttk.Frame(tabs,style='Panel.TFrame')
         coffee=ttk.Frame(tabs,style='Panel.TFrame')
@@ -6182,7 +6179,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(header,textvariable=self.bot_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
 
-        frame=ttk.Frame(automation,style='Panel.TFrame',padding=12)
+        frame=ttk.Frame(automation,style='Panel.TFrame',padding=8)
         frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='AUTOMATIC WALKING',style='Section.TLabel').pack(
             anchor='w',pady=(6,5))
@@ -6250,7 +6247,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_anti_afk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
-        frame=ttk.Frame(actions,style='Panel.TFrame',padding=12)
+        frame=ttk.Frame(actions,style='Panel.TFrame',padding=8)
         frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
             anchor='w',pady=(0,5))
@@ -6320,7 +6317,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             relief='flat',font=('Consolas',9))
         self.bot_chat_log.pack(fill='both',expand=True,pady=(0,6))
 
-        frame=ttk.Frame(settings,style='Panel.TFrame',padding=12)
+        frame=ttk.Frame(settings,style='Panel.TFrame',padding=8)
         frame.pack(fill='x')
         diagnostics=ttk.LabelFrame(frame,text='Advanced diagnostics',padding=7)
         diagnostics.pack(fill='x',pady=(0,10))
@@ -8566,15 +8563,15 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _make_accounts_panel(self,parent):
         """Build the profile list and account settings."""
         p=COMPANION_UI
-        f=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
+        f=ttk.Frame(parent,style='Panel.TFrame',padding=(10,8))
         f.pack(fill='both',expand=True)
         self._make_dashboard_panel(f)
         columns=ttk.Frame(f,style='Panel.TFrame')
         columns.pack(fill='both',expand=True)
 
         # LEFT — profile selection and lifecycle.
-        left=ttk.Frame(columns,style='Card.TFrame',padding=15,width=316)
-        left.pack(side='left',fill='y',padx=(0,15))
+        left=ttk.Frame(columns,style='Card.TFrame',padding=9,width=325)
+        left.pack(side='left',fill='y',padx=(0,8))
         left.pack_propagate(False)
         tk.Label(left,text='SAVED PROFILES',
                  font=('Segoe UI Semibold',9),
@@ -8589,10 +8586,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             ('launch_state','Status',120)):
             self.account_table.heading(key,text=heading)
             self.account_table.column(key,width=width,stretch=False)
-        self.account_table.pack(fill='x',pady=(0,12))
+        self.account_table.pack(fill='x',pady=(0,6))
         self.account_table.bind('<<TreeviewSelect>>',self._account_on_select)
         actions=ttk.Frame(left,style='Card.TFrame')
-        actions.pack(fill='x',pady=(0,8))
+        actions.pack(fill='x',pady=(0,4))
         ttk.Button(actions,text='Add account',style='Primary.TButton',
                    command=self._account_add).pack(
                        side='left',padx=(0,7))
@@ -8600,30 +8597,30 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._account_remove).pack(side='left')
 
         ttk.Button(left,text='Select all',command=self._bot_multi_select_all).pack(anchor='w',pady=(0,5))
-        ttk.Button(left,text='Launch highlighted (clientless, no G-Earth)',
+        ttk.Button(left,text='Launch highlighted (direct)',
                    command=self._bot_multi_run_selected).pack(anchor='w',pady=(0,5))
-        ttk.Button(left,text='Disconnect highlighted clientless',
+        ttk.Button(left,text='Disconnect highlighted',
                    command=self._bot_multi_disconnect_selected).pack(anchor='w',pady=(0,5))
         ttk.Label(left,textvariable=self.bot_multi_status_var,style='Card.TLabel',
                   wraplength=275).pack(anchor='w',fill='x',pady=(0,7))
         ttk.Label(left,text='Ctrl/Shift selects multiple profiles.',style='Card.TLabel').pack(anchor='w')
 
         # RIGHT — profile details, login, and separate advanced controls.
-        details_padding=16
+        details_padding=9
         right=ttk.Frame(columns,style='Card.TFrame',padding=details_padding)
         right.pack(side='left',fill='both',expand=True)
         tk.Label(right,text='Account settings',
-                 font=('Segoe UI Semibold',16),
-                 fg=p['text'],bg=p['surface']).pack(anchor='w',pady=(0,8))
+                 font=('Segoe UI Semibold',12),
+                 fg=p['text'],bg=p['surface']).pack(anchor='w',pady=(0,4))
 
         def field(parent,label,var,row,column=0,span=1,secret=False):
             ttk.Label(parent,text=label,style='Card.TLabel').grid(
                 row=row*2,column=column,columnspan=span,
-                sticky='w',padx=(0,12),pady=(6,4))
+                sticky='w',padx=(0,12),pady=(3,2))
             entry=ttk.Entry(parent,textvariable=var,
                             show='*' if secret else '')
             entry.grid(row=row*2+1,column=column,columnspan=span,
-                       sticky='ew',padx=(0,12),pady=(0,8))
+                       sticky='ew',padx=(0,12),pady=(0,4))
             return entry
 
         basics=ttk.Frame(right,style='Card.TFrame')
@@ -8644,7 +8641,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._account_check_port).pack(side='left')
 
         tk.Frame(right,bg=p['border'],height=1).pack(
-            fill='x',pady=(15,14))
+            fill='x',pady=(7,6))
         tk.Label(right,text='LOGIN & SECURITY',
                  font=('Segoe UI Semibold',9),
                  fg=p['accent'],bg=p['surface']).pack(
@@ -8676,11 +8673,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         login_note.pack(anchor='w',pady=(5,0))
 
         tk.Frame(right,bg=p['border'],height=1).pack(
-            fill='x',pady=(17,14))
+            fill='x',pady=(7,6))
         tk.Label(right,text='LAUNCH & AUTOMATION',
                  font=('Segoe UI Semibold',9),
                  fg=p['accent'],bg=p['surface']).pack(
-                     anchor='w',pady=(0,8))
+                     anchor='w',pady=(0,4))
         autoplay=ttk.Frame(right,style='Card.TFrame')
         autoplay.pack(fill='x',pady=(0,7))
         target=ttk.Frame(right,style='Card.TFrame')
@@ -8707,7 +8704,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                        all_accounts=True)).pack(side='left')
         ttk.Button(right,text='Continue unfinished accounts',
                    command=self._account_resume_pending).pack(
-                       anchor='w',pady=(0,11))
+                       anchor='w',pady=(0,5))
         status=tk.Label(right,textvariable=self.account_status_var,
                          bg=p['surface'],fg=p['success'],justify='left',
                          wraplength=280,font=('Segoe UI',9))

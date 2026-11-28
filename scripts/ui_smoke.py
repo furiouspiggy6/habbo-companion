@@ -35,7 +35,7 @@ try:
     root.deiconify()
     root.update_idletasks()
     assert set(app._ui_pages)==PAGES, 'Missing workspace page'
-    assert set(app._ui_nav_buttons)==PAGES, 'Missing sidebar destination'
+    assert set(app._ui_nav_buttons)==PAGES, 'Missing navigation destination'
     assert app._ui_active=='accounts', 'Incorrect startup workspace'
     assert app.account_table.winfo_exists(), 'Accounts list failed to build'
     assert not hasattr(app,'tcp_table'), 'Duplicate connection table must not exist'
@@ -273,7 +273,7 @@ try:
     for page in PAGES:
         app._ui_nav_buttons[page].invoke()
         root.update_idletasks()
-        assert app._ui_active==page, 'Sidebar navigation failed: '+page
+        assert app._ui_active==page, 'Navigation failed: '+page
         title=app._ui_title_var.get()
         assert title, 'Empty page title: '+page
     root.geometry('940x620')
@@ -291,24 +291,17 @@ try:
             assert button.winfo_width() >= button.winfo_reqwidth(), (
                 'Account control clipped at minimum width: ' + button.cget('text'))
 
-    # Force sidebar overflow to model larger fonts at the minimum height.
-    for button in app._ui_nav_buttons.values():
-        button.configure(pady=12)
+    assert set(app._ui_group_buttons)=={'Accounts','Clientless Bot','Chat & AI','Tools','Settings'}
+    app._ui_group_buttons['Tools'].invoke()
     root.update_idletasks()
-    sidebar=app._ui_scroll_canvases['sidebar']
-    accounts=app._ui_scroll_canvases['accounts']
-    sidebar.yview_moveto(0)
-    accounts_scroll=accounts.yview()
-    app._ui_nav_buttons['accounts'].event_generate('<MouseWheel>', delta=-120)
-    assert sidebar.yview()[0]>0, 'Sidebar did not scroll on wheel input'
-    assert accounts.yview()==accounts_scroll, 'Sidebar input also scrolled the page'
-    updates=app._ui_nav_buttons['updates']
-    updates.event_generate('<FocusIn>')
-    assert updates.winfo_y()+updates.winfo_height() <= sidebar.canvasy(sidebar.winfo_height()), (
-        'Keyboard focus did not reveal the last sidebar destination')
-    updates.invoke()
-    assert app._ui_active=='updates', 'Last sidebar destination failed at minimum height'
-    app._ui_show_page('overview')
+    assert app._ui_active in app._ui_group_pages['Tools']
+    app._ui_nav_buttons['packet'].invoke()
+    app._ui_group_buttons['Accounts'].invoke()
+    app._ui_group_buttons['Tools'].invoke()
+    assert app._ui_active=='packet', 'Tools did not remember its last page'
+    app._ui_group_buttons['Settings'].invoke()
+    assert app._ui_active=='updates'
+    app._ui_show_page('accounts')
     app._ui_refresh_dashboard()
     assert app._ui_dashboard_vars['accounts'].get().isdigit()
     assert root.winfo_width()>=940, 'Workspace width collapsed'
