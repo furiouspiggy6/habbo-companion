@@ -17,7 +17,7 @@ scope=runpy.run_path(str(ROOT/'Habbo_Companion.pyw'),
                      run_name='habbo_companion_ui_smoke')
 App=scope['ChatOverlayApp']
 PAGES={'overview','accounts','bot','chat','responder','packet','outfits','face','dance','fuzz','manip',
-       'classic','headless','updates'}
+       'headless','updates'}
 
 # Do not create overlay hooks or start background network/engine work.
 App._make_overlay=lambda self:None

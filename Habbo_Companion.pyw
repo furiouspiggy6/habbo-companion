@@ -6169,22 +6169,31 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._tcp_render()
 
     def _make_clientless_tabs(self,parent):
+        header=ttk.Frame(parent,style='Panel.TFrame',padding=(16,8))
+        header.pack(fill='x')
         tabs=ttk.Notebook(parent)
         tabs.pack(fill='both',expand=True,padx=(12,12),pady=(5,0))
         main=ttk.Frame(tabs,style='Panel.TFrame')
+        actions=ttk.Frame(tabs,style='Panel.TFrame')
+        automation=ttk.Frame(tabs,style='Panel.TFrame')
         coffee=ttk.Frame(tabs,style='Panel.TFrame')
-        tabs.add(main,text='Clientless controls')
         connection=ttk.Frame(tabs,style='Panel.TFrame')
+        tabs.add(main,text='Sessions')
+        tabs.add(actions,text='Actions & chat')
+        tabs.add(automation,text='Automation')
         tabs.add(coffee,text='Coffee Pass')
-        tabs.add(connection,text='Connection settings')
-        # Build connection widgets before the main controls, as the shared
-        # status renderer and existing callbacks expect them to exist.
-        self._make_clientless_connection_panel(
-            self._ui_scroll_area(connection,'bot_connection'))
-        self._make_clientless_bot_panel(self._ui_scroll_area(main,'bot_controls'))
+        tabs.add(connection,text='Settings')
+        # Build connection widgets first for the shared status renderer.
+        settings=self._ui_scroll_area(connection,'bot_connection')
+        self._make_clientless_connection_panel(settings)
+        self._make_clientless_bot_panel(
+            header,self._ui_scroll_area(main,'bot_controls'),
+            self._ui_scroll_area(actions,'bot_actions'),
+            self._ui_scroll_area(automation,'bot_automation'),settings)
         self._make_clientless_coffee_panel(self._ui_scroll_area(coffee,'bot_coffee'))
         def select_scroll(_event=None):
-            key={str(main):'bot_controls',str(coffee):'bot_coffee',
+            key={str(main):'bot_controls',str(actions):'bot_actions',
+                 str(automation):'bot_automation',str(coffee):'bot_coffee',
                  str(connection):'bot_connection'}.get(tabs.select(),'bot_controls')
             self._ui_scroll_canvases['bot']=self._ui_scroll_canvases[key]
             if key=='bot_coffee':
@@ -6193,30 +6202,28 @@ class ChatOverlayApp(PersonaResponderMixin):
         select_scroll()
         self._coffee_refresh_accounts()
 
-    def _make_clientless_bot_panel(self,parent):
-        """Manual, source-derived AIR bot commands over an authenticated TCP session."""
-        frame=ttk.Frame(parent,style='Panel.TFrame',padding=16)
-        frame.pack(fill='both',expand=True)
-        tk.Label(frame,text='CLIENTLESS BOT (EXPERIMENTAL)',
-                 font=('Segoe UI Semibold',17),
-                 bg=COMPANION_UI['background'],
-                 fg=COMPANION_UI['text']).pack(anchor='w')
-        ttk.Label(frame,text='No game window required. Uses Companion’s '
-                  'existing account-specific Direct TCP socket, official '
-                  'SSO workflow and Windows credential vault. '
-                  'Based on the open-source Habbo-Bot packet structures, '
-                  'not its outdated 2025 header IDs.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(6,12))
-        ttk.Label(frame,text='Choose the connection mode in Accounts. '
-                  'This page controls clientless sessions and manual actions.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
-        ttk.Label(frame,text='Selected account (switch without reconnecting)',style='Panel.TLabel').pack(anchor='w')
+    def _make_clientless_bot_panel(self,header,sessions,actions,automation,settings):
+        """Build compact session, manual action and automation views."""
+        ttk.Label(header,text='Choose the connection mode in Accounts.',
+                  style='Muted.TLabel').pack(anchor='w',pady=(0,5))
+        context=ttk.Frame(header,style='Panel.TFrame')
+        context.pack(fill='x')
+        ttk.Label(context,text='Selected account (switch without reconnecting)',
+                  style='Panel.TLabel').grid(row=0,column=0,sticky='w',padx=(0,10))
+        ttk.Label(context,text='Room ID',style='Panel.TLabel').grid(row=0,column=1,sticky='w')
         self.bot_account_picker=ttk.Combobox(
-            frame,textvariable=self.bot_account_var,state='readonly',width=42)
-        self.bot_account_picker.pack(anchor='w',fill='x',pady=(4,7))
-        # Selection changes the profile settings only; manual action sender is separate.
+            context,textvariable=self.bot_account_var,state='readonly',width=32)
+        self.bot_account_picker.grid(row=1,column=0,sticky='ew',padx=(0,10),pady=(3,4))
+        ttk.Entry(context,textvariable=self.bot_room_var,width=13).grid(
+            row=1,column=1,sticky='w',pady=(3,4))
+        context.columnconfigure(0,weight=1)
         self.bot_account_picker.bind(
             '<<ComboboxSelected>>',lambda _event:self._bot_select_only())
+        ttk.Label(header,textvariable=self.bot_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
+
+        frame=ttk.Frame(sessions,style='Panel.TFrame',padding=12)
+        frame.pack(fill='both',expand=True)
         commands=ttk.Frame(frame,style='Panel.TFrame')
         commands.pack(fill='x',pady=(0,11))
         ttk.Button(commands,text='Refresh accounts',
@@ -6228,15 +6235,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_disconnect_selected).pack(side='left')
         ttk.Label(frame,text='MULTI-ACCOUNT CLIENTLESS',
                   style='Section.TLabel').pack(anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Select multiple saved accounts using Ctrl/Shift '
-                  'or Select all. Run highlighted (Direct TCP) opens an '
-                  'independent session for each account and joins the Room ID '
-                  'below. Auto-walk and anti-AFK run separately. An existing '
-                  'G-Earth-intercepted account can stay connected, but only '
-                  'that account is intercepted; additional accounts use '
-                  'Direct TCP without G-Earth. Only profiles set to Clientless '
-                  'without G-Earth or not yet assigned a launch mode are eligible '
-                  'for this shortcut; choose other modes in Accounts.',
+        ttk.Label(frame,text='Select accounts with Ctrl/Shift. Run highlighted uses Direct TCP without G-Earth; '
+                  'other modes are chosen in Accounts.',
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
         table=ttk.Treeview(
             frame,columns=('connection','mode','room'),show='tree headings',
@@ -6267,21 +6267,6 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_multi_refresh()
         self.root.after(2500,lambda generation=self._bot_multi_ui_generation:
                         self._bot_multi_tick(generation))
-        ttk.Label(frame,text='Run selected profile uses the saved '
-                  'website session or a private background login, obtains an '
-                  'official ticket, authenticates Direct TCP and joins the saved '
-                  'room. The bundled November 4 AIR mapping needs no G-Earth. '
-                  'Later releases require newly verified headers; CAPTCHA and '
-                  'email verification still need manual official sign-in.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
-        diagnostics=ttk.LabelFrame(frame,text='Advanced diagnostics',padding=7)
-        diagnostics.pack(fill='x',pady=(0,10))
-        ttk.Button(diagnostics,text='Check bridge hostname',
-                   command=self._bot_gearth_probe).pack(side='left',padx=(0,7))
-        ttk.Button(diagnostics,text='Capture newer AIR mappings',
-                   command=self._bot_capture_mapping).pack(side='left')
-        ttk.Label(frame,textvariable=self.bot_gearth_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
             anchor='w',pady=(0,5))
         favorite=ttk.Frame(frame,style='Panel.TFrame')
@@ -6292,18 +6277,15 @@ class ChatOverlayApp(PersonaResponderMixin):
             favorite,text='Join Coffee House',
             command=self._bot_join_coffee_house)
         self.bot_coffee_house_button.pack(side='left')
-        ttk.Label(frame,text='Always available, even after restarting. '
-                  'The editable Room ID below remembers the last room you '
-                  'requested; the Coffee House shortcut never auto-joins.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='Joins only when clicked.',
+                  style='Muted.TLabel').pack(anchor='w',pady=(0,8))
+
+        frame=ttk.Frame(automation,style='Panel.TFrame',padding=12)
+        frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='AUTOMATIC WALKING',style='Section.TLabel').pack(
             anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Save a primary X,Y tile and up to three backup '
-                  'tiles for the numeric Room ID below. When this room reports '
-                  'entry and your avatar is identified, Companion will walk '
-                  'there automatically. Backups are tried in order if arrival '
-                  'is not confirmed in time.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
+        ttk.Label(frame,text='Saved positions apply to the Room ID above; backups are tried in order.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,7))
         walkrow=ttk.Frame(frame,style='Panel.TFrame')
         walkrow.pack(fill='x',pady=(0,5))
         ttk.Label(walkrow,text='Primary X,Y',style='Panel.TLabel').pack(side='left')
@@ -6330,11 +6312,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                        side='left',padx=(0,7))
         ttk.Button(override_buttons,text='Clear account override',
                    command=self._bot_clear_account_walk_preset).pack(side='left')
-        ttk.Label(frame,text='Room-wide saved positions are the default. '
-                  'Use Save positions for current account to give each bot '
-                  'a different destination in the same room.',
-                  style='Panel.TLabel',wraplength=620).pack(
-                      anchor='w',pady=(0,5))
+        ttk.Label(frame,text='Room presets are shared unless an account override is saved.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_walk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='FOLLOW USER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
@@ -6364,15 +6343,13 @@ class ChatOverlayApp(PersonaResponderMixin):
             variable=self.bot_anti_afk_var,
             command=self._bot_anti_afk_changed,
             style='Panel.TCheckbutton').pack(anchor='w',pady=(0,6))
-        ttk.Label(frame,text='When enabled and in a confirmed room, '
-                  'sends a LookTo action aimed at your avatar\'s current '
-                  'tile about every four minutes. Does not walk or chat. '
-                  'Pauses during auto-walk and other actions. This is not '
-                  'the original HabboAIR internal idle override, and '
-                  'server-side AFK prevention is not guaranteed.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='Stationary LookTo about every four minutes in a confirmed room. '
+                  'Server-side AFK prevention is not guaranteed.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         ttk.Label(frame,textvariable=self.bot_anti_afk_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        frame=ttk.Frame(actions,style='Panel.TFrame',padding=12)
+        frame.pack(fill='both',expand=True)
         ttk.Label(frame,text='MANUAL ACCOUNT ACTIONS',style='Section.TLabel').pack(anchor='w',pady=(4,5))
         self.bot_action_account_var=tk.StringVar(value='')
         self.bot_action_account_picker=ttk.Combobox(
@@ -6385,29 +6362,61 @@ class ChatOverlayApp(PersonaResponderMixin):
             values=('Say','Shout','Whisper','Join room','Leave room',
                     'Walk','Face tile','Dance','Sign','Posture'))
         self.bot_action_picker.pack(anchor='w',pady=(3,9))
-        for label,var in (
-            ('Message (Say / Shout / Whisper)',self.bot_message_var),
-            ('Recipient username (Whisper)',self.bot_recipient_var),
-            ('Room ID (Join room)',self.bot_room_var),
-            ('Tile X (Walk / Face tile)',self.bot_x_var),
-            ('Tile Y (Walk / Face tile)',self.bot_y_var),
-            ('Number: Dance 0–4, Sign 0–14, Posture 0–1',self.bot_id_var)):
-            ttk.Label(frame,text=label,style='Panel.TLabel').pack(anchor='w')
-            ttk.Entry(frame,textvariable=var,width=42).pack(
-                anchor='w',pady=(2,7))
+        # Keep one room field in the shared header. Only show inputs for
+        # the chosen manual action; switching actions never sends packets.
+        fields={}
+        for key,label,var in (
+            ('message','Message',self.bot_message_var),
+            ('recipient','Recipient username',self.bot_recipient_var),
+            ('x','Tile X',self.bot_x_var),
+            ('y','Tile Y',self.bot_y_var),
+            ('number','Number',self.bot_id_var)):
+            row=ttk.Frame(frame,style='Panel.TFrame')
+            ttk.Label(row,text=label,width=25,style='Panel.TLabel').pack(side='left')
+            ttk.Entry(row,textvariable=var,width=36).pack(side='left',fill='x',expand=True)
+            fields[key]=row
+        input_area=ttk.Frame(frame,style='Panel.TFrame')
+        input_area.pack(fill='x')
+        number_label=fields['number'].winfo_children()[0]
+        # All fields are children of frame; pack them before the stable
+        # anchor so the Send button and chat never change order.
+        def show_action_fields(*_args):
+            needed={
+                'Say':('message',),'Shout':('message',),
+                'Whisper':('recipient','message'),
+                'Walk':('x','y'),'Face tile':('x','y'),
+                'Dance':('number',),'Sign':('number',),'Posture':('number',),
+            }.get(self.bot_action_var.get(),())
+            number_label.configure(text={'Dance':'Dance number (0–4)',
+                'Sign':'Sign number (0–14)','Posture':'Posture number (0–1)'}.get(
+                    self.bot_action_var.get(),'Number'))
+            for row in fields.values():
+                row.pack_forget()
+            for key in needed:
+                fields[key].pack(fill='x',pady=(0,5),before=input_area)
+        self.bot_action_var.trace_add('write',show_action_fields)
+        show_action_fields()
         ttk.Button(frame,text='Send action as selected account',style='Primary.TButton',
                    command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
-        ttk.Label(frame,textvariable=self.bot_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
-        ttk.Label(frame,text='Incoming text-only chat (when current-release '
-                  'incoming headers are mapped). The original AIR bubble '
-                  'feed remains separate. No automatic replies or bulk actions.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='Incoming chat',style='Section.TLabel').pack(anchor='w',pady=(0,5))
+        ttk.Label(frame,text='Text-only feed; requires mapped incoming headers.',
+                  style='Muted.TLabel').pack(anchor='w',pady=(0,5))
         self.bot_chat_log=tk.Text(
             frame,height=7,state='disabled',
             bg=COMPANION_UI['field'],fg=COMPANION_UI['text'],
             relief='flat',font=('Consolas',9))
-        self.bot_chat_log.pack(fill='x',pady=(0,6))
+        self.bot_chat_log.pack(fill='both',expand=True,pady=(0,6))
+
+        frame=ttk.Frame(settings,style='Panel.TFrame',padding=12)
+        frame.pack(fill='x')
+        diagnostics=ttk.LabelFrame(frame,text='Advanced diagnostics',padding=7)
+        diagnostics.pack(fill='x',pady=(0,10))
+        ttk.Button(diagnostics,text='Check bridge hostname',
+                   command=self._bot_gearth_probe).pack(side='left',padx=(0,7))
+        ttk.Button(diagnostics,text='Capture newer AIR mappings',
+                   command=self._bot_capture_mapping).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_gearth_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,10))
         self._bot_refresh_accounts()
         self._bot_load_walk_preset()
         self._bot_anti_afk_load_selected()

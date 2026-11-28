@@ -1223,3 +1223,10 @@ with or without G-Earth. Existing profile status remains in Accounts; Clientless
 Bot retains its connection settings and session controls. Shared ticket parsing
 and existing launch/authentication implementations remain intact. No manual
 Direct Classic ticket queue or separate executable selector remains.
+
+v1.1.129 — Simplified Clientless Bot workspace
+Selected profile and Room ID remain visible above five focused tabs:
+Sessions, Actions & chat, Automation, Coffee Pass, and Settings.
+Manual action inputs appear only when relevant to the chosen action.
+Advanced bridge diagnostics are in Settings. Existing session, automation,
+coffee, authentication and packet behavior is unchanged.

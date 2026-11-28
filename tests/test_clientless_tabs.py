@@ -10,11 +10,15 @@ class ClientlessTabTests(TestCase):
     def test_coffee_tab_has_independent_scroll(self):
         code=METHODS['_make_clientless_tabs']
         self.assertIn("tabs.add(coffee,text='Coffee Pass')",code)
-        self.assertIn("tabs.add(main,text='Clientless controls')",code)
+        self.assertIn("tabs.add(main,text='Sessions')",code)
+        self.assertIn("tabs.add(actions,text='Actions & chat')",code)
+        self.assertIn("tabs.add(automation,text='Automation')",code)
+        self.assertIn("self._ui_scroll_area(actions,'bot_actions')",code)
+        self.assertIn("self._ui_scroll_area(automation,'bot_automation')",code)
         self.assertIn("self._ui_scroll_area(coffee,'bot_coffee')",code)
         self.assertIn("self._ui_scroll_area(main,'bot_controls')",code)
         self.assertIn("self._ui_scroll_canvases['bot']",code)
-        self.assertIn("tabs.add(connection,text='Connection settings')",code)
+        self.assertIn("tabs.add(connection,text='Settings')",code)
         self.assertIn("self._ui_scroll_area(connection,'bot_connection')",code)
         self.assertIn("str(connection):'bot_connection'",code)
         self.assertLess(code.index("self._make_clientless_connection_panel("),
@@ -27,3 +31,13 @@ class ClientlessTabTests(TestCase):
         self.assertIn("476989024",code)
         self.assertIn("self._coffee_group_apply",code)
         self.assertIn("self._coffee_group_stop",code)
+
+    def test_shared_context_and_action_fields(self):
+        code=METHODS['_make_clientless_bot_panel']
+        self.assertIn('textvariable=self.bot_room_var',code)
+        self.assertIn('context,textvariable=self.bot_account_var',code)
+        self.assertIn("self.bot_action_var.trace_add('write',show_action_fields)",code)
+        self.assertIn("row.pack_forget()",code)
+        self.assertIn("command=self._bot_send_selected_action",code)
+        self.assertIn("frame=ttk.Frame(automation",code)
+        self.assertIn("frame=ttk.Frame(settings",code)
