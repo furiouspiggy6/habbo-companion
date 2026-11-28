@@ -3542,9 +3542,9 @@ def account_import_session_automatically(account,report):
         def verified_ticket_from_browser():
             # Preserve the legacy cookie-pair path for older authenticated
             # profiles, but modern site sessions may omit these cookie names.
-            # The first-party browser route is already implemented by
-            # "Fetch from signed-in local session". It uses only the isolated
-            # Habbo tab and requests a real ticket from the official site.
+            # The shared first-party browser ticket helper uses only the
+            # isolated Habbo tab and requests a real ticket from the official
+            # site.
             try:
                 cookies=account_capture_habbo_session_cookies(
                     port,check_visible_login=False)
