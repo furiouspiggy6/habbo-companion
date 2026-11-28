@@ -8506,6 +8506,39 @@ class ChatOverlayApp(PersonaResponderMixin):
         if parsed is not None:
             self._packet_put(('bot_chat',ident,generation,*parsed))
 
+    def _bot_chat_sender_name(self,ident,room,index):
+        """Resolve a chat sender only from current, room-scoped server rosters."""
+        if room is None:return None
+        generations=getattr(self,'_tcp_generation',{})
+        states=getattr(self,'_coffee_room_state',{})
+        bots=getattr(self,'_bot_follow_room_bots',{})
+        rooms=getattr(self,'_bot_anti_afk_rooms',{})
+        def names_for(account):
+            generation=generations.get(account)
+            if generation is None or rooms.get(account)!=room:
+                return set()
+            names=set()
+            state=states.get(account,{})
+            if state.get('generation')==generation and state.get('room')==room:
+                names.update(unit[1] for unit in state.get('players',{}).values()
+                             if unit[0]==index)
+            bot_state=bots.get(account,{})
+            if bot_state.get('generation')==generation and bot_state.get('room')==room:
+                unit=bot_state.get('units',{}).get(index)
+                if unit is not None:names.add(unit[0])
+            return {name for name in names if isinstance(name,str) and name
+                    and len(name)<=64 and all(ch.isprintable() for ch in name)}
+        local=names_for(ident)
+        if len(local)==1:return next(iter(local))
+        if local:return None
+        # Public room chat is shared across connected accounts; use another
+        # live view of this room only when the observed name is unambiguous.
+        names=set()
+        for account in set(states)|set(bots):
+            if account==ident or self._coffee_session(account) is None:continue
+            names.update(names_for(account))
+        return next(iter(names)) if len(names)==1 else None
+
     def _bot_show_chat(self,ident,kind,index,message):
         if not hasattr(self,'bot_chat_log') or not self.bot_chat_log.winfo_exists():
             return
@@ -8518,8 +8551,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         clean=''.join(ch for ch in str(message) if ch.isprintable())[:300]
         source=(f'Room {room}' if kind in ('Chat','Shout') and room is not None
                 else ident[:6])
+        name=self._bot_chat_sender_name(ident,room,index)
+        sender=name if name is not None else f'room index {index}'
         widget.insert('end',f'{time.strftime("%H:%M:%S")} '
-                      f'[{source}] {kind} room index {index}: {clean}\n')
+                      f'[{source}] {kind} {sender}: {clean}\n')
         if int(widget.index('end-1c').split('.')[0])>150:
             widget.delete('1.0','40.0')
         widget.see('end')
