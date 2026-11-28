@@ -48,3 +48,28 @@ class ActionAccountTests(TestCase):
         self.assertEqual([c.kwargs['account_override']['id'] for c in
                           app._bot_send_action.call_args_list],['a','b'])
         self.assertIn('2/2',app.bot_status_var.set.call_args.args[0])
+
+
+    def test_random_outfits_only_send_once_to_each_connected_account(self):
+        p=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
+        node=next(n for n in ast.walk(ast.parse(p.read_text(encoding='utf-8')))
+                  if isinstance(n,ast.FunctionDef) and n.name=='_bot_randomize_outfits')
+        from clientless_bot import random_clientless_figure
+        scope={'random_clientless_figure':random_clientless_figure}
+        exec(compile(ast.Module(body=[node],type_ignores=[]),str(p),'exec'),scope)
+        live=SimpleNamespace(authenticated=True,stop=SimpleNamespace(is_set=lambda:False))
+        accounts=[{'id':i,'label':i} for i in ('a','b','c','d')]
+        app=SimpleNamespace(_account_profiles=accounts,_tcp_sessions={'a':live,'b':live,'c':live},
+            _bot_action_inflight={'c'},bot_account_var=Mock(),bot_outfit_mode_var=Mock(),
+            bot_outfit_status_var=Mock())
+        app.bot_account_var.get.return_value='All connected accounts'
+        app.bot_outfit_mode_var.get.return_value='Male'
+        app._bot_send_action=Mock(side_effect=lambda **kw:
+            app._bot_action_inflight.add(kw['account_override']['id']))
+        scope[node.name](app)
+        calls=app._bot_send_action.call_args_list
+        self.assertEqual([c.kwargs['account_override']['id'] for c in calls],['a','b'])
+        self.assertTrue(all(c.kwargs['action_override']=='Change outfit' for c in calls))
+        self.assertTrue(all(c.kwargs['outfit_override'][0]=='M' for c in calls))
+        self.assertNotEqual(calls[0].kwargs['outfit_override'],calls[1].kwargs['outfit_override'])
+        self.assertIn('2/3',app.bot_outfit_status_var.set.call_args.args[0])

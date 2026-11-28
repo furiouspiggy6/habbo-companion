@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import re
 import struct
+import random
 
 OUTGOING_ACTION_NAMES = (
     "GetGuestRoom", "Quit", "MoveAvatar", "LookTo", "Chat",
     "Shout", "Whisper", "Dance", "Sign", "ChangePosture",
-    "UseFurniture", "PassCarryItem",
+    "UseFurniture", "PassCarryItem", "UpdateFigureData",
 )
 INCOMING_OBSERVED_NAMES = ("Chat", "Shout", "Whisper", "RoomReady")
 _ALLOWED_INTS = {
@@ -47,6 +48,8 @@ BUNDLED_AIR_HEADERS = {
         "Dance": 1366, "Sign": 207, "ChangePosture": 1117,
         # Pinned Volt source: FurnitureMultiState and RoomUnitGiveHandItem.
         "UseFurniture": 3753, "PassCarryItem": 3129,
+        # Pinned Volt UserFigureComposer: gender, figure.
+        "UpdateFigureData": 1038,
         # No verified Quit header in the pinned source: leave it unavailable.
     },
     "incoming": {
@@ -94,6 +97,41 @@ def _integer(value):
     return struct.pack(">i", value)
 
 
+# Basic legacy styles, filtered to selectable non-HC, single-colour sets
+# from Quackster/HabboWidgets 1a7a024056e249b1e2453707008e9259acaa60ba,
+# habbo-registration/version-2.0/figuredata.xml. Current availability and
+# the account's entitlement are ultimately checked by the game server.
+_BASIC_FIGURE_SETS = {
+    "M": {"hr": (145,125,165,105,155,115,170),
+          "hd": (180,190,185,195,200),
+          "ch": (210,245,220,255,240),
+          "lg": (280,285,270,281,275), "sh": (300,305,295,290)},
+    "F": {"hr": (550,500,555,510,505,540,530,515),
+          "hd": (620,625,610,600,615,605),
+          "ch": (680,675,690,665,685,670,645,640,655),
+          "lg": (715,710,720,700,705,695), "sh": (740,735,730,725)},
+}
+_BASIC_FIGURE_COLORS = {"hr": (31,32,33,34,35,36,37,38,39,40,41,42,43,44,45),
+                        "hd": (1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16),
+                        "ch": (62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85)}
+_BASIC_FIGURE_COLORS["lg"] = _BASIC_FIGURE_COLORS["ch"]
+_BASIC_FIGURE_COLORS["sh"] = _BASIC_FIGURE_COLORS["ch"]
+
+
+def random_clientless_figure(mode="Mixed", rng=None):
+    """Create a full basic figure without guessing IDs or using premium sets."""
+    rng = rng if rng is not None else random
+    if mode not in ("Male", "Female", "Mixed"):
+        raise ClientlessBotError("Choose Male, Female or Mixed basic outfits.")
+    gender = {"Male":"M", "Female":"F"}.get(mode)
+    if gender is None:
+        gender = rng.choice(("M","F"))
+    figure = ".".join(
+        f"{slot}-{rng.choice(_BASIC_FIGURE_SETS[gender][slot])}-{rng.choice(_BASIC_FIGURE_COLORS[slot])}"
+        for slot in ("hd","hr","ch","lg","sh"))
+    return gender, figure
+
+
 def build_clientless_action(action, **kwargs):
     """Construct a bounded, named sequence for one user-initiated action.
 
@@ -115,6 +153,18 @@ def build_clientless_action(action, **kwargs):
         y = _int_arg(kwargs.get("y"), "y")
         return ((("MoveAvatar" if action=="Walk" else "LookTo"),
                  _integer(x)+_integer(y)),)
+    if action == "Change outfit":
+        gender,figure=kwargs.get("gender"),kwargs.get("figure")
+        if gender not in ("M","F") or not isinstance(figure,str) or len(figure)>1024:
+            raise ClientlessBotError("Invalid outfit gender or figure.")
+        parts=figure.split(".")
+        if (not 2<=len(parts)<=50
+            or not all(re.fullmatch(r"[a-z]{2}-[0-9]{1,7}(?:-[0-9]{1,7}){1,3}",part)
+                       for part in parts)
+            or not any(part.startswith("hd-") for part in parts)
+            or len({part[:2] for part in parts})!=len(parts)):
+            raise ClientlessBotError("Invalid outfit clothing fields.")
+        return (("UpdateFigureData",_packet_string(gender)+_packet_string(figure)),)
     if action == "Say":
         text = _text_arg(kwargs.get("text"))
         # WIN63 AIR ChatMessageComposer returns [text, styleId, trackingId].
@@ -215,6 +265,11 @@ def encode_clientless_action(mapping, release, action, **kwargs):
     result = []
     for name, body in actions:
         packet_id = validated["outgoing"].get(name)
+        if (packet_id is None and name=="UpdateFigureData" and release==BUNDLED_AIR_RELEASE
+                and BUNDLED_AIR_HEADERS["outgoing"][name] not in validated["outgoing"].values()):
+            # Old custom maps predate outfit support; use only the pinned
+            # same-release baseline, never replace an explicitly mapped header.
+            packet_id=BUNDLED_AIR_HEADERS["outgoing"][name]
         if packet_id is None:
             raise ClientlessBotError(
                 f"G-Earth mapping is missing {name}. Capture matching AIR headers first.")

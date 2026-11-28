@@ -18,7 +18,7 @@ from clientless_bot import (ClientlessBotError, build_clientless_action,
     capture_clientless_headers, validate_clientless_headers,
     encode_clientless_action, decode_clientless_chat, ClientlessChatDeduplicator, OUTGOING_ACTION_NAMES,
     clientless_walk_positions, decode_clientless_room_observation, decode_clientless_room_bots,
-    decode_clientless_hand_observation, validate_clientless_coffee_settings)
+    decode_clientless_hand_observation, validate_clientless_coffee_settings, random_clientless_figure)
 import ctypes
 import csv
 from ctypes import wintypes
@@ -6414,6 +6414,19 @@ class ChatOverlayApp(PersonaResponderMixin):
                    command=self._bot_face_stop).pack(side='left')
         ttk.Label(frame,textvariable=self.bot_face_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='RANDOM CLOTHES CHANGER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Change each selected avatar to a random complete look once. Basic styles use a legacy non-HC catalogue; the server checks availability.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        self.bot_outfit_mode_var=tk.StringVar(value='Mixed')
+        self.bot_outfit_status_var=tk.StringVar(value='Choose a clothing style and click Randomize outfits.')
+        clothes=ttk.Frame(frame,style='Panel.TFrame')
+        clothes.pack(anchor='w',pady=(0,5))
+        ttk.Combobox(clothes,textvariable=self.bot_outfit_mode_var,state='readonly',
+                     values=('Mixed','Male','Female','Saved looks'),width=18).pack(side='left',padx=(0,8))
+        ttk.Button(clothes,text='Randomize outfits',style='Primary.TButton',
+                   command=self._bot_randomize_outfits).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_outfit_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
                   style='Section.TLabel').pack(anchor='w',pady=(1,5))
         ttk.Checkbutton(
@@ -7965,6 +7978,54 @@ class ChatOverlayApp(PersonaResponderMixin):
         if pending:
             self._bot_follow_defer(run,min(pending),group=True)
 
+    def _bot_randomize_outfits(self):
+        """One explicit change per selected connected avatar."""
+        import random
+        mode=self.bot_outfit_mode_var.get()
+        presets=sanitize_outfit_presets(getattr(self,'outfit_presets',[])) if mode=='Saved looks' else []
+        if mode=='Saved looks' and not presets:
+            self.bot_outfit_status_var.set('No saved looks. Choose a basic style or capture an outfit in Tools.')
+            return
+        if mode not in ('Male','Female','Mixed','Saved looks'):
+            self.bot_outfit_status_var.set('Choose a valid clothing style.')
+            return
+        selected=self.bot_account_var.get()
+        if selected=='All connected accounts':
+            accounts=tuple(self._account_profiles)
+        else:
+            account=self._bot_selected_profile()
+            accounts=(account,) if account else ()
+        accounts=[a for a in accounts if (session:=self._tcp_sessions.get(a['id'])) is not None
+                  and session.authenticated and not session.stop.is_set()]
+        if not accounts:
+            self.bot_outfit_status_var.set('Select a connected account first.')
+            return
+        started=0
+        last=getattr(self,'_bot_outfit_last',{})
+        self._bot_outfit_last=last
+        used=set()
+        for account in accounts:
+            ident=account['id']
+            if ident in self._bot_action_inflight:continue
+            if presets:
+                pool=[(p['gender'],p['figure']) for p in presets]
+                choices=[p for p in pool if p!=last.get(ident) and p not in used]
+                pair=random.choice(choices or [p for p in pool if p!=last.get(ident)] or pool)
+            else:
+                pair=random_clientless_figure(mode)
+                for _ in range(16):
+                    if pair not in used and pair!=last.get(ident):break
+                    pair=random_clientless_figure(mode)
+            self._bot_send_action(account_override=account,action_override='Change outfit',
+                                  outfit_override=pair)
+            if ident in self._bot_action_inflight:
+                used.add(pair)
+                last[ident]=pair
+                started+=1
+        self.bot_outfit_status_var.set(
+            f'Outfit requests queued for {started}/{len(accounts)} selected account(s). '
+            'Server acceptance not verified. Busy or unavailable accounts skipped.')
+
     def _bot_face_stop(self,message='Face rotation stopped.'):
         run=getattr(self,'_bot_face_run',None)
         self._bot_face_run=None
@@ -8510,7 +8571,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             'Actions available: '+names[:190])
 
     def _bot_send_action(self,account_override=None,action_override=None,
-                         room_override=None):
+                         room_override=None,outfit_override=None):
         # Prevent manual actions from bypassing the selected interception
         # mode even if a socket was established through the separate TCP tab.
         bridge_choice=getattr(self,'bot_gearth_var',None)
@@ -8560,6 +8621,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             elif action in ('Walk','Face tile'):
                 args['x']=int(self.bot_x_var.get())
                 args['y']=int(self.bot_y_var.get())
+            elif action=='Change outfit':
+                if not isinstance(outfit_override,(tuple,list)) or len(outfit_override)!=2:
+                    raise ValueError('Select a validated outfit first.')
+                args['gender'],args['figure']=outfit_override
             elif action in ('Say','Shout'):
                 args['text']=self.bot_message_var.get()
             elif action=='Whisper':

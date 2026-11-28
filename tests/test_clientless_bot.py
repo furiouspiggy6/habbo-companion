@@ -21,6 +21,26 @@ MAPPING={"release":RELEASE,"outgoing":OUT,"incoming":IN}
 
 
 class ActionCompositionTests(unittest.TestCase):
+    def test_random_basic_figures_and_release_bound_outfit_packet(self):
+        import random
+        for mode,expected in (("Male","M"),("Female","F"),("Mixed",None)):
+            rng=random.Random(15)
+            looks=[bot.random_clientless_figure(mode,rng) for _ in range(10)]
+            self.assertGreater(len(set(looks)),1)
+            for gender,figure in looks:
+                if expected:self.assertEqual(gender,expected)
+                self.assertEqual({p[:2] for p in figure.split(".")},{"hd","hr","ch","lg","sh"})
+                pkt=bot.encode_clientless_action(None,bot.BUNDLED_AIR_RELEASE,
+                    "Change outfit",gender=gender,figure=figure)
+                self.assertEqual(pkt,((1038,bot._packet_string(gender)+bot._packet_string(figure),
+                                      "UpdateFigureData"),))
+        for gender,figure in (("X","hd-180-1.ch-210-66"),("M","invalid"),
+                              ("F","hd-600-1.hd-620-2")):
+            with self.assertRaises(bot.ClientlessBotError):
+                bot.build_clientless_action("Change outfit",gender=gender,figure=figure)
+        self.assertEqual(bot.encode_clientless_action(MAPPING,RELEASE,"Change outfit",
+            gender="M",figure="hd-180-1.ch-210-66")[0][0],1038)
+
     def test_room_join_matches_source_two_step_flags(self):
         frames=bot.encode_clientless_action(MAPPING,RELEASE,"Join room",room=123456)
         self.assertEqual(frames,(
