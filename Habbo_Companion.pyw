@@ -8003,7 +8003,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_outfit_status_var.set('Choose a valid clothing style.')
             return
         if run is not None:
-            accounts=[member[0] for member in run['members'].values()]
+            accounts=[member[0] for ident,member in run['members'].items()
+                      if ident in run['pending']]
         else:
             selected=self.bot_account_var.get()
             if selected=='All connected accounts':
@@ -8022,7 +8023,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         used=set()
         for account in accounts:
             ident=account['id']
-            if ident in self._bot_action_inflight:continue
+            if (ident in self._bot_action_inflight or
+                    time.monotonic()-self._bot_last_action_at.get(ident,0)<0.4):
+                continue
             if presets:
                 pool=[(p['gender'],p['figure']) for p in presets]
                 choices=[p for p in pool if p!=last.get(ident) and p not in used]
@@ -8034,6 +8037,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                     pair=random_clientless_figure(mode)
             self._bot_send_action(account_override=account,action_override='Change outfit',
                                   outfit_override=pair)
+            # A ready account gets one attempt per round; only busy accounts defer.
+            if run is not None:run['pending'].discard(ident)
             if ident in self._bot_action_inflight:
                 used.add(pair)
                 last[ident]=pair
@@ -8075,7 +8080,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_outfit_status_var.set('Select a connected account first.')
             return
         run=dict(members=members,mode=mode,presets=presets,
-                 interval=round(seconds*1000),timer=None,sent=0)
+                 interval=round(seconds*1000),timer=None,sent=0,
+                 pending=set(),round_sent=0)
         self._bot_outfit_run=run
         self._bot_outfit_cycle_tick(run)
 
@@ -8090,13 +8096,21 @@ class ChatOverlayApp(PersonaResponderMixin):
         if not run['members']:
             self._bot_outfit_cycle_stop('Outfit cycling stopped: no original connections remain.')
             return
+        # Reserve the next eligible action slot for each due outfit. Do not
+        # restart the round while a rotation send or cooldown is still active.
+        if not run['pending']:
+            run['pending'].update(run['members'])
+            run['round_sent']=0
+        run['pending'].intersection_update(run['members'])
         started=self._bot_randomize_outfits(run=run) or 0
         run['sent']+=started
+        run['round_sent']+=started
         self.bot_outfit_status_var.set(
-            f"Cycling {len(run['members'])} account(s); {started} queued this round, "
-            f"{run['sent']} total. Server acceptance not verified.")
+            f"Cycling {len(run['members'])} account(s); {run['round_sent']} queued this round, "
+            f"{len(run['pending'])} waiting, {run['sent']} total. Server acceptance not verified.")
         if self._bot_outfit_run is run:
-            run['timer']=self.root.after(run['interval'],lambda:self._bot_outfit_cycle_tick(run))
+            delay=100 if run['pending'] else run['interval']
+            run['timer']=self.root.after(delay,lambda:self._bot_outfit_cycle_tick(run))
 
     def _bot_outfit_cycle_stop(self,message='Outfit cycling stopped.'):
         run=getattr(self,'_bot_outfit_run',None)
@@ -8195,6 +8209,11 @@ class ChatOverlayApp(PersonaResponderMixin):
                     or (follow and follow['id']==ident)
                     or (group and ident in group['members'])):
                     raise ClientlessBotError('Standing tile or account changed.')
+                # Yield to an outfit already due for this account. The outfit
+                # scheduler retries through the same shared send protections.
+                outfit_run=getattr(self,'_bot_outfit_run',None)
+                if outfit_run and ident in outfit_run['pending'] and ident in outfit_run['members']:
+                    continue
                 now=time.monotonic()
                 if (ident in self._bot_action_inflight or
                         now-self._bot_last_action_at.get(ident,0)<0.4):

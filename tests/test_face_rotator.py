@@ -305,5 +305,60 @@ class ClientlessFaceRotationTests(unittest.TestCase):
         self.assertIsNone(a._bot_face_run)
         self.assertEqual(worker.call_count,1)
 
+    def test_outfit_cycling_and_rotation_share_action_slots(self):
+        from clientless_bot import random_clientless_figure
+        a,clock,worker=self.make_app()
+        names=('_bot_randomize_outfits','_bot_outfit_cycle_start',
+               '_bot_outfit_cycle_tick','_bot_outfit_cycle_stop')
+        ns=dict(NS,random_clientless_figure=random_clientless_figure,
+                time=SimpleNamespace(monotonic=lambda:clock.now))
+        nodes=[node for node in APP.body if isinstance(node,ast.FunctionDef)
+               and node.name in names]
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),'exec'),ns)
+        for name in names:setattr(a,name,MethodType(ns[name],a))
+        a.bot_outfit_mode_var=Var('Mixed')
+        a.bot_outfit_interval_var=Var('5')
+        a.bot_outfit_status_var=Var()
+        a._tcp_sessions={ident:SimpleNamespace(authenticated=True,
+                        stop=SimpleNamespace(is_set=lambda:False))
+                        for ident in ('a','b')}
+        a._tcp_generation={'a':1,'b':1}
+        outfits=[]
+        def send(account_override,action_override,outfit_override):
+            ident=account_override['id']
+            self.assertNotIn(ident,a._bot_action_inflight)
+            self.assertGreaterEqual(clock.now-a._bot_last_action_at.get(ident,0),0.4)
+            outfits.append(ident)
+            a._bot_action_inflight.add(ident)
+            a._bot_last_action_at[ident]=clock.now
+        a._bot_send_action=send
+        a._bot_face_start()
+        a._bot_outfit_cycle_start()
+        run=a._bot_outfit_run
+        self.assertEqual(run['pending'],{'a','b'})
+        self.assertEqual(outfits,[])
+        self.assertEqual(a.root.tasks[run['timer']][0],100)
+        a._bot_action_inflight.clear()
+        clock.now+=0.5
+        a._bot_face_tick(a._bot_face_run)
+        self.assertEqual(worker.call_count,2)
+        a._bot_outfit_cycle_tick(run)
+        self.assertCountEqual(outfits,['a','b'])
+        self.assertEqual(run['pending'],set())
+        self.assertEqual(a.root.tasks[run['timer']][0],5000)
+        a._bot_action_inflight.clear()
+        clock.now+=0.5
+        a._bot_face_tick(a._bot_face_run)
+        self.assertEqual(worker.call_count,4)
+        a._bot_outfit_cycle_tick(run)
+        self.assertEqual(run['pending'],{'a','b'})
+        a._bot_outfit_cycle_stop()
+        a._bot_action_inflight.clear()
+        clock.now+=0.5
+        a._bot_face_tick(a._bot_face_run)
+        self.assertEqual(worker.call_count,6)
+        a._bot_outfit_cycle_tick(run)
+        self.assertEqual(len(outfits),2)
+
 if __name__=='__main__':
     unittest.main()
