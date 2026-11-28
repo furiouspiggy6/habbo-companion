@@ -134,7 +134,7 @@ class OneClickLaunchTests(unittest.TestCase):
         ui=ast.get_source_segment(SOURCE,METHODS["_make_clientless_bot_panel"])
         accounts=ast.get_source_segment(SOURCE,METHODS["_make_accounts_panel"])
         self.assertIn("<<ComboboxSelected>>",ui)
-        self.assertIn("command=self._bot_run_selected",ui)
+        self.assertNotIn("command=self._bot_run_selected",ui)
         self.assertIn("command=self._account_launch_selected_mode",accounts)
         self.assertIn("('Clientless Bot without G-Earth','clientless')",accounts)
         self.assertIn("('Clientless Bot with G-Earth','clientless_gearth')",accounts)

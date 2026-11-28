@@ -1230,3 +1230,13 @@ Sessions, Actions & chat, Automation, Coffee Pass, and Settings.
 Manual action inputs appear only when relevant to the chosen action.
 Advanced bridge diagnostics are in Settings. Existing session, automation,
 coffee, authentication and packet behavior is unchanged.
+
+v1.1.130 — One account management workspace
+Removed the Clientless Sessions tab and duplicate connection-status table.
+Accounts owns profile launches, highlighted clientless starts/disconnects,
+session clearing and live connection status. Clientless actions and automation
+share one connected-account selector. Coffee House is in Actions & chat.
+The same room setting is exposed as a launch target in Accounts and an action
+input in Clientless. Existing coffee sender scope and diagnostics remain separate.
+Accounts is now the startup page. The separate Overview dashboard was replaced
+by compact account totals above the existing account list.

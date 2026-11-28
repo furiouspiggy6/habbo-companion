@@ -5821,7 +5821,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             button.configure(bg=p['raised'] if chosen else p['sidebar'],
                              fg=p['text'] if chosen else p['muted'])
         self._ui_reveal_nav(self._ui_nav_buttons[key])
-        if key=='overview':
+        if key=='accounts':
             self._ui_refresh_dashboard()
 
     def _ui_scroll_area(self,page,key,*,style='Panel.TFrame',padding=0):
@@ -5884,36 +5884,16 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.root.after(1700,self._ui_dashboard_pulse)
 
     def _make_dashboard_panel(self,parent):
-        p=COMPANION_UI
-        f=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
-        f.pack(fill='both',expand=True)
-        cards=ttk.Frame(f,style='Panel.TFrame')
-        cards.pack(fill='x',pady=(0,22))
+        """Compact account totals; no duplicate navigation or connection controls."""
+        strip=ttk.Frame(parent,style='Panel.TFrame')
+        strip.pack(fill='x',pady=(0,10))
         self._ui_dashboard_vars={}
-        for index,(key,label,color) in enumerate((
-            ('accounts','Saved profiles',p['accent']),
-            ('connected','Authenticated TCP',p['success']),
-            ('connecting','Connecting via TCP',p['text']))):
-            cards.columnconfigure(index,weight=1,uniform='status')
+        for key,label in (('accounts','Saved'),('connected','Connected clientless'),
+                          ('connecting','Connecting')):
             variable=tk.StringVar(value='0')
             self._ui_dashboard_vars[key]=variable
-            card=ttk.Frame(cards,style='Card.TFrame',padding=(19,16))
-            card.grid(row=0,column=index,sticky='nsew',padx=(0,12) if index<2 else 0)
-            tk.Label(card,text=label,font=('Segoe UI Semibold',9),
-                     bg=p['surface'],fg=p['muted']).pack(anchor='w')
-            tk.Label(card,textvariable=variable,font=('Segoe UI Semibold',31),
-                     bg=p['surface'],fg=color).pack(anchor='w',pady=(4,0))
-        buttons=ttk.Frame(f,style='Panel.TFrame')
-        buttons.pack(anchor='w')
-        ttk.Button(buttons,text='Manage accounts',
-                   style='Primary.TButton',
-                   command=lambda:self._ui_show_page('accounts')).pack(
-                       side='left',padx=(0,10))
-        ttk.Button(buttons,text='Clientless Bot',
-                   command=lambda:self._ui_show_page('bot')).pack(
-                       side='left',padx=(0,10))
-        ttk.Button(buttons,text='Open updates',
-                   command=lambda:self._ui_show_page('updates')).pack(side='left')
+            ttk.Label(strip,text=label+':',style='Muted.TLabel').pack(side='left',padx=(0,4))
+            ttk.Label(strip,textvariable=variable,style='Panel.TLabel').pack(side='left',padx=(0,16))
         self._ui_refresh_dashboard()
 
     def _make_settings(self):
@@ -5923,10 +5903,9 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._ui_pages={}
         self._ui_scroll_canvases={}
         self._ui_nav_buttons={}
-        self._ui_active='overview'
+        self._ui_active='accounts'
         navigation = (
             ('Workspace', (
-                ('overview', 'Overview', ''),
                 ('accounts', 'Accounts', 'Saved profiles and launch modes'),
                 ('bot', 'Clientless Bot', 'Room, chat and avatar controls'),
                 ('chat', 'View Chat', 'Original Habbo bubbles and overlay settings'),
@@ -5995,8 +5974,6 @@ class ChatOverlayApp(PersonaResponderMixin):
             page=ttk.Frame(stack,style='Panel.TFrame')
             page.grid(row=0,column=0,sticky='nsew')
             self._ui_pages[key]=page
-        self._make_dashboard_panel(self._ui_scroll_area(
-            self._ui_pages['overview'],'overview'))
         self._make_packet_panel(self._ui_scroll_area(
             self._ui_pages['packet'],'packet'))
         self._make_outfit_panel(self._ui_scroll_area(
@@ -6021,7 +5998,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._make_chat_panel(self._ui_scroll_area(
             self._ui_pages['chat'],'chat',padding=(18,14)))
         self.root.bind('<MouseWheel>',self._ui_mousewheel)
-        self._ui_show_page('overview')
+        self._ui_show_page('accounts')
         self.root.after(1700,self._ui_dashboard_pulse)
 
     def _make_chat_panel(self,f):
@@ -6098,9 +6075,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         tk.Label(f,text='CLIENTLESS CONNECTION SETTINGS',
                  font=('Segoe UI Semibold',17),bg=COMPANION_UI['background'],
                  fg=COMPANION_UI['text']).pack(anchor='w',pady=(0,8))
-        ttk.Label(f,text='Use saved profiles from Accounts and start or disconnect '
-                  'them in Clientless controls. The existing sign-in workflow '
-                  'automatically obtains an official ticket when needed.',
+        ttk.Label(f,text='Manage account connections in Accounts.',
                   style='Panel.TLabel',wraplength=615).pack(anchor='w',fill='x',pady=(0,10))
         proxy_row=ttk.Frame(f,style='Panel.TFrame')
         proxy_row.pack(fill='x',pady=(0,6))
@@ -6114,24 +6089,12 @@ class ChatOverlayApp(PersonaResponderMixin):
             'Browser sign-in is unchanged. Requires a trusted SOCKS5 service '
             'and python-socks (python -m pip install python-socks).',
             style='Panel.TLabel',wraplength=615).pack(anchor='w',pady=(0,8))
-        self.tcp_table=ttk.Treeview(
-            f,columns=('profile','state'),show='headings',
-            height=5,selectmode='browse')
-        self.tcp_table.heading('profile',text='Account profile')
-        self.tcp_table.heading('state',text='Habbo server status')
-        self.tcp_table.column('profile',width=170,stretch=False)
-        self.tcp_table.column('state',width=380,stretch=True)
-        self.tcp_table.pack(fill='x',pady=(0,8))
-        ttk.Button(f,text='Forget selected saved website session',
-                   command=self._tcp_forget_session).pack(anchor='w',pady=(0,8))
         ttk.Checkbutton(
             f,
             text='Automatically connect saved TCP accounts when Companion opens',
             variable=self.tcp_autostart_var,
             command=self._tcp_autostart_changed,
             style='Panel.TCheckbutton').pack(anchor='w',pady=(3,9))
-        ttk.Button(f,text='Refresh connection status',
-                   command=self._tcp_render).pack(anchor='w',pady=(0,9))
         tk.Label(
             f,
             text='Habbo Classic (2026) uses a separate secure WebSocket '
@@ -6173,12 +6136,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         header.pack(fill='x')
         tabs=ttk.Notebook(parent)
         tabs.pack(fill='both',expand=True,padx=(12,12),pady=(5,0))
-        main=ttk.Frame(tabs,style='Panel.TFrame')
         actions=ttk.Frame(tabs,style='Panel.TFrame')
         automation=ttk.Frame(tabs,style='Panel.TFrame')
         coffee=ttk.Frame(tabs,style='Panel.TFrame')
         connection=ttk.Frame(tabs,style='Panel.TFrame')
-        tabs.add(main,text='Sessions')
         tabs.add(actions,text='Actions & chat')
         tabs.add(automation,text='Automation')
         tabs.add(coffee,text='Coffee Pass')
@@ -6187,14 +6148,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         settings=self._ui_scroll_area(connection,'bot_connection')
         self._make_clientless_connection_panel(settings)
         self._make_clientless_bot_panel(
-            header,self._ui_scroll_area(main,'bot_controls'),
-            self._ui_scroll_area(actions,'bot_actions'),
+            header,self._ui_scroll_area(actions,'bot_actions'),
             self._ui_scroll_area(automation,'bot_automation'),settings)
         self._make_clientless_coffee_panel(self._ui_scroll_area(coffee,'bot_coffee'))
         def select_scroll(_event=None):
-            key={str(main):'bot_controls',str(actions):'bot_actions',
+            key={str(actions):'bot_actions',
                  str(automation):'bot_automation',str(coffee):'bot_coffee',
-                 str(connection):'bot_connection'}.get(tabs.select(),'bot_controls')
+                 str(connection):'bot_connection'}.get(tabs.select(),'bot_actions')
             self._ui_scroll_canvases['bot']=self._ui_scroll_canvases[key]
             if key=='bot_coffee':
                 self._coffee_refresh_accounts()
@@ -6202,13 +6162,13 @@ class ChatOverlayApp(PersonaResponderMixin):
         select_scroll()
         self._coffee_refresh_accounts()
 
-    def _make_clientless_bot_panel(self,header,sessions,actions,automation,settings):
+    def _make_clientless_bot_panel(self,header,actions,automation,settings):
         """Build compact session, manual action and automation views."""
         ttk.Label(header,text='Choose the connection mode in Accounts.',
                   style='Muted.TLabel').pack(anchor='w',pady=(0,5))
         context=ttk.Frame(header,style='Panel.TFrame')
         context.pack(fill='x')
-        ttk.Label(context,text='Selected account (switch without reconnecting)',
+        ttk.Label(context,text='Connected account',
                   style='Panel.TLabel').grid(row=0,column=0,sticky='w',padx=(0,10))
         ttk.Label(context,text='Room ID',style='Panel.TLabel').grid(row=0,column=1,sticky='w')
         self.bot_account_picker=ttk.Combobox(
@@ -6221,64 +6181,6 @@ class ChatOverlayApp(PersonaResponderMixin):
             '<<ComboboxSelected>>',lambda _event:self._bot_select_only())
         ttk.Label(header,textvariable=self.bot_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
-
-        frame=ttk.Frame(sessions,style='Panel.TFrame',padding=12)
-        frame.pack(fill='both',expand=True)
-        commands=ttk.Frame(frame,style='Panel.TFrame')
-        commands.pack(fill='x',pady=(0,11))
-        ttk.Button(commands,text='Refresh accounts',
-                   command=self._bot_refresh_accounts).pack(side='left',padx=(0,7))
-        ttk.Button(commands,text='Run selected profile',
-                   style='Primary.TButton',
-                   command=self._bot_run_selected).pack(side='left',padx=(0,7))
-        ttk.Button(commands,text='Disconnect',
-                   command=self._bot_disconnect_selected).pack(side='left')
-        ttk.Label(frame,text='MULTI-ACCOUNT CLIENTLESS',
-                  style='Section.TLabel').pack(anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Select accounts with Ctrl/Shift. Run highlighted uses Direct TCP without G-Earth; '
-                  'other modes are chosen in Accounts.',
-                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,6))
-        table=ttk.Treeview(
-            frame,columns=('connection','mode','room'),show='tree headings',
-            selectmode='extended',height=5)
-        table.heading('#0',text='Saved account')
-        table.heading('connection',text='Connection')
-        table.heading('mode',text='Connection mode')
-        table.heading('room',text='Target room')
-        table.column('#0',width=180,minwidth=110,stretch=True)
-        table.column('connection',width=210,minwidth=130,stretch=True)
-        table.column('mode',width=150,minwidth=100,stretch=False)
-        table.column('room',width=100,minwidth=80,stretch=False)
-        table.pack(fill='x',pady=(0,6))
-        self.bot_multi_tree=table
-        multi_buttons=ttk.Frame(frame,style='Panel.TFrame')
-        multi_buttons.pack(fill='x',pady=(0,5))
-        ttk.Button(multi_buttons,text='Select all',
-                   command=self._bot_multi_select_all).pack(side='left',padx=(0,6))
-        ttk.Button(multi_buttons,text='Run highlighted (Direct TCP)',
-                   command=self._bot_multi_run_selected,
-                   style='Primary.TButton').pack(side='left',padx=(0,6))
-        ttk.Button(multi_buttons,text='Disconnect highlighted',
-                   command=self._bot_multi_disconnect_selected).pack(side='left')
-        ttk.Label(frame,textvariable=self.bot_multi_status_var,
-                  style='Panel.TLabel',wraplength=620).pack(
-                      anchor='w',pady=(0,12))
-        self._bot_multi_ui_generation+=1
-        self._bot_multi_refresh()
-        self.root.after(2500,lambda generation=self._bot_multi_ui_generation:
-                        self._bot_multi_tick(generation))
-        ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
-            anchor='w',pady=(0,5))
-        favorite=ttk.Frame(frame,style='Panel.TFrame')
-        favorite.pack(fill='x',pady=(0,4))
-        ttk.Label(favorite,text='Coffee House  ·  Room 69118545',
-                  style='Panel.TLabel').pack(side='left',padx=(0,15))
-        self.bot_coffee_house_button=ttk.Button(
-            favorite,text='Join Coffee House',
-            command=self._bot_join_coffee_house)
-        self.bot_coffee_house_button.pack(side='left')
-        ttk.Label(frame,text='Joins only when clicked.',
-                  style='Muted.TLabel').pack(anchor='w',pady=(0,8))
 
         frame=ttk.Frame(automation,style='Panel.TFrame',padding=12)
         frame.pack(fill='both',expand=True)
@@ -6350,12 +6252,23 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         frame=ttk.Frame(actions,style='Panel.TFrame',padding=12)
         frame.pack(fill='both',expand=True)
+        ttk.Label(frame,text='SAVED ROOM',style='Section.TLabel').pack(
+            anchor='w',pady=(0,5))
+        favorite=ttk.Frame(frame,style='Panel.TFrame')
+        favorite.pack(fill='x',pady=(0,4))
+        ttk.Label(favorite,text='Coffee House  ·  Room 69118545',
+                  style='Panel.TLabel').pack(side='left',padx=(0,15))
+        self.bot_coffee_house_button=ttk.Button(
+            favorite,text='Join Coffee House',
+            command=self._bot_join_coffee_house)
+        self.bot_coffee_house_button.pack(side='left')
+        ttk.Label(frame,text='Joins only when clicked.',
+                  style='Muted.TLabel').pack(anchor='w',pady=(0,8))
+
+        # Both manual actions and automation use the explicit connected-account selection.
+        self.bot_action_account_var=self.bot_account_var
+        self.bot_action_account_picker=self.bot_account_picker
         ttk.Label(frame,text='MANUAL ACCOUNT ACTIONS',style='Section.TLabel').pack(anchor='w',pady=(4,5))
-        self.bot_action_account_var=tk.StringVar(value='')
-        self.bot_action_account_picker=ttk.Combobox(
-            frame,textvariable=self.bot_action_account_var,state='readonly',width=42)
-        ttk.Label(frame,text='Send action as (one connected account)',style='Panel.TLabel').pack(anchor='w')
-        self.bot_action_account_picker.pack(anchor='w',pady=(3,8))
         ttk.Label(frame,text='Action',style='Panel.TLabel').pack(anchor='w')
         self.bot_action_picker=ttk.Combobox(
             frame,textvariable=self.bot_action_var,state='readonly',width=25,
@@ -6427,11 +6340,13 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _bot_refresh_accounts(self):
         if not hasattr(self,'bot_account_picker'):
             return
-        items=[a['label']+' ['+a['id'][:6]+']' for a in self._account_profiles]
+        items=[a['label']+' ['+a['id'][:6]+']' for a in self._account_profiles
+               if (session:=self._tcp_sessions.get(a['id'])) is not None
+               and session.authenticated and not session.stop.is_set()]
         current=self.bot_account_var.get()
         self.bot_account_picker.configure(values=items)
         if current not in items:
-            self.bot_account_var.set(items[0] if items else '')
+            self.bot_account_var.set('')
         self._bot_anti_afk_load_selected()
         self._bot_refresh_action_accounts()
         if hasattr(self,'coffee_account_picker'):
@@ -7667,7 +7582,9 @@ class ChatOverlayApp(PersonaResponderMixin):
             pass
 
     def _bot_multi_selected(self):
-        tree=getattr(self,'bot_multi_tree',None)
+        tree=getattr(self,'account_table',None)
+        if tree is None:
+            tree=getattr(self,'bot_multi_tree',None)
         if tree is None:
             return ()
         try:
@@ -7678,14 +7595,16 @@ class ChatOverlayApp(PersonaResponderMixin):
                      if a['id'] in selected)
 
     def _bot_multi_select_all(self):
-        self._bot_multi_refresh()
-        tree=getattr(self,'bot_multi_tree',None)
+        tree=getattr(self,'account_table',None)
+        if tree is None:
+            self._bot_multi_refresh()
+            tree=getattr(self,'bot_multi_tree',None)
         if tree is None:
             return
         tree.selection_set(tuple(a['id'] for a in self._account_profiles))
         self.bot_multi_status_var.set(
             str(len(self._account_profiles))+' profiles highlighted. '
-            'Click Run highlighted to connect; nothing starts automatically.')
+            'Click Launch highlighted to connect; nothing starts automatically.')
 
     def _bot_multi_run_selected(self):
         """Explicit user action; one independently authenticated socket per id."""
@@ -8207,32 +8126,17 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.tcp_log.configure(state='disabled')
 
     def _tcp_selected(self):
-        selected=self.tcp_table.selection()
-        if not selected:
-            self.tcp_status_var.set('Select an account first.')
-            return None
-        return next((a for a in self._account_profiles
-                     if a['id']==selected[0]),None)
+        return self._account_selected()
 
     def _tcp_render(self):
-        table=self.tcp_table
-        selected=table.selection()
-        ident=selected[0] if selected else None
-        for row in table.get_children():
-            table.delete(row)
-        for account in self._account_profiles:
-            key=account['id']
-            sess=self._tcp_sessions.get(key)
-            state=('Authenticated (direct TCP)' if sess and sess.authenticated
-                   else self._tcp_states.get(key,'Disconnected'))
-            if key in self._tcp_inflight:
-                state=self._tcp_states.get(key,'Connecting...')
-            table.insert('', 'end',iid=key,
-                         values=(account['label'],state))
-        if ident and table.exists(ident):
-            table.selection_set(ident)
-        elif self._account_profiles:
-            table.selection_set(self._account_profiles[0]['id'])
+        # Refresh connection status in the single Accounts table, without
+        # rebuilding rows or altering the user's selection.
+        table=getattr(self,'account_table',None)
+        if table is not None:
+            for account in self._account_profiles:
+                ident=account['id']
+                if table.exists(ident):
+                    table.set(ident,'launch_state',self._account_display_status(ident))
         self._fuzz_refresh_connected_server()
         self._bot_refresh_accounts()
 
@@ -8259,10 +8163,12 @@ class ChatOverlayApp(PersonaResponderMixin):
             account_session_cookie_delete(account['id'])
         except OSError:
             self.tcp_status_var.set('Windows could not erase the saved session.')
+            self.account_status_var.set(self.tcp_status_var.get())
             return
         self.tcp_session_id_var.set('')
         self.tcp_browser_token_var.set('')
         self.tcp_status_var.set('Saved website session removed from Windows vault.')
+        self.account_status_var.set(self.tcp_status_var.get())
 
     def _tcp_proxy_changed(self):
         enabled=bool(self.tcp_proxy_enabled_var.get())
@@ -8662,6 +8568,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         p=COMPANION_UI
         f=ttk.Frame(parent,style='Panel.TFrame',padding=(18,16))
         f.pack(fill='both',expand=True)
+        self._make_dashboard_panel(f)
         columns=ttk.Frame(f,style='Panel.TFrame')
         columns.pack(fill='both',expand=True)
 
@@ -8675,7 +8582,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                      anchor='w',pady=(2,9))
         self.account_table=ttk.Treeview(
             left,columns=('name','port','launch_state'),
-            show='headings',height=10,selectmode='browse')
+            show='headings',height=10,selectmode='extended')
         for key,heading,width in (
             ('name','Account',117),
             ('port','Port',48),
@@ -8691,6 +8598,15 @@ class ChatOverlayApp(PersonaResponderMixin):
                        side='left',padx=(0,7))
         ttk.Button(actions,text='Remove entry',style='Danger.TButton',
                    command=self._account_remove).pack(side='left')
+
+        ttk.Button(left,text='Select all',command=self._bot_multi_select_all).pack(anchor='w',pady=(0,5))
+        ttk.Button(left,text='Launch highlighted (clientless, no G-Earth)',
+                   command=self._bot_multi_run_selected).pack(anchor='w',pady=(0,5))
+        ttk.Button(left,text='Disconnect highlighted clientless',
+                   command=self._bot_multi_disconnect_selected).pack(anchor='w',pady=(0,5))
+        ttk.Label(left,textvariable=self.bot_multi_status_var,style='Card.TLabel',
+                  wraplength=275).pack(anchor='w',fill='x',pady=(0,7))
+        ttk.Label(left,text='Ctrl/Shift selects multiple profiles.',style='Card.TLabel').pack(anchor='w')
 
         # RIGHT — profile details, login, and separate advanced controls.
         details_padding=16
@@ -8747,6 +8663,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                        side='left',padx=(0,9))
         ttk.Button(secrets_row,text='Forget login',
                    command=self._account_forget_login).pack(side='left')
+        ttk.Button(right,text='Forget saved website session',
+                   command=self._tcp_forget_session).pack(anchor='w',pady=(0,5))
         ttk.Button(right,text='Open account login',
                    style='Primary.TButton',
                    command=self._account_open_login).pack(
@@ -8765,6 +8683,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                      anchor='w',pady=(0,8))
         autoplay=ttk.Frame(right,style='Card.TFrame')
         autoplay.pack(fill='x',pady=(0,7))
+        target=ttk.Frame(right,style='Card.TFrame')
+        target.pack(fill='x',before=autoplay,pady=(0,5))
+        ttk.Label(target,text='Clientless start room',style='Card.TLabel').pack(side='left',padx=(0,8))
+        ttk.Entry(target,textvariable=self.bot_room_var,width=13).pack(side='left')
         self.account_launch_mode_var=tk.StringVar(value='air')
         modes=ttk.Frame(right,style='Card.TFrame')
         modes.pack(fill='x',pady=(0,7),before=autoplay)
@@ -8806,28 +8728,38 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._accounts_render()
         self._account_on_select()
 
+    def _account_display_status(self,ident):
+        session=self._tcp_sessions.get(ident)
+        if session is not None and session.authenticated and not session.stop.is_set():
+            return 'Connected · G-Earth' if ident in self._bot_gearth_bridges else 'Connected · Clientless'
+        if ident in self._tcp_inflight:
+            return self._tcp_states.get(ident,'Connecting…')
+        account=next((a for a in self._account_profiles if a['id']==ident),{})
+        if account.get('launch_mode') in ('air','gearth'):
+            return self._account_run_states.get(ident,'Not started')
+        return self._tcp_states.get(ident,self._account_run_states.get(ident,'Not started'))
+
     def _accounts_render(self,select_id=None):
         table=self.account_table
-        if select_id is None:
-            row=table.selection()
-            select_id=row[0] if row else None
+        previous=tuple(table.selection()) if select_id is None else (select_id,)
         for row in table.get_children():
             table.delete(row)
         for item in self._account_profiles:
             name=item['label']+(' (active)' if item['id']==self._account_active_id else '')
             table.insert('', 'end',iid=item['id'],
                          values=(name,item['port'],
-                                  self._account_run_states.get(item['id'],'Not started')))
-        if not select_id and self._account_profiles:
-            select_id=self._account_profiles[0]['id']
-        if select_id and table.exists(select_id):
-            table.selection_set(select_id)
-            table.focus(select_id)
+                                  self._account_display_status(item['id'])))
+        keep=tuple(ident for ident in previous if table.exists(ident))
+        if not keep and self._account_profiles:
+            keep=(self._account_profiles[0]['id'],)
+        if keep:
+            table.selection_set(keep)
+            table.focus(keep[0])
 
     def _account_selected(self):
         selection=self.account_table.selection()
-        if not selection:
-            self.account_status_var.set('Select an account first.')
+        if len(selection)!=1:
+            self.account_status_var.set('Select exactly one account to edit or launch individually. Use highlighted controls for multiple profiles.')
             return None
         return next((a for a in self._account_profiles if a['id']==selection[0]),None)
 
@@ -13038,7 +12970,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if item[1]==self._account_auto_generation:
                     self._account_run_states[item[2]]=item[3]
                     if self.account_table.exists(item[2]):
-                        self.account_table.set(item[2],'launch_state',item[3])
+                        self.account_table.set(item[2],'launch_state',self._account_display_status(item[2]))
                 continue
             if item[0]=='account_remaining':
                 if item[1]==self._account_auto_generation:

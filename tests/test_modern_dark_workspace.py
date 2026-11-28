@@ -13,7 +13,7 @@ TREE=ast.parse(SOURCE)
 APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
          and n.name=='ChatOverlayApp')
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
-PAGE_NAMES={'overview','accounts','bot','chat','responder','packet',
+PAGE_NAMES={'accounts','bot','chat','responder','packet',
             'outfits','face','dance','fuzz','manip','headless','updates'}
 
 
@@ -28,9 +28,10 @@ class ModernWorkspaceTests(unittest.TestCase):
         for key in PAGE_NAMES:
             self.assertIn("'"+key+"'",settings)
         self.assertNotIn('self.notebook=',settings)
-        self.assertIn("self._ui_show_page('overview')",settings)
+        self.assertIn("self._ui_show_page('accounts')",settings)
         self.assertIn('self._make_packet_panel(',settings)
         self.assertIn('self._make_accounts_panel(',settings)
+        self.assertNotIn("('overview',",settings)
         self.assertNotIn("('tcp', 'Direct TCP'",settings)
         self.assertIn('self._make_clientless_tabs(',settings)
         self.assertNotIn('self._make_direct_classic_panel(',settings)
@@ -50,9 +51,10 @@ class ModernWorkspaceTests(unittest.TestCase):
             self.assertIn('self.'+callback,accounts)
         self.assertIn("show='*' if secret else ''",accounts)
         self.assertIn('self._accounts_render()',accounts)
+        self.assertIn('self._tcp_forget_session',accounts)
         tcp=ast.get_source_segment(SOURCE,METHODS['_make_clientless_connection_panel'])
         for callback in ('_tcp_proxy_changed','_tcp_autostart_changed',
-                         '_tcp_forget_session','_tcp_test_classic_websocket'):
+                         '_tcp_test_classic_websocket'):
             self.assertIn('self.'+callback,tcp)
         for removed in ('self.tcp_ticket_var','self.tcp_session_id_var',
                         'self.tcp_browser_token_var','self._tcp_save_session',

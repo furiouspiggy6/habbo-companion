@@ -136,11 +136,11 @@ class GearthPrestartTests(unittest.TestCase):
         self.assertNotIn("command=self._bot_standalone_changed",panel)
         self.assertIn("Choose the connection mode in Accounts",panel)
         self.assertIn("Advanced diagnostics",panel)
-        self.assertIn("Selected account (switch without reconnecting)",panel)
+        self.assertIn("Connected account",panel)
         self.assertIn("command=self._bot_gearth_probe",panel)
         self.assertIn("<<ComboboxSelected>>",panel)
         self.assertIn("lambda _event:self._bot_select_only()",panel)
-        self.assertIn("command=self._bot_run_selected",panel)
+        self.assertNotIn("command=self._bot_run_selected",panel)
         self.assertIn("clientless_gearth_intercept=False",SOURCE)
 
 

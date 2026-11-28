@@ -10,13 +10,12 @@ class ClientlessTabTests(TestCase):
     def test_coffee_tab_has_independent_scroll(self):
         code=METHODS['_make_clientless_tabs']
         self.assertIn("tabs.add(coffee,text='Coffee Pass')",code)
-        self.assertIn("tabs.add(main,text='Sessions')",code)
+        self.assertNotIn("text='Sessions'",code)
         self.assertIn("tabs.add(actions,text='Actions & chat')",code)
         self.assertIn("tabs.add(automation,text='Automation')",code)
         self.assertIn("self._ui_scroll_area(actions,'bot_actions')",code)
         self.assertIn("self._ui_scroll_area(automation,'bot_automation')",code)
         self.assertIn("self._ui_scroll_area(coffee,'bot_coffee')",code)
-        self.assertIn("self._ui_scroll_area(main,'bot_controls')",code)
         self.assertIn("self._ui_scroll_canvases['bot']",code)
         self.assertIn("tabs.add(connection,text='Settings')",code)
         self.assertIn("self._ui_scroll_area(connection,'bot_connection')",code)

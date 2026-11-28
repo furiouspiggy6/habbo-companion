@@ -204,11 +204,12 @@ class MultiRunnerTests(unittest.TestCase):
 
     def test_ui_routes_bulk_commands_only_on_explicit_click(self):
         ui=ast.get_source_segment(SOURCE,METHODS["_make_clientless_bot_panel"])
-        self.assertIn("selectmode='extended'",ui)
-        self.assertIn("Run highlighted (Direct TCP)",ui)
-        self.assertIn("command=self._bot_multi_disconnect_selected",ui)
-        self.assertNotIn("command=self._bot_multi_run_selected).pack(anchor='w'",ui)
-        self.assertIn("Run selected profile",ui)
+        accounts=ast.get_source_segment(SOURCE,METHODS["_make_accounts_panel"])
+        self.assertIn("selectmode='extended'",accounts)
+        self.assertIn("command=self._bot_multi_run_selected",accounts)
+        self.assertIn("command=self._bot_multi_disconnect_selected",accounts)
+        self.assertNotIn("command=self._bot_multi_run_selected",ui)
+        self.assertNotIn("command=self._bot_run_selected",ui)
         self.assertIn("Save positions for current account",ui)
 
 if __name__=="__main__":
