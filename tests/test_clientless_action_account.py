@@ -73,3 +73,45 @@ class ActionAccountTests(TestCase):
         self.assertTrue(all(c.kwargs['outfit_override'][0]=='M' for c in calls))
         self.assertNotEqual(calls[0].kwargs['outfit_override'],calls[1].kwargs['outfit_override'])
         self.assertIn('2/3',app.bot_outfit_status_var.set.call_args.args[0])
+
+
+    def test_continuous_outfits_cycle_snapshot_and_stop(self):
+        p=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
+        names={'_bot_randomize_outfits','_bot_outfit_cycle_start','_bot_outfit_cycle_tick',
+               '_bot_outfit_cycle_stop','_bot_outfit_cycle_remove'}
+        nodes=[n for n in ast.walk(ast.parse(p.read_text(encoding='utf-8')))
+               if isinstance(n,ast.FunctionDef) and n.name in names]
+        from clientless_bot import random_clientless_figure
+        scope={'random_clientless_figure':random_clientless_figure}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
+        live=lambda:SimpleNamespace(authenticated=True,stop=SimpleNamespace(is_set=lambda:False))
+        accounts=[{'id':i,'label':i} for i in ('a','b','c')]
+        app=SimpleNamespace(_account_profiles=accounts,_tcp_sessions={'a':live(),'b':live()},
+            _tcp_generation={'a':1,'b':1},_bot_action_inflight=set(),_bot_outfit_run=None,
+            bot_account_var=Mock(),bot_outfit_mode_var=Mock(),bot_outfit_interval_var=Mock(),
+            bot_outfit_status_var=Mock(),root=Mock())
+        app.bot_account_var.get.return_value='All connected accounts'
+        app.bot_outfit_mode_var.get.return_value='Male'
+        app.bot_outfit_interval_var.get.return_value='5'
+        app._bot_send_action=Mock(side_effect=lambda **kw:
+            app._bot_action_inflight.add(kw['account_override']['id']))
+        for name in names:setattr(app,name,scope[name].__get__(app))
+        app._bot_outfit_cycle_start()
+        self.assertEqual(app._bot_send_action.call_count,2)
+        run=app._bot_outfit_run
+        self.assertEqual(app.root.after.call_args.args[0],5000)
+        first=app._bot_send_action.call_args_list[0].kwargs['outfit_override']
+        app._bot_action_inflight.clear()
+        app._tcp_sessions['b']=live()
+        app._tcp_generation['b']=2
+        app._tcp_sessions['c']=live()
+        app.root.after.call_args.args[1]()
+        self.assertEqual(app._bot_send_action.call_count,3)
+        self.assertEqual(set(run['members']),{'a'})
+        self.assertNotEqual(first,app._bot_send_action.call_args.kwargs['outfit_override'])
+        callback=app.root.after.call_args.args[1]
+        app._bot_outfit_cycle_stop()
+        callback()
+        self.assertIsNone(app._bot_outfit_run)
+        self.assertEqual(app._bot_send_action.call_count,3)
+        app.root.after_cancel.assert_called_once()

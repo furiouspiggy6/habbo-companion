@@ -5487,6 +5487,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_follow_group_run=None
         self._bot_follow_room_bots={}
         self._bot_face_run=None
+        self._bot_outfit_run=None
         self._bot_self_ids={}
         self._bot_user_roster={}
         self._bot_chat_dedup=ClientlessChatDeduplicator()
@@ -6415,16 +6416,24 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Label(frame,textvariable=self.bot_face_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='RANDOM CLOTHES CHANGER',style='Section.TLabel').pack(anchor='w',pady=(6,5))
-        ttk.Label(frame,text='Change each selected avatar to a random complete look once. Basic styles use a legacy non-HC catalogue; the server checks availability.',
+        ttk.Label(frame,text='Randomize complete looks once or continuously until STOP. Basic styles use a legacy non-HC catalogue; the server checks availability.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
         self.bot_outfit_mode_var=tk.StringVar(value='Mixed')
-        self.bot_outfit_status_var=tk.StringVar(value='Choose a clothing style and click Randomize outfits.')
+        self.bot_outfit_interval_var=tk.StringVar(value='5')
+        self.bot_outfit_status_var=tk.StringVar(value='Choose a clothing style, then randomize once or start cycling.')
         clothes=ttk.Frame(frame,style='Panel.TFrame')
         clothes.pack(anchor='w',pady=(0,5))
         ttk.Combobox(clothes,textvariable=self.bot_outfit_mode_var,state='readonly',
                      values=('Mixed','Male','Female','Saved looks'),width=18).pack(side='left',padx=(0,8))
         ttk.Button(clothes,text='Randomize outfits',style='Primary.TButton',
                    command=self._bot_randomize_outfits).pack(side='left')
+        cycle=ttk.Frame(frame,style='Panel.TFrame')
+        cycle.pack(anchor='w',pady=(0,5))
+        ttk.Label(cycle,text='Seconds per outfit (5–3600)',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(cycle,textvariable=self.bot_outfit_interval_var,width=7).pack(side='left',padx=(8,12))
+        ttk.Button(cycle,text='Start cycling',style='Primary.TButton',
+                   command=self._bot_outfit_cycle_start).pack(side='left',padx=(0,6))
+        ttk.Button(cycle,text='STOP cycling',command=self._bot_outfit_cycle_stop).pack(side='left')
         ttk.Label(frame,textvariable=self.bot_outfit_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
@@ -7978,23 +7987,30 @@ class ChatOverlayApp(PersonaResponderMixin):
         if pending:
             self._bot_follow_defer(run,min(pending),group=True)
 
-    def _bot_randomize_outfits(self):
-        """One explicit change per selected connected avatar."""
+    def _bot_randomize_outfits(self,run=None):
+        """One change per selected connected avatar, or one cycle step."""
         import random
-        mode=self.bot_outfit_mode_var.get()
-        presets=sanitize_outfit_presets(getattr(self,'outfit_presets',[])) if mode=='Saved looks' else []
+        if run is None and getattr(self,'_bot_outfit_run',None):
+            self.bot_outfit_status_var.set('Stop outfit cycling before randomizing manually.')
+            return 0
+        mode=run['mode'] if run is not None else self.bot_outfit_mode_var.get()
+        presets=(run['presets'] if run is not None else
+                 sanitize_outfit_presets(getattr(self,'outfit_presets',[])) if mode=='Saved looks' else [])
         if mode=='Saved looks' and not presets:
             self.bot_outfit_status_var.set('No saved looks. Choose a basic style or capture an outfit in Tools.')
             return
         if mode not in ('Male','Female','Mixed','Saved looks'):
             self.bot_outfit_status_var.set('Choose a valid clothing style.')
             return
-        selected=self.bot_account_var.get()
-        if selected=='All connected accounts':
-            accounts=tuple(self._account_profiles)
+        if run is not None:
+            accounts=[member[0] for member in run['members'].values()]
         else:
-            account=self._bot_selected_profile()
-            accounts=(account,) if account else ()
+            selected=self.bot_account_var.get()
+            if selected=='All connected accounts':
+                accounts=tuple(self._account_profiles)
+            else:
+                account=self._bot_selected_profile()
+                accounts=(account,) if account else ()
         accounts=[a for a in accounts if (session:=self._tcp_sessions.get(a['id'])) is not None
                   and session.authenticated and not session.stop.is_set()]
         if not accounts:
@@ -8022,9 +8038,83 @@ class ChatOverlayApp(PersonaResponderMixin):
                 used.add(pair)
                 last[ident]=pair
                 started+=1
+        if run is None:
+            self.bot_outfit_status_var.set(
+                f'Outfit requests queued for {started}/{len(accounts)} selected account(s). '
+                'Server acceptance not verified. Busy or unavailable accounts skipped.')
+        return started
+
+    def _bot_outfit_cycle_start(self):
+        if getattr(self,'_bot_outfit_run',None):
+            self.bot_outfit_status_var.set('Already cycling; press STOP first.')
+            return
+        try:
+            seconds=float(self.bot_outfit_interval_var.get().strip())
+            if not 5<=seconds<=3600:
+                raise ValueError('Enter 5–3600 seconds per outfit.')
+            mode=self.bot_outfit_mode_var.get()
+            if mode not in ('Male','Female','Mixed','Saved looks'):
+                raise ValueError('Choose a valid clothing style.')
+            presets=sanitize_outfit_presets(getattr(self,'outfit_presets',[])) if mode=='Saved looks' else []
+            if mode=='Saved looks' and len(presets)<2:
+                raise ValueError('Save at least two different looks before cycling.')
+        except (ValueError,TypeError) as exc:
+            self.bot_outfit_status_var.set(str(exc));return
+        if self.bot_account_var.get()=='All connected accounts':
+            accounts=tuple(self._account_profiles)
+        else:
+            selected=self._bot_selected_profile()
+            accounts=(selected,) if selected else ()
+        members={}
+        for account in accounts:
+            ident=account['id']
+            session=self._tcp_sessions.get(ident)
+            if session is not None and session.authenticated and not session.stop.is_set():
+                members[ident]=(account,session,self._tcp_generation.get(ident,0))
+        if not members:
+            self.bot_outfit_status_var.set('Select a connected account first.')
+            return
+        run=dict(members=members,mode=mode,presets=presets,
+                 interval=round(seconds*1000),timer=None,sent=0)
+        self._bot_outfit_run=run
+        self._bot_outfit_cycle_tick(run)
+
+    def _bot_outfit_cycle_tick(self,run):
+        if getattr(self,'_bot_outfit_run',None) is not run:return
+        run['timer']=None
+        for ident,(_,session,generation) in tuple(run['members'].items()):
+            if (self._tcp_sessions.get(ident) is not session or
+                self._tcp_generation.get(ident,0)!=generation or
+                not session.authenticated or session.stop.is_set()):
+                run['members'].pop(ident,None)
+        if not run['members']:
+            self._bot_outfit_cycle_stop('Outfit cycling stopped: no original connections remain.')
+            return
+        started=self._bot_randomize_outfits(run=run) or 0
+        run['sent']+=started
         self.bot_outfit_status_var.set(
-            f'Outfit requests queued for {started}/{len(accounts)} selected account(s). '
-            'Server acceptance not verified. Busy or unavailable accounts skipped.')
+            f"Cycling {len(run['members'])} account(s); {started} queued this round, "
+            f"{run['sent']} total. Server acceptance not verified.")
+        if self._bot_outfit_run is run:
+            run['timer']=self.root.after(run['interval'],lambda:self._bot_outfit_cycle_tick(run))
+
+    def _bot_outfit_cycle_stop(self,message='Outfit cycling stopped.'):
+        run=getattr(self,'_bot_outfit_run',None)
+        self._bot_outfit_run=None
+        if run and run.get('timer') is not None:
+            self.root.after_cancel(run['timer'])
+        status=getattr(self,'bot_outfit_status_var',None)
+        if status is not None:status.set(message)
+
+    def _bot_outfit_cycle_remove(self,ident,message):
+        run=getattr(self,'_bot_outfit_run',None)
+        if not run or ident not in run['members']:return
+        run['members'].pop(ident,None)
+        if not run['members']:
+            self._bot_outfit_cycle_stop(message)
+        else:
+            self.bot_outfit_status_var.set(
+                f"{message} {len(run['members'])} account(s) still cycling.")
 
     def _bot_face_stop(self,message='Face rotation stopped.'):
         run=getattr(self,'_bot_face_run',None)
@@ -9055,6 +9145,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                                 'profile with a saved session.')
 
     def _tcp_disconnect_one(self,ident):
+        if getattr(self,'_bot_outfit_run',None):
+            self._bot_outfit_cycle_remove(ident,'Outfit cycling: account disconnected.')
         if getattr(self,'_bot_face_run',None):
             self._bot_face_remove(ident,'Face rotation stopped: account disconnected.')
         self._bot_pending_room.pop(ident,None)
@@ -13600,6 +13692,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         if not group['members']:
                             self._bot_follow_stop('All-account follow stopped: '+error)
                 self._bot_follow_wake(ident)
+                if action=='Change outfit' and error is not None:
+                    self._bot_outfit_cycle_remove(ident,'Outfit cycling: send failed.')
                 if action=='Face Rotation' and error is not None:
                     self._bot_face_remove(ident,'Face rotation stopped: '+error)
                 if action=='Auto Walk' and error is not None:
@@ -14758,6 +14852,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
     def close(self):
         self._responder_generation+=1
         self.responder.enabled=False
+        self._bot_outfit_cycle_stop('Companion closed. Outfit cycling stopped.')
         # Tickets never outlive the Companion process.
         self._tcp_disconnect_all()
         self._headless_manager.disconnect_all()
