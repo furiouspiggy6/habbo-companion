@@ -5688,13 +5688,18 @@ class ChatOverlayApp(PersonaResponderMixin):
         self.clickthrough_failed=False
         self.last_hotkeys=set()
         self.settings_open=True
+        self._game_panel_windows=set()
+        self._game_panel_pending=[]
+        self._game_panel_target=None
+        self._game_panel_restore=None
+        self._game_panel_last_scan=0.0
         self.status=tk.StringVar(value='Waiting for Habbo...')
         self.scroll_status=tk.StringVar(value='LIVE · scroll up over the chat to see older messages')
         self.cfg_vars={}
         self.canvas_font=None;self.canvas_bold=None
         self._make_overlay()
         self._make_settings()
-        self.root.protocol('WM_DELETE_WINDOW',self.close)
+        self.root.protocol('WM_DELETE_WINDOW',self._game_panel_close_or_exit)
         self.root.after(450,self._setup_wheel_hook)
         self.tick()
         self.root.after(200,self._pump_packets)
@@ -6001,6 +6006,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                  fg='#FFFFFF',width=2,pady=2).pack(side='left',padx=(9,8),pady=5)
         nav=tk.Frame(top,bg=p['sidebar'])
         nav.pack(side='left',fill='x',expand=True)
+        tk.Label(top,text='Shift + `  •  game panel',font=('Segoe UI',9),
+                 bg=p['sidebar'],fg=p['muted']).pack(side='right',padx=9)
         self._ui_subnav=tk.Frame(shell,bg=p['sidebar'])
         for group,items in navigation:
             self._ui_add_nav(nav,group,items)
@@ -9162,6 +9169,10 @@ class ChatOverlayApp(PersonaResponderMixin):
                     finally:
                         del ticket
                     attempted_ids.add(account['id'])
+                    # The Tk thread attaches only to a newly observed native
+                    # AIR window, not the website or launcher.
+                    if native_before is not None:
+                        self._packet_put(('game_panel_arm',generation,native_before))
                     stage(account,'Checking native game / Classic launcher')
                     if account_wait_for_new_native_window(native_before,2.5):
                         confirmed+=1
@@ -12986,6 +12997,10 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if item[0]=='headless_status':
                 self.headless_status_var.set(item[1])
                 continue
+            if item[0]=='game_panel_arm':
+                if item[1]==self._account_auto_generation:
+                    self._game_panel_pending.append((frozenset(item[2]),time.monotonic()+60.0))
+                continue
             if item[0]=='account_auto_status':
                 if item[1]==self._account_auto_generation:
                     self.account_status_var.set(item[2])
@@ -13763,12 +13778,138 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             cv.create_text(x+10,35,text=f'OLDER CHAT  ·  {self.scroll_offset} newer message(s) below  ·  ↓ scroll for live',
                            anchor='w',font=('Segoe UI',9,'bold'),fill=COMPANION_UI['text'])
 
+    def _game_panel_close_or_exit(self):
+        if self._game_panel_target is not None:
+            self._game_panel_hide()
+        else:
+            self.close()
+
+    def _game_panel_hide(self,return_focus=True):
+        self.root.withdraw()
+        self.settings_open=False
+        self.root.attributes('-topmost',False)
+        if return_focus and self._game_panel_target is not None:
+            try:
+                u=self.tracker.user32
+                u.SetForegroundWindow.argtypes=(wintypes.HWND,)
+                u.SetForegroundWindow.restype=wintypes.BOOL
+                u.SetForegroundWindow(self._game_panel_target[0])
+            except (OSError,AttributeError,ValueError,TypeError):
+                pass
+
+    def _game_panel_detach(self):
+        saved=self._game_panel_restore
+        self._game_panel_target=None
+        self._game_panel_windows.clear()
+        self._game_panel_pending.clear()
+        self._game_panel_restore=None
+        self.root.attributes('-topmost',False)
+        self.root.deiconify()
+        self.root.state('normal')
+        if saved:
+            geometry,state,minimum=saved
+            self.root.minsize(*minimum)
+            self.root.geometry(geometry)
+            if state=='zoomed':
+                self.root.state('zoomed')
+        self.settings_open=True
+
+    def _game_panel_scan(self):
+        if not (self._game_panel_pending or self._game_panel_windows):
+            return
+        now=time.monotonic()
+        if now-self._game_panel_last_scan<0.5:
+            return
+        self._game_panel_last_scan=now
+        current=account_native_client_windows()
+        if current is None:
+            # An enumeration error is not proof that a game closed.
+            return
+        self._game_panel_windows.intersection_update(current)
+        pending=[]
+        new=set()
+        for baseline,deadline in self._game_panel_pending:
+            found=set(current)-baseline
+            if found:
+                new.update(found)
+            elif now<deadline:
+                pending.append((baseline,deadline))
+        self._game_panel_pending=pending
+        new.difference_update(self._game_panel_windows)
+        self._game_panel_windows.update(new)
+        if new:
+            # Prefer the actual foreground game when several windows appeared.
+            chosen=next((w for w in sorted(new) if self.tracker.foreground_context(
+                w[0],self.root.winfo_id())=='habbo'),min(new))
+            if self._game_panel_restore is None:
+                self._game_panel_restore=(self.root.geometry(),self.root.state(),self.root.minsize())
+            self._game_panel_target=chosen
+            self._game_panel_hide(return_focus=False)
+        elif self._game_panel_target is not None and self._game_panel_target not in current:
+            if self._game_panel_windows:
+                self._game_panel_target=min(self._game_panel_windows)
+                self._game_panel_hide(return_focus=False)
+            else:
+                # Closing the last tracked game restores the standalone panel.
+                self._game_panel_detach()
+
+    def _game_panel_show(self,target):
+        u=self.tracker.user32
+        rect=wintypes.RECT()
+        u.GetWindowRect.argtypes=(wintypes.HWND,ctypes.POINTER(wintypes.RECT))
+        u.GetWindowRect.restype=wintypes.BOOL
+        if not u.GetWindowRect(target[0],ctypes.byref(rect)):
+            return
+        w=rect.right-rect.left
+        h=rect.bottom-rect.top
+        if w<250 or h<250:
+            return
+        # Keep the normal interactive Tk window, sized within the game.
+        # No DLL injection, reparenting, or global always-on-top mode.
+        margin=12
+        width=min(1120,w-2*margin)
+        height=min(740,h-2*margin)
+        self._game_panel_target=target
+        self.root.attributes('-topmost',False)
+        self.root.deiconify()
+        self.root.state('normal')
+        self.root.minsize(min(940,width),min(620,height))
+        self.root.geometry(f'{width}x{height}')
+        self.root.update_idletasks()
+        u.GetAncestor.argtypes=(wintypes.HWND,wintypes.UINT)
+        u.GetAncestor.restype=wintypes.HWND
+        hwnd=u.GetAncestor(self.root.winfo_id(),2) or self.root.winfo_id()
+        u.SetWindowPos.argtypes=(wintypes.HWND,wintypes.HWND,ctypes.c_int,
+            ctypes.c_int,ctypes.c_int,ctypes.c_int,wintypes.UINT)
+        u.SetWindowPos.restype=wintypes.BOOL
+        u.SetWindowPos(hwnd,0,rect.left+(w-width)//2,rect.top+(h-height)//2,
+                       width,height,0x0010)
+        self.root.lift()
+        self.root.focus_force()
+        self.settings_open=True
+
+    def _game_panel_toggle(self):
+        if not self._game_panel_windows:
+            return
+        # Only respond while a tracked native game or Companion is focused.
+        root_id=self.root.winfo_id()
+        foreground=next((w for w in sorted(self._game_panel_windows)
+                         if self.tracker.foreground_context(w[0],root_id)=='habbo'),None)
+        if foreground is not None:
+            self._game_panel_show(foreground)
+        elif (self._game_panel_target is not None and self.settings_open and
+                self.tracker.foreground_context(self._game_panel_target[0],root_id)=='settings'):
+            self._game_panel_hide()
+
     def _hotkeys(self):
         if os.name!='nt':return
         u=self.tracker.user32
         ctrl=bool(u.GetAsyncKeyState(0x11)&0x8000)
         shift=bool(u.GetAsyncKeyState(0x10)&0x8000)
         active=set()
+        alt=bool(u.GetAsyncKeyState(0x12)&0x8000)
+        if shift and not ctrl and not alt and u.GetAsyncKeyState(0xC0)&0x8000:
+            active.add('game_panel') # Shift + grave/backtick (US/UK keyboard)
         if ctrl and shift:
             if u.GetAsyncKeyState(0x75)&0x8000:active.add('panel') # F6
             if u.GetAsyncKeyState(0x76)&0x8000:active.add('room') # F7
@@ -13776,10 +13917,19 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
             if u.GetAsyncKeyState(0x22)&0x8000:active.add('newer') # Page Down
             if u.GetAsyncKeyState(0x23)&0x8000:active.add('latest') # End
         for key in active-self.last_hotkeys:
+            if key=='game_panel':
+                self._game_panel_toggle()
             if key=='panel':
-                if self.settings_open:self.root.withdraw()
-                else:self.root.deiconify();self.root.lift()
-                self.settings_open=not self.settings_open
+                if self._game_panel_target is not None:
+                    # Existing recovery shortcut restores standalone mode.
+                    self._game_panel_detach()
+                elif self.settings_open:
+                    self.root.withdraw()
+                    self.settings_open=False
+                else:
+                    self.root.deiconify()
+                    self.root.lift()
+                    self.settings_open=True
             if key=='older':self.scroll_chat(3)
             if key=='newer':self.scroll_chat(-3)
             if key=='latest':self.jump_to_latest()
@@ -13810,6 +13960,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
 
     def tick(self):
         try:
+            self._game_panel_scan()
             self._hotkeys()
             self._poll_feed()
             self._responder_tick()

@@ -1262,3 +1262,12 @@ Open account login remains the explicit visible browser workflow for verificatio
 No visible browser is automatically opened when background authentication fails.
 The native protocol association must be installed; game login is not inferred
 from a launcher request. Existing G-Earth launch guards remain in place.
+
+v1.1.134 — HabboAIR game panel
+When a native game launched from Accounts is detected, Companion hides its
+control window. Shift + ` (the grave/backtick key) opens the interactive
+panel over the focused tracked game; press it again or close the panel to hide
+it. Closing the last tracked game restores standalone Companion. Ctrl+Shift+F6
+detaches the panel and restores standalone mode as a recovery shortcut.
+The panel is an ordinary Windows window positioned over AIR, not injected
+into the game. It is not globally topmost and does not alter the chat overlay.
