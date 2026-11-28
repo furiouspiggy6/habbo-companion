@@ -15,7 +15,7 @@ scope={'ClientlessBotError':ClientlessBotError,'time':time,'threading':threading
 names=('_coffee_group_apply','_coffee_group_select_all','_coffee_group_clear','_coffee_group_stop',
        '_coffee_refresh_accounts','_coffee_selected','_coffee_selected_accounts',
        '_coffee_load_settings','_coffee_save_settings','_coffee_manual','_coffee_start_run',
-       '_coffee_collect_all','_coffee_send','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
+       '_coffee_collect_all','_coffee_pass_all','_coffee_send','_coffee_manual_report','_coffee_manual_send_result','_coffee_tick','_coffee_advance','_coffee_build_run',
        '_coffee_settings','_coffee_stop_run','_coffee_context','_coffee_target','_coffee_observe')
 nodes=[n for n in ast.walk(tree) if isinstance(n,ast.FunctionDef) and n.name in names]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
@@ -81,7 +81,9 @@ class CoffeeGroupTests(TestCase):
         self.assertEqual(presets['a'],presets['c'])
         self.assertEqual(presets['b'],{'one':7})
         app.save.assert_called_once()
+        app._coffee_pass_all=Mock()
         scope['_coffee_manual'](app,'Pass hand item')
+        app._coffee_pass_all.assert_called_once_with()
         app.coffee_consent_var.get.return_value=False
         app._coffee_stop_run=Mock()
         scope['_coffee_start_run'](app)
@@ -89,6 +91,25 @@ class CoffeeGroupTests(TestCase):
         app._coffee_send.assert_not_called()
         app.coffee_account_var.get.return_value='C [c]'
         self.assertEqual(app._coffee_selected_accounts(),[accounts[2]])
+
+    def test_group_manual_pass_resolves_username_and_excludes_recipient(self):
+        roster={1:(0,'Alice'),2:(1,'Bob'),3:(2,'Receiver')}
+        state={'players':roster,'carry':{0:(85,99),1:(86,99),2:(86,99)},
+               'generation':1,'room':9}
+        owners={'a':1,'b':2,'c':3}
+        app=SimpleNamespace(
+            _coffee_selected_accounts=lambda:[{'id':i} for i in owners],
+            _coffee_context=lambda i:(state,owners[i],roster[owners[i]][0]),
+            coffee_recipient_var=Mock(**{'get.return_value':' rEcEiVeR '}),
+            _coffee_send=Mock(),_coffee_manual_report=Mock(),coffee_status_var=Mock())
+        app._coffee_target=MethodType(scope['_coffee_target'],app)
+        scope['_coffee_pass_all'](app)
+        calls=app._coffee_send.call_args_list
+        self.assertEqual([c.args for c in calls],[('a','Pass hand item'),('b','Pass hand item')])
+        self.assertEqual([c.kwargs['recipient_id'] for c in calls],[3,3])
+        self.assertIs(calls[0].kwargs['_start_gate'],calls[1].kwargs['_start_gate'])
+        self.assertTrue(calls[0].kwargs['_start_gate'].is_set())
+        self.assertEqual(app._coffee_manual_results['c']['status'],'Skipped: This account is the recipient.')
 
     def test_all_starts_eligible_senders_together(self):
         accounts=[{'id':i,'label':i.upper()} for i in ('a','b','c')]

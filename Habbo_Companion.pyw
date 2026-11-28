@@ -6717,7 +6717,6 @@ class ChatOverlayApp(PersonaResponderMixin):
                 ('one',self.coffee_one_var,'476989081'),('two',self.coffee_two_var,'476989024'),
                 ('delay',self.coffee_delay_var,self.config.get('coffee_interval','0.1')),('count',self.coffee_count_var,'5')):
             var.set(str(preset.get(key,default)))
-        self.coffee_recipient_var.set('')
         self.coffee_alternate_var.set(preset.get('alternate',True) is True)
         self.coffee_consent_var.set(False)
         self.coffee_status_var.set('Selected '+account['label']+'.')
@@ -6791,8 +6790,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         text=self.coffee_recipient_var.get().strip()
         matches=[uid for uid,unit in state['players'].items() if uid!=own and
                  (str(uid)==text or unit[1].casefold()==text.casefold())]
-        if not text or len(matches)!=1:
-            raise ClientlessBotError('Enter an unambiguous player currently in the room.')
+        if not text:
+            raise ClientlessBotError('Enter a recipient username or player ID.')
+        if not matches:
+            own_unit=state['players'].get(own)
+            if str(own)==text or (own_unit and own_unit[1].casefold()==text.casefold()):
+                raise ClientlessBotError('This account is the recipient.')
+            raise ClientlessBotError('Recipient not found in this account’s room roster.')
+        if len(matches)!=1:
+            raise ClientlessBotError('Multiple matching players. Enter the exact player ID.')
         return matches[0]
 
     def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,**kwargs):
@@ -6833,9 +6839,10 @@ class ChatOverlayApp(PersonaResponderMixin):
         if self._coffee_run:
             self.coffee_status_var.set('Stop the active run before sending a manual cup.');return
         if self.coffee_account_var.get()=='All connected accounts':
-            if action!='Collect hand item':
-                self.coffee_status_var.set('Start a fixed run or cup loop for group transfers, or select one sender for manual Pass.');return
-            self._coffee_collect_all(source)
+            if action=='Pass hand item':
+                self._coffee_pass_all()
+            else:
+                self._coffee_collect_all(source)
             return
         account=self._coffee_selected()
         if account is None:
@@ -6896,13 +6903,49 @@ class ChatOverlayApp(PersonaResponderMixin):
 
         dispatch()
 
-    def _coffee_manual_send_result(self,ident,generation,error):
+    def _coffee_pass_all(self):
+        """Send a manual pass once per ready account to the same in-room recipient."""
+        if not self.coffee_recipient_var.get().strip():
+            self.coffee_status_var.set('Enter a recipient username or player ID.')
+            return
+        accounts=tuple(self._coffee_selected_accounts())
+        results={a['id']:{'status':'Queued','pending':False,
+                          'action':'Pass hand item'} for a in accounts}
+        self._coffee_manual_results=results
+        gate=threading.Event()
+        target_id=None
+        try:
+            for account in accounts:
+                ident=account['id']
+                result=results[ident]
+                try:
+                    state,own,index=self._coffee_context(ident)
+                    target=self._coffee_target(state,own)
+                    if target_id is not None and target!=target_id:
+                        raise ClientlessBotError('Recipient differs between senders.')
+                    target_id=target
+                    if state['carry'].get(index,(0,0))[0]<=0:
+                        raise ClientlessBotError('No held cup observed.')
+                    self._coffee_send(ident,'Pass hand item',
+                                      recipient_id=target,_start_gate=gate)
+                    result.update(status='Sending pass packet',pending=True,
+                                  generation=state['generation'])
+                except (ValueError,TypeError,RuntimeError,OSError) as exc:
+                    detail=str(exc)[:110] if isinstance(exc,ClientlessBotError) else type(exc).__name__
+                    result['status']='Skipped: '+detail
+        finally:
+            gate.set()
+        self._coffee_manual_report(results)
+
+    def _coffee_manual_send_result(self,ident,generation,error,action='Collect hand item'):
         """Complete manual collection on local send outcome, not server pickup."""
         results=getattr(self,'_coffee_manual_results',{})
         result=results.get(ident)
-        if not result or not result.get('pending') or result.get('generation')!=generation:
+        if (not result or not result.get('pending') or result.get('generation')!=generation
+                or result.get('action','Collect hand item')!=action):
             return
-        result.update(status='Pickup packet sent' if error is None else
+        sent_status='Pass packet sent' if action=='Pass hand item' else 'Pickup packet sent'
+        result.update(status=sent_status if error is None else
                       'Send failed: '+str(error)[:110],pending=False)
         self._coffee_manual_report(results)
 
@@ -6910,14 +6953,16 @@ class ChatOverlayApp(PersonaResponderMixin):
         """Summarize local sends without polling for hand-item confirmation."""
         if self._coffee_manual_results is not results:
             return
-        sent=sum(r['status']=='Pickup packet sent' for r in results.values())
+        passing=any(r.get('action')=='Pass hand item' for r in results.values())
+        sent_status='Pass packet sent' if passing else 'Pickup packet sent'
+        sent=sum(r['status']==sent_status for r in results.values())
         pending=sum(r['pending'] for r in results.values())
         skipped=sum(r['status'].startswith('Skipped:') for r in results.values())
         failed=len(results)-sent-pending-skipped
         if not self._coffee_run:
             self.coffee_status_var.set(
-                f'Pickup packets: {sent}/{len(results)} sent; {pending} sending; '
-                f'{skipped} skipped; {failed} failed. Server pickup not verified.')
+                f'{"Pass" if passing else "Pickup"} packets: {sent}/{len(results)} sent; {pending} sending; '
+                f'{skipped} skipped; {failed} failed. Server {"delivery" if passing else "pickup"} not verified.')
         self._coffee_group_refresh()
 
     def _coffee_build_run(self,ident,ids,seconds,count):
@@ -13124,8 +13169,7 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                 if generation!=self._tcp_generation.get(ident,0):
                     continue
                 if action in ('Collect hand item','Pass hand item'):
-                    if action=='Collect hand item':
-                        self._coffee_manual_send_result(ident,generation,error)
+                    self._coffee_manual_send_result(ident,generation,error,action)
                     if error is not None:
                         if self._coffee_run and any(r['id']==ident for r in self._coffee_run['runs']
                                                     if r['phase']!='complete'):
