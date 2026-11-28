@@ -1271,3 +1271,13 @@ it. Closing the last tracked game restores standalone Companion. Ctrl+Shift+F6
 detaches the panel and restores standalone mode as a recovery shortcut.
 The panel is an ordinary Windows window positioned over AIR, not injected
 into the game. It is not globally topmost and does not alter the chat overlay.
+
+v1.1.135 — Restore official Play in App launch
+Native AIR launches use the previously working Play in App website route in a
+normal isolated browser started minimised, instead of requiring the headless
+SSO API to return a ticket. Close only Companion-started temporary browsers
+after a new native game window appears or sign-in fails. Permission prompts
+remain available; Open account login restores an existing isolated browser.
+No verification bypass or repeated password submission. Shift+grave game
+panel attachment remains unchanged. Browser minimisation is not guaranteed
+by every Chromium build or Windows external-protocol prompt.

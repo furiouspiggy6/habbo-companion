@@ -998,6 +998,13 @@ def account_browser_command(browser,folder,url,debug_port=None):
     return args+[url]
 
 
+def account_air_browser_command(browser,folder,url,debug_port):
+    """Normal Chromium profile, minimised rather than headless for native handoff."""
+    cmd=account_browser_command(browser,folder,url,debug_port)
+    cmd.insert(-1,'--start-minimized')
+    return cmd
+
+
 def account_browser_pages(debug_port):
     """Discover only page targets in a local, isolated Chromium profile."""
     if not 1024<=int(debug_port)<=65535:
@@ -3774,6 +3781,23 @@ def account_request_native_air_launch(ticket):
     except (OSError,ValueError):
         raise OSError('The Habbo Windows launcher could not be opened. '
                       'Check the installed Habbo app and protocol association.') from None
+
+
+def account_show_login_browser(debug_port):
+    """Restore an existing isolated browser only for explicit manual login."""
+    page=account_habbo_page(debug_port)
+    if not page:
+        return
+    ws=page['webSocketDebuggerUrl']
+    try:
+        info=account_cdp_call(ws,'Browser.getWindowForTarget')
+        window_id=info.get('windowId')
+        if window_id is not None:
+            account_cdp_call(ws,'Browser.setWindowBounds',{
+                'windowId':window_id,'bounds':{'windowState':'normal'}})
+        account_cdp_call(ws,'Page.bringToFront')
+    except (OSError,ValueError,RuntimeError,TimeoutError):
+        pass
 
 
 def account_is_native_habbo_window(title):
@@ -9106,7 +9130,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._accounts_render()
         self.account_status_var.set(
             (f'Opening {len(accounts)} browser profile(s) for manual sign-in.' if login_only
-             else f'Starting {len(accounts)} native launch(es) using background sign-in.')
+             else f'Starting {len(accounts)} native launch(es) using a minimised browser.')
             +packet_note)
         threading.Thread(
             target=self._account_auto_worker,
@@ -9139,68 +9163,127 @@ class ChatOverlayApp(PersonaResponderMixin):
                               account['id'],str(value)[:95]))
 
         if not login_only:
-            # Normal AIR launch uses a fresh ticket from the existing isolated
-            # background sign-in helper, never a visible browser or stale token.
+            # Use the known working official website Play in App route.
+            # Headless ticket acquisition can fail despite a signed-in website;
+            # a normal minimised browser supports the native protocol handoff.
             attempted_ids=set()
             unresolved=False
             confirmed=0
+            failure_notes=[]
             try:
+                browser=account_login_browser()
+                if browser is None:
+                    report('Brave/Chrome/Edge not found; install one first.')
+                    queue_unfinished(set())
+                    return
                 for n,account in enumerate(accounts,1):
                     label=account['label']
-                    stage(account,'Background sign-in')
-                    report(f'{n}/{len(accounts)}: {label}: checking saved Habbo session...')
+                    ident=account['id']
+                    spawned=None
+                    keep_browser=False
+                    debug_port=account_browser_debug_port(ident)
+                    stage(account,'Preparing native launch')
+                    report(f'{n}/{len(accounts)}: {label}: preparing saved website session...')
                     try:
-                        ticket=account_import_session_automatically(
-                            account,lambda msg,name=label:report(f'{name}: {msg}'))
-                    except (OSError,ValueError,RuntimeError,HabboTcpError,TimeoutError):
-                        stage(account,'Sign-in / verification required')
-                        report(f'{label}: background sign-in could not obtain a fresh ticket. '
-                               'Use Open account login to renew or verify this profile.')
-                        continue
-                    native_before=account_native_client_windows()
-                    stage(account,'Requesting native HabboAIR launch')
-                    try:
-                        account_request_native_air_launch(ticket)
-                    except (OSError,ValueError,TypeError):
-                        stage(account,'Native launcher unavailable')
-                        report(f'{label}: installed Habbo launcher could not be opened. '
-                               'Check the Windows Habbo app association.')
-                        break
+                        if any(account_browser_debug_port(other['id'])==debug_port
+                               for other in self._account_profiles
+                               if other['id']!=ident):
+                            raise ValueError('Account browser port conflict.')
+                        folder=APP_DIR/'account_browser_profiles'/ident
+                        try:
+                            account_browser_pages(debug_port)
+                        except (OSError,ValueError,TimeoutError,UnicodeError,urllib.error.URLError):
+                            folder.mkdir(parents=True,exist_ok=True)
+                            cmd=account_air_browser_command(browser,folder,account['url'],debug_port)
+                            spawned=subprocess.Popen(cmd,cwd=str(browser.parent),
+                                stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                            for _ in range(28):
+                                time.sleep(0.45)
+                                try:
+                                    account_browser_pages(debug_port)
+                                    break
+                                except (OSError,ValueError,TimeoutError,UnicodeError,urllib.error.URLError):
+                                    continue
+                            else:
+                                raise RuntimeError('Account browser control unavailable.')
+                            account_wait_for_background_session(debug_port,report,max_checks=12)
+                        credentials=account_saved_login_read(ident)
+                        outcome=account_attempt_auto_play(
+                            debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
+                            credentials=credentials,login_only=True)
+                        if outcome!='signed_in':
+                            note=('Sign-in / verification required' if outcome=='login'
+                                  else 'Website sign-in not confirmed ('+str(outcome)+')')
+                            stage(account,note)
+                            failure_notes.append(label+': '+note)
+                            continue
+                        native_before=account_native_client_windows()
+                        stage(account,'Requesting Play in App')
+                        # Do not submit credentials a second time if the website
+                        # has navigated back to a login form or verification.
+                        outcome=account_attempt_auto_play(
+                            debug_port,lambda msg,name=label:report(f'{name}: {msg}'),
+                            credentials=None,login_only=False)
+                        if outcome!='launched':
+                            note='Play in App not confirmed ('+str(outcome)+')'
+                            stage(account,note)
+                            failure_notes.append(label+': '+note)
+                            # A click failure can leave an unresolved launcher
+                            # or external-protocol prompt. Do not launch another.
+                            keep_browser=True
+                            unresolved=True
+                            break
+                        attempted_ids.add(ident)
+                        if native_before is not None:
+                            self._packet_put(('game_panel_arm',generation,native_before))
+                        stage(account,'Checking native game / Classic launcher')
+                        appeared=account_wait_for_new_native_window(native_before,2.5)
+                        if not appeared:
+                            if account_select_classic_launcher(16):
+                                stage(account,'Classic selected; waiting for game')
+                                appeared=account_wait_for_new_native_window(native_before,8.0)
+                            else:
+                                appeared=account_wait_for_new_native_window(native_before,0.8)
+                        if appeared:
+                            confirmed+=1
+                            stage(account,'New HabboAir window (account unverified)')
+                        else:
+                            keep_browser=True
+                            unresolved=True
+                            stage(account,'Needs manual Classic / permission')
+                            for future in accounts[n:]:
+                                stage(future,'Waiting: previous launcher unresolved')
+                            report(f'{label}: finish any Habbo launcher or browser permission prompt.')
+                            break
+                    except (OSError,ValueError,RuntimeError,TimeoutError) as exc:
+                        note='Browser / launch setup failed ('+type(exc).__name__+')'
+                        stage(account,note)
+                        failure_notes.append(label+': '+note)
                     finally:
-                        del ticket
-                    attempted_ids.add(account['id'])
-                    # The Tk thread attaches only to a newly observed native
-                    # AIR window, not the website or launcher.
-                    if native_before is not None:
-                        self._packet_put(('game_panel_arm',generation,native_before))
-                    stage(account,'Checking native game / Classic launcher')
-                    if account_wait_for_new_native_window(native_before,2.5):
-                        confirmed+=1
-                        stage(account,'New HabboAir window (account unverified)')
-                    elif account_select_classic_launcher(16):
-                        confirmed+=1
-                        stage(account,'Classic selected; client unverified')
-                    elif account_wait_for_new_native_window(native_before,0.8):
-                        confirmed+=1
-                        stage(account,'New HabboAir window (account unverified)')
-                    else:
-                        unresolved=True
-                        stage(account,'Needs manual Classic / permission')
-                        for future in accounts[n:]:
-                            stage(future,'Waiting: previous launcher unresolved')
-                        report(f'{label}: finish the native launcher prompt before continuing. '
-                               'Remaining accounts are paused.')
-                        break
+                        # Only close our own temporary browser, never a user's
+                        # existing window. Leave permission prompts available.
+                        if spawned is not None and not keep_browser:
+                            try:
+                                page=account_habbo_page(debug_port)
+                                if page:
+                                    account_cdp_call(page['webSocketDebuggerUrl'],
+                                                     'Browser.close',timeout=2)
+                            except (OSError,ValueError,RuntimeError,TimeoutError):
+                                try:spawned.terminate()
+                                except OSError:pass
                 unfinished=queue_unfinished(attempted_ids,unresolved)
-                report(f'Native launch requests: {len(attempted_ids)}/{len(accounts)}; '
-                       f'{confirmed} native window/Classic confirmations; '
-                       f'{len(unfinished)} unfinished. '
-                       + ('Finish the launcher prompt before continuing.' if unresolved else
-                          'Use Open account login for profiles needing verification.' if unfinished else
-                          'Avatar and G-Earth interception are not verified.'))
+                summary=(f'Native launch requests: {len(attempted_ids)}/{len(accounts)}; '
+                         f'{confirmed} new game window(s); {len(unfinished)} unfinished.')
+                if failure_notes:
+                    summary+=' '+failure_notes[-1]+'.'
+                if unresolved:
+                    summary+=' Finish the outstanding permission/launcher step.'
+                elif unfinished:
+                    summary+=' Use Open account login if sign-in needs attention.'
+                report(summary)
             except Exception as exc:
                 queue_unfinished(attempted_ids,True)
-                report('Background AIR launch stopped: '+type(exc).__name__)
+                report('Native AIR launch stopped: '+type(exc).__name__)
             finally:
                 self._packet_put(('account_auto_finished',generation))
             return
@@ -9255,6 +9338,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                     port=account_browser_debug_port(ident)
                     try:
                         account_browser_pages(port)
+                        account_show_login_browser(port)
                         stage(account,'Browser already open')
                         report(f'{label}: its existing isolated browser is open.')
                         continue
