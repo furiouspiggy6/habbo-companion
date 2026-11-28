@@ -55,6 +55,8 @@ class FakePage:
         self.signed_in=False
     def locator(self,selector):
         return FakeElement(self.logs,'password-wait')
+    def wait_for_timeout(self,timeout):
+        pass
 
 
 class FakeManager:
@@ -146,6 +148,57 @@ class PlaywrightRoutingTests(unittest.TestCase):
         self.assertEqual(result,'login')
         self.assertFalse([step for step in calls if step[0] in ('fill','click')])
         self.assertIn('Save an email/password',' '.join(messages))
+
+    def test_play_in_app_is_recognised_and_browser_play_is_not(self):
+        ns=scope('account_playwright_control')
+        patterns=[]
+        class Locator:
+            def filter(self,**kwargs):return self
+            @property
+            def first(self):return self
+        class Page:
+            def get_by_role(self,role,name):
+                patterns.append(name)
+                return Locator()
+        ns['account_playwright_visible']=lambda target:True
+        self.assertIsNotNone(ns['account_playwright_control'](Page(),'play-app'))
+        self.assertTrue(patterns[0].fullmatch('PLAY IN APP'))
+        self.assertFalse(patterns[0].fullmatch('PLAY IN BROWSER'))
+
+    def test_play_in_app_click_is_not_repeated_and_requests_native_launch(self):
+        for followup in (False,True):
+            ns=scope('account_playwright_auto_play',
+                     'account_playwright_is_official','account_playwright_safe_error')
+            calls=[]
+            page=FakePage(calls)
+            page.password_visible=False
+            app_clicked=[False]
+            def controls(p,kind):
+                if kind=='play-app':
+                    return FakeElement(calls,'play-app',
+                                       lambda:app_clicked.__setitem__(0,True))
+                if kind=='launch' and followup and app_clicked[0]:
+                    return FakeElement(calls,'launch')
+                if kind=='play':
+                    return FakeElement(calls,'old-play')
+                return None
+            ns.update({
+                'account_playwright_engine':lambda report:lambda:FakeManager(calls),
+                'account_playwright_select_page':lambda browser:page,
+                'account_playwright_login_form':lambda p:None,
+                'account_playwright_control':controls,
+                'account_playwright_session_hint':lambda ctx:False,
+                'account_playwright_visible':lambda loc:False,
+                'AccountPlaywrightMonitor':FakeMonitor,
+            })
+            messages=[]
+            self.assertEqual(ns['account_playwright_auto_play'](
+                43111,messages.append,login_only=True),'signed_in')
+            self.assertFalse([x for x in calls if x[0]=='click'])
+            self.assertEqual(ns['account_playwright_auto_play'](
+                43111,messages.append,login_only=False),'launched')
+            self.assertEqual([x[1] for x in calls if x[0]=='click'],
+                             ['play-app','launch'] if followup else ['play-app'])
 
     def test_official_origin_lock_rejects_lookalikes(self):
         ns=scope('account_playwright_is_official')

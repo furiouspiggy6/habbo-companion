@@ -1247,3 +1247,10 @@ Settings. Only multi-page groups display a secondary navigation row; the last
 visited page in each group is remembered for the current session. Discord-inspired
 black and graphite palette, restrained indigo accent, smaller buttons and table
 rows, tighter account and clientless forms. Game overlays and behavior unchanged.
+
+v1.1.132 — Recognise Habbo Play in App
+The native AIR launch flow recognises the website's new Play in App label,
+prefers it over the older Play control, and never selects Play in Browser.
+If a separate Launch and log in button appears, it is handled once. Otherwise
+the existing native window/Classic launcher checks verify the launch request.
+Windows/browser permission prompts still require normal user approval.

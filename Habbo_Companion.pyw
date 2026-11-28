@@ -1182,6 +1182,7 @@ HABBO_AUTO_PLAY_JS=r'''(() => {
   const matchKind=text => {
     if (/^launch\s*(?:and|&)\s*log\s*in!?$/i.test(text) ||
         /^launch\s*(?:and|&)\s*login!?$/i.test(text)) return 'launch';
+    if (/^play\s+in\s+app\s*!?(?:\s+h)?$/i.test(text)) return 'play';
     if (/^play\s*now!?(?:\s+h)?$/i.test(text)) return 'play-now';
     if (/^play\b(?:\s*[\u24bd\u24d7h])?!?$/i.test(text)) return 'play';
     if (/^download!?$/i.test(text)) return 'download';
@@ -2638,6 +2639,7 @@ def account_playwright_control(page,kind):
         'open-login':r'^(?:log\s*in|login|sign\s*in)\s*!?$',
         'submit':r"^(?:let['’]?s\s+go|log\s*in|login|sign\s*in|continue)\s*!?$",
         'play':r'^play(?:\s+now)?(?:\s+h)?\s*!?$',
+        'play-app':r'^play\s+in\s+app(?:\s+h)?\s*!?$',
         'launch':r'^launch\s*(?:and|&)\s*log\s*in\s*!?$',
     }
     pattern=re.compile(patterns[kind],re.I)
@@ -2652,7 +2654,7 @@ def account_playwright_control(page,kind):
         return target.first
     # Some Habbo PLAY buttons render as styled spans. Playwright still
     # dispatches trusted click input to the text/containing control.
-    if kind in ('play','launch'):
+    if kind in ('play','play-app','launch'):
         target=page.get_by_text(pattern,exact=True).filter(visible=True)
         if account_playwright_visible(target):
             return target.first
@@ -2672,8 +2674,10 @@ def account_playwright_select_page(browser):
                     priority=3
                 elif account_playwright_control(page,'launch') is not None:
                     priority=6
-                elif account_playwright_control(page,'play') is not None:
+                elif account_playwright_control(page,'play-app') is not None:
                     priority=5
+                elif account_playwright_control(page,'play') is not None:
+                    priority=4
                 elif account_playwright_control(page,'open-login') is not None:
                     priority=2
                 else:
@@ -3180,7 +3184,8 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                             report('BROWSER <- Could not classify login-page '
                                    'validation state.')
                 if login_only:
-                    if account_playwright_control(page,'play') is not None or (
+                    if (account_playwright_control(page,'play-app') is not None or
+                            account_playwright_control(page,'play') is not None or
                             account_playwright_control(page,'launch') is not None):
                         report('Playwright found the signed-in Habbo PLAY UI.')
                         return 'signed_in'
@@ -3200,9 +3205,10 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                 # Auto Play: click recognised website Play / Launch elements.
                 # Native launcher approval remains a separate Windows action.
                 last_play=False
-                for _ in range(4):
+                app_requested=False
+                for _ in range(6):
                     if not account_playwright_is_official(page.url):
-                        return 'unknown'
+                        return 'launched' if app_requested else 'unknown'
                     launch=account_playwright_control(page,'launch')
                     if launch is not None:
                         try:
@@ -3214,6 +3220,22 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                         report('Clicked Launch and log in via Playwright. '
                                'Select Classic/approve Windows prompt if shown.')
                         return 'launched'
+                    if app_requested:
+                        # Do not repeat the native app launch request.
+                        page.wait_for_timeout(850)
+                        continue
+                    app=account_playwright_control(page,'play-app')
+                    if app is not None:
+                        try:
+                            app.click(timeout=9000)
+                        except Exception as exc:
+                            report('Playwright Play in App: '+
+                                   account_playwright_safe_error(exc)+'.')
+                            return 'stalled'
+                        app_requested=True
+                        report('Clicked Play in App; checking for native launcher or Launch and log in.')
+                        page.wait_for_timeout(850)
+                        continue
                     play=account_playwright_control(page,'play')
                     if play is not None:
                         if last_play:
@@ -3229,6 +3251,8 @@ def account_playwright_auto_play(debug_port,report,credentials=None,
                         report('Playwright clicked the Habbo PLAY control.')
                         last_play=True
                     page.wait_for_timeout(850)
+                if app_requested:
+                    return 'launched'  # Caller verifies the native window or launcher.
                 return 'waiting'
             finally:
                 try:
