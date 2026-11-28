@@ -6542,7 +6542,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             ttk.Entry(row,textvariable=var,width=26).pack(side='left')
         ttk.Button(panel,text='Copy Packet Manipulator delay',
                    command=self._coffee_copy_packet_delay).pack(anchor='w',pady=(4,0))
-        ttk.Label(panel,text='The loop waits for pickup confirmation and continues after sending the pass. Delay and cooldowns still apply.',
+        ttk.Label(panel,text='The loop waits for pickup confirmation and uses the configured delay. Fixed runs retain their cooldowns.',
                   style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(3,0))
         ttk.Checkbutton(panel,text='Alternate machines in fixed runs',variable=self.coffee_alternate_var,
                         style='Panel.TCheckbutton').pack(anchor='w',pady=(6,0))
@@ -6804,7 +6804,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             raise ClientlessBotError('Multiple matching players. Enter the exact player ID.')
         return matches[0]
 
-    def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,_manual_pass=False,**kwargs):
+    def _coffee_send(self,ident,action,*,_start_gate=None,_manual_pickup=False,_manual_pass=False,_loop_action=False,**kwargs):
         session=self._coffee_session(ident)
         if session is None:raise ClientlessBotError('Account is not connected by Direct TCP.')
         if ident in self._bot_action_inflight:raise ClientlessBotError('Previous action is still sending.')
@@ -6815,7 +6815,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             raise ClientlessBotError('Previous action is still settling.')
         cooldowns=(self._coffee_last_pass if action=='Pass hand item' else self._coffee_last_pickup)
         last=cooldowns.get(ident,0.0)
-        if not manual_action and now-last<10:
+        if not (manual_action or _loop_action) and now-last<10:
             raise ClientlessBotError('Please wait before sending another hand-item action.')
         packets=encode_clientless_action(self._bot_headers,session.release,action,**kwargs)
         generation=self._tcp_generation.get(ident,0)
@@ -7065,22 +7065,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         phase=run['phase']
         ready=(ident not in self._bot_action_inflight and
                now-self._bot_last_action_at.get(ident,0)>=0.4)
-        ready_to_pass=ready and now>=self._coffee_last_pass.get(ident,0)+10
+        continuous=run['count'] is None
+        ready_to_pass=ready and (continuous or now>=self._coffee_last_pass.get(ident,0)+10)
+        loop_options={'_loop_action':True} if continuous else {}
         item,seen=state['carry'].get(index,(0,0))
         if phase=='next':
             if not ready or now<run['at']:
                 return
             if item>0 and run['count'] is None:
                 if ready_to_pass:
-                    run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
+                    run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'],**loop_options)
                     run['phase']='pass held item'
                 return
-            if now<self._coffee_last_pickup.get(ident,0)+10:
+            if not continuous and now<self._coffee_last_pickup.get(ident,0)+10:
                 return
             if item>0:
                 raise ClientlessBotError('Run stopped: avatar already holds an item.')
             slot=run['done']%2 if run['alternate'] else 0
-            options={'_start_gate':pickup_gate} if pickup_gate is not None else {}
+            options=dict(loop_options)
+            if pickup_gate is not None:
+                options['_start_gate']=pickup_gate
             run['at']=self._coffee_send(ident,'Collect hand item',furniture=run['ids'][slot],**options)
             run['phase']='pickup'
         elif phase=='pickup':
@@ -7088,7 +7092,7 @@ class ChatOverlayApp(PersonaResponderMixin):
             if not confirmed and now-run['at']>20:
                 raise ClientlessBotError('Run stopped: pickup was not confirmed.')
             if confirmed and ready_to_pass and now>=run['at']+max(0.4,run['delay']):
-                run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'])
+                run['at']=self._coffee_send(ident,'Pass hand item',recipient_id=run['target'],**loop_options)
                 run['phase']='pass'
         elif phase in ('pass','pass held item'):
             if run['count'] is not None:

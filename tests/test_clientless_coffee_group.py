@@ -208,15 +208,15 @@ class CoffeeGroupTests(TestCase):
             self.assertIs(app._coffee_run,batch)
             expected=[]
             for index,furniture in enumerate((101,202,101,202,101,202)):
-                clock.now=100+index*10+0.5
+                clock.now=100+index*2+0.5
                 app._coffee_tick(batch)
-                expected.append(call('a','Collect hand item',furniture=furniture))
+                expected.append(call('a','Collect hand item',furniture=furniture,_loop_action=True))
                 self.assertEqual(app._coffee_send.call_args_list,expected)
                 self.assertEqual(batch['runs'][0]['phase'],'pickup')
                 clock.now+=0.5
                 sender['carry'][0]=(5,clock.now)
                 app._coffee_tick(batch)
-                expected.append(call('a','Pass hand item',recipient_id=2))
+                expected.append(call('a','Pass hand item',recipient_id=2,_loop_action=True))
                 self.assertEqual(app._coffee_send.call_args_list,expected)
                 clock.now+=0.5
                 app._coffee_tick(batch)
@@ -262,15 +262,13 @@ class CoffeeGroupTests(TestCase):
                     ids=(101,202),alternate=True)
                 app=SimpleNamespace(
                     _coffee_context=lambda ident:(state,1,0),
-                    _coffee_send=Mock(side_effect=[101,108]),
+                    _coffee_send=Mock(side_effect=[100,108]),
                     _bot_action_inflight=set(),_bot_last_action_at={},
                     _coffee_last_pass={'a':91},_coffee_last_pickup={'a':95},
                 )
 
                 advance(app,run,100)
-                app._coffee_send.assert_not_called()
-                advance(app,run,101)
-                app._coffee_send.assert_called_once_with('a','Pass hand item',recipient_id=2)
+                app._coffee_send.assert_called_once_with('a','Pass hand item',recipient_id=2,_loop_action=True)
                 self.assertEqual(run['phase'],'pass held item')
 
                 app._bot_action_inflight.add('a')
@@ -286,8 +284,8 @@ class CoffeeGroupTests(TestCase):
                 app._coffee_send.assert_called_once()
                 advance(app,run,108)
                 self.assertEqual(app._coffee_send.call_args_list,[
-                    call('a','Pass hand item',recipient_id=2),
-                    call('a','Collect hand item',furniture=next_cup),
+                    call('a','Pass hand item',recipient_id=2,_loop_action=True),
+                    call('a','Collect hand item',furniture=next_cup,_loop_action=True),
                 ])
 
     def test_manual_collect_all_dispatches_both(self):
@@ -373,6 +371,26 @@ class CoffeeGroupTests(TestCase):
             app._bot_action_inflight.clear()
             with self.assertRaises(ClientlessBotError):
                 send(app,'a','Pass hand item',recipient_id=2)
+
+    def test_loop_send_retains_settle_and_inflight_but_not_ten_second_cooldown(self):
+        session=SimpleNamespace(release='test')
+        app=SimpleNamespace(_coffee_session=lambda ident:session,
+            _bot_action_inflight=set(),_bot_last_action_at={'a':99},
+            _coffee_last_pickup={'a':99},_coffee_last_pass={'a':99},
+            _bot_headers=None,_tcp_generation={'a':1},_bot_action_worker=Mock())
+        encode=Mock(return_value=((1,b'body','UseFurniture'),))
+        send=scope['_coffee_send']
+        with patch.dict(scope,time=SimpleNamespace(monotonic=lambda:100),
+                        threading=SimpleNamespace(Thread=Mock()),
+                        encode_clientless_action=encode):
+            with self.assertRaises(ClientlessBotError):
+                send(app,'a','Collect hand item',furniture=101)
+            send(app,'a','Collect hand item',furniture=101,_loop_action=True)
+            with self.assertRaisesRegex(ClientlessBotError,'still sending'):
+                send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
+            app._bot_action_inflight.clear()
+            with self.assertRaisesRegex(ClientlessBotError,'still settling'):
+                send(app,'a','Pass hand item',recipient_id=2,_loop_action=True)
 
     def test_manual_pickup_completes_on_send_without_hand_item_confirmation(self):
         results={i:dict(status='Sending pickup packet',pending=True,generation=1)
