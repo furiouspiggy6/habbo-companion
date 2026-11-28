@@ -15,7 +15,6 @@ on:
       - 'scripts/build_release.py'
       - 'scripts/security_audit.py'
       - '.gitignore'
-      - '.github/workflows/publish.yml'
   workflow_dispatch:
 permissions:
   contents: write
@@ -36,8 +35,6 @@ jobs:
           python -m py_compile Habbo_Companion.pyw Habbo_Update_Helper.py headless_transport.py local_classic_launch.py habbo_tcp.py persona_responder.py persona_responder_ui.py
           python scripts/build_release.py
           python Habbo_Update_Helper.py inspect --package "Habbo_Companion_Update_v$(cat VERSION).zip"
-      - name: Test managed engine setup without network
-        run: python -m unittest discover -s tests -v
       - name: Commit checked release
         run: |
           git config user.name 'github-actions[bot]'

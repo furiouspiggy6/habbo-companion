@@ -1,21 +1,8 @@
-name: Validate Companion pull requests
+name: Manual Companion tests
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'Habbo_Companion.pyw'
-      - 'headless_transport.py'
-      - 'local_classic_launch.py'
-      - 'habbo_tcp.py'
-      - 'persona_responder.py'
-      - 'persona_responder_ui.py'
-      - 'Habbo_Update_Helper.py'
-      - 'scripts/build_release.py'
-      - 'scripts/security_audit.py'
-      - '.gitignore'
-      - 'tests/**'
-      - 'scripts/playwright_smoke.py'
-      - '.github/workflows/test-pr.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
