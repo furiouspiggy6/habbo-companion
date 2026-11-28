@@ -81,31 +81,31 @@ class CompanionDirectUiContractTests(unittest.TestCase):
         cls.root=Path(__file__).resolve().parents[1]
         cls.app=(cls.root/"Habbo_Companion.pyw").read_text(encoding="utf-8")
 
-    def test_direct_ui_runs_only_local_executable_no_browser_steps(self):
-        section=self.app.split("    def _make_direct_classic_panel(",1)[1].split(
-            "    def _make_accounts_panel(",1)[0]
-        self.assertIn("Launch all queued",section)
-        self.assertIn("Queue ticket locally",section)
-        self.assertIn("launch_local_classic(exe,ticket)",section)
-        self.assertNotIn("account_browser_command",section)
-        self.assertNotIn("account_saved_login_read",section)
-        self.assertNotIn("urllib.request",section)
-        self.assertIn("self._direct_ticket_queue.pop(ident,None)",section)
-        self.assertIn("self.direct_ticket_var.set('')",section)
+    def test_obsolete_launcher_ui_and_callbacks_are_removed(self):
+        for name in ('_make_direct_classic_panel', '_direct_render',
+                     '_direct_ticket_queue', 'direct_table', 'direct_ticket_var',
+                     'direct_classic_exe_var', '_direct_launch_worker',
+                     'direct_ticket_fetched', 'direct_launch_finished'):
+            self.assertNotIn(name, self.app)
 
-    def test_no_tokens_persist_in_settings(self):
-        section=self.app.split("    def _make_direct_classic_panel(",1)[1].split(
-            "    def _make_accounts_panel(",1)[0]
-        self.assertIn("self.config['direct_classic_executable']=str(exe)",section)
-        self.assertNotIn("self.config['direct_ticket",section)
-        self.assertNotIn("self.config['direct_ss",section)
-        self.assertIn("self._direct_ticket_queue.clear()",self.app)
-        self.assertIn("self._make_direct_classic_panel(self._ui_scroll_area(",self.app)
-
-    def test_ui_handles_packet_queue_status_on_main_thread(self):
-        self.assertIn("if item[0]=='direct_launch_state':",self.app)
-        self.assertIn("if item[0]=='direct_launch_finished':",self.app)
-        self.assertIn("self._direct_launch_running=False",self.app)
+    def test_accounts_keeps_exactly_four_launch_modes_and_status(self):
+        tree=ast.parse(self.app)
+        method=next(n for n in ast.walk(tree)
+                    if isinstance(n,ast.FunctionDef)
+                    and n.name=='_make_accounts_panel')
+        modes=next(ast.literal_eval(n.iter) for n in ast.walk(method)
+                   if isinstance(n,ast.For)
+                   and isinstance(n.iter,ast.Tuple)
+                   and isinstance(n.target,ast.Tuple)
+                   and [getattr(t,'id',None) for t in n.target.elts]
+                   ==['label','value'])
+        self.assertEqual(dict(modes), {
+            'HabboAIR without G-Earth':'air',
+            'HabboAIR with G-Earth':'gearth',
+            'Clientless Bot without G-Earth':'clientless',
+            'Clientless Bot with G-Earth':'clientless_gearth'})
+        self.assertEqual(len(modes),4)
+        self.assertIn("'launch_state'",ast.get_source_segment(self.app,method))
 
     def test_licensing_independent_module_uses_no_bobba_networking(self):
         module=(self.root/"local_classic_launch.py").read_text(encoding="utf-8")

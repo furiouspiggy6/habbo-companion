@@ -14,7 +14,7 @@ APP=next(n for n in TREE.body if isinstance(n,ast.ClassDef)
          and n.name=='ChatOverlayApp')
 METHODS={n.name:n for n in APP.body if isinstance(n,ast.FunctionDef)}
 PAGE_NAMES={'overview','accounts','bot','chat','responder','packet',
-            'outfits','face','dance','fuzz','manip','classic','headless','updates'}
+            'outfits','face','dance','fuzz','manip','headless','updates'}
 
 
 class ModernWorkspaceTests(unittest.TestCase):
@@ -33,7 +33,9 @@ class ModernWorkspaceTests(unittest.TestCase):
         self.assertIn('self._make_accounts_panel(',settings)
         self.assertNotIn("('tcp', 'Direct TCP'",settings)
         self.assertIn('self._make_clientless_tabs(',settings)
-        self.assertIn('self._make_direct_classic_panel(',settings)
+        self.assertNotIn('self._make_direct_classic_panel(',settings)
+        self.assertNotIn("('Connections', (",settings)
+        self.assertNotIn("('classic',",settings)
         self.assertIn('self._make_manipulator_panel(',settings)
         self.assertIn('self._make_headless_panel(',settings)
         self.assertIn('self._make_updates_panel(',settings)

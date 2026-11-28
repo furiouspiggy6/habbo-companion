@@ -129,11 +129,11 @@ class NoBrowserUiTicketRetrievalTests(unittest.TestCase):
         self.assertNotIn("password",JS)
         self.assertNotIn("https://bobba",JS)
 
-    def test_ui_has_explicit_optional_button_and_only_memory_queue(self):
-        self.assertIn("Fetch from signed-in local session",SOURCE)
+
+    def test_shared_ticket_helper_remains_without_legacy_queue(self):
         self.assertIn("account_fetch_ticket_from_signed_in_profile(",SOURCE)
-        self.assertIn("('direct_ticket_fetched',account_id,ticket)",SOURCE)
-        self.assertIn("self._direct_ticket_queue[ident]=ticket",SOURCE)
+        self.assertNotIn("Fetch from signed-in local session",SOURCE)
+        self.assertNotIn("_direct_ticket_queue",SOURCE)
         self.assertNotIn("self.config['direct_ticket_queue']",SOURCE)
 
 

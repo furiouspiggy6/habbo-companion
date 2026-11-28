@@ -411,8 +411,8 @@ verification. Whispers never trigger public replies.
 The Companion control window has been reorganised as a modern dark desktop
 workspace. The original Habbo client overlays and bubble artwork are unchanged.
 
-- Persistent left navigation for Overview, Accounts, Direct TCP, View Chat,
-  Packet Viewer, Packet Manipulator, Direct Classic, Headless Test, Updates.
+- Persistent left navigation for Overview, Accounts, Clientless Bot, View Chat,
+  Packet Viewer, Packet Manipulator, Headless Test, Updates.
 - Overview dashboard with real account counts, server-authenticated Direct
   TCP counts and current pending connection counts; no unverified login is
   labelled authenticated.
@@ -1215,3 +1215,11 @@ Use saved accounts and the Clientless controls to start and stop sessions.
 Connection settings retains the shared optional SOCKS5 setting, saved-session
 startup option, session clearing, connection status and diagnostic log.
 Manual ticket and cookie input is no longer shown.
+
+v1.1.128 — Consolidate account launch options
+Removed the obsolete Direct Classic launcher and its Connections sidebar group.
+Accounts retains exactly four launch modes: HabboAIR and Clientless Bot, each
+with or without G-Earth. Existing profile status remains in Accounts; Clientless
+Bot retains its connection settings and session controls. Shared ticket parsing
+and existing launch/authentication implementations remain intact. No manual
+Direct Classic ticket queue or separate executable selector remains.
