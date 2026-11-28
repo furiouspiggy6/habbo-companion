@@ -240,5 +240,70 @@ class FaceRotationTests(unittest.TestCase):
         self.assertIn("'face_local':'Face Rotator'",SRC)
 
 
+class ClientlessFaceRotationTests(unittest.TestCase):
+    def make_app(self):
+        from unittest.mock import Mock
+        from clientless_bot import ClientlessBotError, encode_clientless_action, BUNDLED_AIR_RELEASE
+        names=('_bot_face_start','_bot_face_tick','_bot_face_stop','_bot_face_remove')
+        clock=SimpleNamespace(now=100.0)
+        ns=dict(NS,ClientlessBotError=ClientlessBotError,
+                encode_clientless_action=encode_clientless_action,
+                time=SimpleNamespace(monotonic=lambda:clock.now),
+                threading=SimpleNamespace(Thread=Mock()))
+        nodes=[node for node in APP.body if isinstance(node,ast.FunctionDef) and node.name in names]
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(SOURCE),'exec'),ns)
+        accounts=[dict(id='a'),dict(id='b')]
+        session=SimpleNamespace(release=BUNDLED_AIR_RELEASE)
+        a=SimpleNamespace(root=Root(),bot_account_var=Var('All connected accounts'),
+            bot_face_delay_var=Var('400'),bot_face_direction_var=Var('Clockwise'),
+            bot_face_status_var=Var(),_bot_face_run=None,_account_profiles=accounts,
+            _bot_selected_profile=lambda:accounts[0],
+            _coffee_session=lambda ident:session,
+            _coffee_context=lambda ident:(dict(generation=1,room=9),1,3 if ident=='a' else 4),
+            _bot_anti_afk_positions={'a':(3,10,10),'b':(4,20,20)},
+            _bot_anti_afk_rooms={'a':9,'b':9},_bot_walk_plans={},
+            _bot_action_inflight=set(),_bot_last_action_at={},_bot_headers=None,
+            _bot_action_worker=Mock())
+        for name in names:setattr(a,name,MethodType(ns[name],a))
+        return a,clock,ns['threading'].Thread
+
+    def test_all_accounts_use_eight_lookto_targets_without_walking(self):
+        import struct
+        a,clock,worker=self.make_app()
+        a._bot_face_start()
+        run=a._bot_face_run
+        self.assertEqual(set(run['members']),{'a','b'})
+        for _ in range(7):
+            clock.now+=0.5
+            a._bot_action_inflight.clear()
+            a._bot_face_tick(run)
+        for ident,center in (('a',(10,10)),('b',(20,20))):
+            packets=[c.kwargs['args'][-1] for c in worker.call_args_list
+                     if c.kwargs['args'][0]==ident]
+            self.assertEqual([p[0][2] for p in packets],['LookTo']*8)
+            self.assertEqual([struct.unpack('>ii',p[0][1]) for p in packets],
+                             list(NS['face_rotation_targets'](*center)))
+        a._bot_face_stop()
+        a._bot_face_tick(run)
+        self.assertEqual(worker.call_count,16)
+
+    def test_moved_avatar_stops_and_delay_guard_is_retained(self):
+        a,clock,worker=self.make_app()
+        a.bot_account_var.set('A [a]')
+        a.bot_face_delay_var.set('0')
+        a._bot_face_start()
+        self.assertIsNone(a._bot_face_run)
+        a.bot_face_delay_var.set('400')
+        a._bot_face_start()
+        run=a._bot_face_run
+        a._bot_face_tick(run)
+        self.assertEqual(worker.call_count,1)
+        a._bot_anti_afk_positions['a']=(3,11,10)
+        a._bot_action_inflight.clear()
+        clock.now+=1
+        a._bot_face_tick(run)
+        self.assertIsNone(a._bot_face_run)
+        self.assertEqual(worker.call_count,1)
+
 if __name__=='__main__':
     unittest.main()

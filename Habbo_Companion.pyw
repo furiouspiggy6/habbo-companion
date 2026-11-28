@@ -5486,6 +5486,7 @@ class ChatOverlayApp(PersonaResponderMixin):
         self._bot_follow_run=None
         self._bot_follow_group_run=None
         self._bot_follow_room_bots={}
+        self._bot_face_run=None
         self._bot_self_ids={}
         self._bot_user_roster={}
         self._bot_chat_dedup=ClientlessChatDeduplicator()
@@ -6392,6 +6393,26 @@ class ChatOverlayApp(PersonaResponderMixin):
         ttk.Button(follow_buttons,text='Stop following',
                    command=self._bot_follow_stop).pack(side='left',padx=(0,6))
         ttk.Label(frame,textvariable=self.bot_follow_status_var,
+                  style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
+        ttk.Label(frame,text='360° FACE ROTATOR',style='Section.TLabel').pack(anchor='w',pady=(6,5))
+        ttk.Label(frame,text='Rotate in place using the confirmed standing tile of each selected account.',
+                  style='Muted.TLabel',wraplength=620).pack(anchor='w',pady=(0,5))
+        self.bot_face_delay_var=tk.StringVar(value='400')
+        self.bot_face_direction_var=tk.StringVar(value='Clockwise')
+        self.bot_face_status_var=tk.StringVar(value='Face rotation is off.')
+        face_options=ttk.Frame(frame,style='Panel.TFrame')
+        face_options.pack(anchor='w',pady=(0,5))
+        ttk.Label(face_options,text='Milliseconds per turn (400–60000)',style='Panel.TLabel').pack(side='left')
+        ttk.Entry(face_options,textvariable=self.bot_face_delay_var,width=8).pack(side='left',padx=(8,12))
+        ttk.Combobox(face_options,textvariable=self.bot_face_direction_var,state='readonly',
+                     values=('Clockwise','Counterclockwise'),width=20).pack(side='left')
+        face_buttons=ttk.Frame(frame,style='Panel.TFrame')
+        face_buttons.pack(anchor='w',pady=(0,5))
+        ttk.Button(face_buttons,text='Start 360° rotation',style='Primary.TButton',
+                   command=self._bot_face_start).pack(side='left',padx=(0,6))
+        ttk.Button(face_buttons,text='STOP rotation',
+                   command=self._bot_face_stop).pack(side='left')
+        ttk.Label(frame,textvariable=self.bot_face_status_var,
                   style='Panel.TLabel',wraplength=620).pack(anchor='w',pady=(0,12))
         ttk.Label(frame,text='STATIONARY ANTI-AFK (EXPERIMENTAL)',
                   style='Section.TLabel').pack(anchor='w',pady=(1,5))
@@ -7944,6 +7965,117 @@ class ChatOverlayApp(PersonaResponderMixin):
         if pending:
             self._bot_follow_defer(run,min(pending),group=True)
 
+    def _bot_face_stop(self,message='Face rotation stopped.'):
+        run=getattr(self,'_bot_face_run',None)
+        self._bot_face_run=None
+        if run and run.get('timer') is not None:
+            try:self.root.after_cancel(run['timer'])
+            except (tk.TclError,RuntimeError):pass
+        status=getattr(self,'bot_face_status_var',None)
+        if status is not None:status.set(message)
+
+    def _bot_face_start(self):
+        if getattr(self,'_bot_face_run',None):
+            self.bot_face_status_var.set('Already rotating; press STOP first.')
+            return
+        try:
+            delay=int(self.bot_face_delay_var.get().strip())
+            if not 400<=delay<=60000:
+                raise ValueError('Enter 400–60000 milliseconds per turn.')
+            direction=self.bot_face_direction_var.get()
+            if direction not in ('Clockwise','Counterclockwise'):
+                raise ValueError('Choose a rotation direction.')
+        except (ValueError,TypeError) as exc:
+            self.bot_face_status_var.set(str(exc));return
+        if self.bot_account_var.get()=='All connected accounts':
+            accounts=tuple(self._account_profiles)
+        else:
+            selected=self._bot_selected_profile()
+            accounts=(selected,) if selected else ()
+        members={}
+        skipped=0
+        for account in accounts:
+            ident=account['id']
+            try:
+                session=self._coffee_session(ident)
+                if session is None:continue
+                state,_,index=self._coffee_context(ident)
+                position=self._bot_anti_afk_positions.get(ident)
+                if (position is None or position[0]!=index
+                        or self._bot_anti_afk_rooms.get(ident)!=state['room']):
+                    raise ClientlessBotError('Wait for confirmed standing tile.')
+                follow=getattr(self,'_bot_follow_run',None)
+                group=getattr(self,'_bot_follow_group_run',None)
+                if (ident in self._bot_walk_plans or
+                    (follow and follow['id']==ident) or
+                    (group and ident in group['members'])):
+                    raise ClientlessBotError('Stop walking or following first.')
+                targets=face_rotation_targets(*position[1:],clockwise=direction=='Clockwise')
+                # Validate the full sequence before starting; no walking packets.
+                packets=tuple(encode_clientless_action(self._bot_headers,session.release,
+                              'Face tile',x=x,y=y) for x,y in targets)
+                if any(len(p)!=1 or p[0][2]!='LookTo' for p in packets):
+                    raise ClientlessBotError('LookTo mapping unavailable.')
+                members[ident]=dict(generation=state['generation'],room=state['room'],
+                                    position=position,packets=packets,step=0)
+            except (ValueError,TypeError,RuntimeError,OSError):
+                skipped+=1
+        if not members:
+            self.bot_face_status_var.set('No eligible Direct TCP avatars. Join a room, wait for your standing tile and stop walking/following.')
+            return
+        run=dict(members=members,delay=delay,sent=0,skipped=skipped,timer=None)
+        self._bot_face_run=run
+        self._bot_face_tick(run)
+
+    def _bot_face_tick(self,run):
+        if getattr(self,'_bot_face_run',None) is not run:return
+        run['timer']=None
+        for ident,member in tuple(run['members'].items()):
+            try:
+                session=self._coffee_session(ident)
+                state,_,index=self._coffee_context(ident)
+                follow=getattr(self,'_bot_follow_run',None)
+                group=getattr(self,'_bot_follow_group_run',None)
+                if (session is None or state['generation']!=member['generation']
+                    or state['room']!=member['room']
+                    or self._bot_anti_afk_rooms.get(ident)!=member['room']
+                    or self._bot_anti_afk_positions.get(ident)!=member['position']
+                    or index!=member['position'][0] or ident in self._bot_walk_plans
+                    or (follow and follow['id']==ident)
+                    or (group and ident in group['members'])):
+                    raise ClientlessBotError('Standing tile or account changed.')
+                now=time.monotonic()
+                if (ident in self._bot_action_inflight or
+                        now-self._bot_last_action_at.get(ident,0)<0.4):
+                    continue
+                packets=member['packets'][member['step']%8]
+                self._bot_action_inflight.add(ident)
+                self._bot_last_action_at[ident]=now
+                try:
+                    threading.Thread(target=self._bot_action_worker,
+                        args=(ident,member['generation'],session,'Face Rotation',packets),
+                        daemon=True).start()
+                except (RuntimeError,OSError):
+                    self._bot_action_inflight.discard(ident)
+                    raise
+                member['step']+=1
+                run['sent']+=1
+            except (ValueError,TypeError,RuntimeError,OSError):
+                run['members'].pop(ident,None)
+        if not run['members']:
+            self._bot_face_stop('Face rotation stopped: no stationary connected avatars remain.')
+            return
+        self.bot_face_status_var.set(f"Rotating {len(run['members'])} account(s); "
+            f"{run['sent']} local turns requested; server facing not verified.")
+        run['timer']=self.root.after(run['delay'],lambda:self._bot_face_tick(run))
+
+    def _bot_face_remove(self,ident,reason):
+        run=getattr(self,'_bot_face_run',None)
+        if not run or ident not in run['members']:return
+        run['members'].pop(ident,None)
+        if not run['members']:
+            self._bot_face_stop(reason)
+
     def _bot_multi_refresh(self):
         """Keep multi-select rows in sync without losing highlighted profiles."""
         tree=getattr(self,'bot_multi_tree',None)
@@ -8448,6 +8580,8 @@ class ChatOverlayApp(PersonaResponderMixin):
         if group and ((ident in group['members'] and action in ('Walk','Join room','Leave room'))
                       or (ident==group['key'][3] and action in ('Join room','Leave room'))):
             self._bot_follow_stop('All-account follow stopped by manual action.')
+        if action in ('Walk','Join room','Leave room','Face tile') and getattr(self,'_bot_face_run',None):
+            self._bot_face_remove(ident,'Face rotation stopped by manual action.')
         # Remember the last VALID room ID, including manually entered IDs.
         # Coffee House itself remains a fixed, named favorite regardless.
         if action=='Join room':
@@ -8856,6 +8990,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                                 'profile with a saved session.')
 
     def _tcp_disconnect_one(self,ident):
+        if getattr(self,'_bot_face_run',None):
+            self._bot_face_remove(ident,'Face rotation stopped: account disconnected.')
         self._bot_pending_room.pop(ident,None)
         self._bot_run_room_targets.pop(ident,None)
         self._bot_multi_direct_ids.discard(ident)
@@ -13399,6 +13535,8 @@ ConvertTo-Json -InputObject $items -Compress -Depth 3
                         if not group['members']:
                             self._bot_follow_stop('All-account follow stopped: '+error)
                 self._bot_follow_wake(ident)
+                if action=='Face Rotation' and error is not None:
+                    self._bot_face_remove(ident,'Face rotation stopped: '+error)
                 if action=='Auto Walk' and error is not None:
                     self._bot_walk_next(ident,generation,'Walk request failed')
                 if (action=='Auto Walk' and error is None
