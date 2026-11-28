@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from clientless_bot import ClientlessBotError
 
 source=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
-names={'_bot_follow_group_resolve','_bot_follow_group_toggle','_bot_follow_group_tick','_bot_follow_stop','_bot_follow_wake','_bot_follow_defer'}
+names={'_bot_follow_start','_bot_follow_group_start','_bot_follow_group_resolve','_bot_follow_group_toggle','_bot_follow_group_tick','_bot_follow_stop','_bot_follow_wake','_bot_follow_defer'}
 nodes=[n for n in ast.walk(ast.parse(source.read_text(encoding='utf-8')))
        if isinstance(n,ast.FunctionDef) and n.name in names]
 scope={'ClientlessBotError':ClientlessBotError,'time':SimpleNamespace(monotonic=lambda:100),
@@ -41,7 +41,12 @@ class GroupFollowTests(TestCase):
 
     def test_group_exact_coords_and_stop(self):
         app=self.make_app()
+        app._bot_selected_profile=lambda:None
         app._bot_follow_group_toggle()
+        self.assertTrue(app.bot_follow_all_var.get())
+        self.assertIsNone(app._bot_follow_group_run)
+        scope['threading'].Thread.assert_not_called()
+        app._bot_follow_start()
         run=app._bot_follow_group_run
         self.assertEqual(set(run['members']),{'a','b'})
         self.assertEqual(scope['threading'].Thread.call_count,2)
@@ -67,8 +72,19 @@ class GroupFollowTests(TestCase):
     def test_unconnected_player_rejected(self):
         app=self.make_app('Visitor')
         app._bot_follow_group_toggle()
+        app._bot_follow_start()
         self.assertIsNone(app._bot_follow_group_run)
-        self.assertFalse(app.bot_follow_all_var.get())
+        self.assertTrue(app.bot_follow_all_var.get())
+        self.assertIn('No eligible followers',app.bot_follow_status_var.get())
+        scope['threading'].Thread.assert_not_called()
+
+    def test_empty_target_does_not_clear_checkbox(self):
+        app=self.make_app('')
+        app._bot_follow_group_toggle()
+        self.assertTrue(app.bot_follow_all_var.get())
+        app._bot_follow_start()
+        self.assertTrue(app.bot_follow_all_var.get())
+        self.assertIsNone(app._bot_follow_group_run)
         scope['threading'].Thread.assert_not_called()
 
     def test_room_bot_all_accounts(self):
@@ -77,6 +93,7 @@ class GroupFollowTests(TestCase):
                                    for a in app._account_profiles}
         app._bot_anti_afk_positions['c']=(30,3,3)
         app._bot_follow_group_toggle()
+        app._bot_follow_start()
         self.assertEqual(set(app._bot_follow_group_run['members']),{'a','b','c'})
         self.assertEqual(scope['threading'].Thread.call_count,3)
         app._bot_follow_room_bots['a']['units'].clear()

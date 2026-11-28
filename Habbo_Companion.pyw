@@ -7659,11 +7659,15 @@ class ChatOverlayApp(PersonaResponderMixin):
         if getattr(self,'_bot_follow_group_run',None) is not None:
             self.bot_follow_status_var.set('All-account follow is already enabled.')
             return
-        follower=self._bot_selected_profile()
-        username=self.bot_follow_target_var.get().strip()
         if self._bot_follow_run is not None:
             self.bot_follow_status_var.set('Stop the current follow session before starting another.')
             return
+        all_accounts=getattr(self,'bot_follow_all_var',None)
+        if all_accounts is not None and all_accounts.get():
+            self._bot_follow_group_start()
+            return
+        follower=self._bot_selected_profile()
+        username=self.bot_follow_target_var.get().strip()
         try:
             if follower is None or not username:
                 raise ClientlessBotError('Select a follower and enter the target Habbo username.')
@@ -7801,12 +7805,20 @@ class ChatOverlayApp(PersonaResponderMixin):
         return (room,'peer',target,peer),generation,other['generation'],pos[1:],lead[1:]
 
     def _bot_follow_group_toggle(self):
-        if not self.bot_follow_all_var.get():
-            self._bot_follow_stop()
-            return
+        """Select follower scope without resolving a target or sending movement."""
+        if getattr(self,'_bot_follow_run',None) or getattr(self,'_bot_follow_group_run',None):
+            selected=bool(self.bot_follow_all_var.get())
+            self._bot_follow_stop('Follow stopped: follower selection changed.')
+            self.bot_follow_all_var.set(selected)
+        self.bot_follow_status_var.set(
+            'All connected accounts selected. Click Start following.'
+            if self.bot_follow_all_var.get() else
+            'Single account selected. Choose a follower and click Start following.')
+
+    def _bot_follow_group_start(self):
         username=self.bot_follow_target_var.get().strip()
         if not username:
-            self._bot_follow_stop('Enter a target username before enabling all-account follow.')
+            self.bot_follow_status_var.set('Enter a target username before starting follow.')
             return
         members={}
         key=None
@@ -7823,7 +7835,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             if candidate!=key:continue
             members[ident]=(generation,peer_generation)
         if not members:
-            self._bot_follow_stop('No connected followers can see that room bot or connected target.')
+            self.bot_follow_status_var.set(
+                'No eligible followers: check direct TCP connections, same room, target identity and avatar positions.')
             return
         self._bot_follow_run=None
         for ident in members:self._bot_walk_plans.pop(ident,None)
