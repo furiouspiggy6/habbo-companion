@@ -6323,7 +6323,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                   style='Muted.TLabel').pack(anchor='w',pady=(0,5))
         context=ttk.Frame(header,style='Panel.TFrame')
         context.pack(fill='x')
-        ttk.Label(context,text='Connected account',
+        ttk.Label(context,text='Connected accounts',
                   style='Panel.TLabel').grid(row=0,column=0,sticky='w',padx=(0,10))
         ttk.Label(context,text='Room ID',style='Panel.TLabel').grid(row=0,column=1,sticky='w')
         self.bot_account_picker=ttk.Combobox(
@@ -6464,7 +6464,7 @@ class ChatOverlayApp(PersonaResponderMixin):
                 fields[key].pack(fill='x',pady=(0,5),before=input_area)
         self.bot_action_var.trace_add('write',show_action_fields)
         show_action_fields()
-        ttk.Button(frame,text='Send action as selected account',style='Primary.TButton',
+        ttk.Button(frame,text='Send action to selected accounts',style='Primary.TButton',
                    command=self._bot_send_selected_action).pack(anchor='w',pady=(3,11))
         ttk.Label(frame,text='Incoming chat',style='Section.TLabel').pack(anchor='w',pady=(0,5))
         ttk.Label(frame,text='Public chat is merged per room; whispers stay account-specific.',
@@ -6499,6 +6499,8 @@ class ChatOverlayApp(PersonaResponderMixin):
                if (session:=self._tcp_sessions.get(a['id'])) is not None
                and session.authenticated and not session.stop.is_set()]
         current=self.bot_account_var.get()
+        if items:
+            items.insert(0,'All connected accounts')
         self.bot_account_picker.configure(values=items)
         if current not in items:
             self.bot_account_var.set('')
@@ -7164,8 +7166,15 @@ class ChatOverlayApp(PersonaResponderMixin):
             self._coffee_stop_run(str(exc)[:180])
 
     def _bot_select_only(self):
+        all_selected=self.bot_account_var.get()=='All connected accounts'
+        follow_var=getattr(self,'bot_follow_all_var',None)
+        if follow_var is not None and bool(follow_var.get())!=all_selected:
+            follow_var.set(all_selected)
+            self._bot_follow_group_toggle()
         self._bot_anti_afk_load_selected()
         self._bot_load_walk_preset()
+        if all_selected:
+            self.bot_status_var.set('All connected accounts selected. Actions require an explicit click.')
 
     def _bot_refresh_action_accounts(self):
         picker=getattr(self,'bot_action_account_picker',None)
@@ -7175,6 +7184,8 @@ class ChatOverlayApp(PersonaResponderMixin):
             session=self._tcp_sessions.get(account['id'])
             if session is not None and session.authenticated and not session.stop.is_set():
                 items.append(account['label']+' ['+account['id'][:6]+']')
+        if items:
+            items.insert(0,'All connected accounts')
         picker.configure(values=items)
         # Do not silently transfer a user's action to another account.
         if self.bot_action_account_var.get() not in items:
@@ -7182,6 +7193,24 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_send_selected_action(self):
         selected=self.bot_action_account_var.get()
+        if selected=='All connected accounts':
+            accounts=[a for a in self._account_profiles
+                if (session:=self._tcp_sessions.get(a['id'])) is not None
+                and session.authenticated and not session.stop.is_set()]
+            if not accounts:
+                self.bot_status_var.set('No connected accounts.')
+                return
+            started=0
+            for account in accounts:
+                ident=account['id']
+                already=ident in self._bot_action_inflight
+                self._bot_send_action(account_override=account)
+                if not already and ident in self._bot_action_inflight:
+                    started+=1
+            self.bot_status_var.set(
+                f'Action queued for {started}/{len(accounts)} connected accounts; '
+                'existing per-account timing and routing checks apply.')
+            return
         account=next((a for a in self._account_profiles
                       if a['label']+' ['+a['id'][:6]+']'==selected),None)
         if account is None:
@@ -7663,7 +7692,10 @@ class ChatOverlayApp(PersonaResponderMixin):
             self.bot_follow_status_var.set('Stop the current follow session before starting another.')
             return
         all_accounts=getattr(self,'bot_follow_all_var',None)
-        if all_accounts is not None and all_accounts.get():
+        header=getattr(self,'bot_account_var',None)
+        header_all=header is not None and header.get()=='All connected accounts'
+        if all_accounts is not None and (header_all or all_accounts.get()):
+            all_accounts.set(True)
             self._bot_follow_group_start()
             return
         follower=self._bot_selected_profile()
@@ -8047,8 +8079,9 @@ class ChatOverlayApp(PersonaResponderMixin):
     def _bot_run_from_accounts(self):
         account=self._account_selected()
         if account is not None:
-            self.bot_account_var.set(
-                account['label']+' ['+account['id'][:6]+']')
+            if self.bot_account_var.get()!='All connected accounts':
+                self.bot_account_var.set(
+                    account['label']+' ['+account['id'][:6]+']')
             self._bot_run_configured_account(account)
             self.account_status_var.set(self.bot_status_var.get())
 
@@ -8077,6 +8110,12 @@ class ChatOverlayApp(PersonaResponderMixin):
 
     def _bot_anti_afk_load_selected(self):
         account=self._bot_selected_profile()
+        selected=getattr(self,'bot_account_var',None)
+        if selected is not None and selected.get()=='All connected accounts':
+            self.bot_anti_afk_var.set(False)
+            self.bot_anti_afk_status_var.set(
+                'Select an individual account to change its anti-AFK settings.')
+            return
         enabled=(account is not None and
                  self._bot_anti_afk_is_enabled(account['id']))
         self.bot_anti_afk_var.set(enabled)
@@ -8274,7 +8313,11 @@ class ChatOverlayApp(PersonaResponderMixin):
         """Explicit one-click favorite; never sends automatically on startup."""
         self.bot_action_var.set('Join room')
         self.bot_room_var.set(str(CLIENTLESS_COFFEE_HOUSE_ROOM_ID))
-        self._bot_send_action()
+        selected=getattr(self,'bot_account_var',None)
+        if selected is not None and selected.get()=='All connected accounts':
+            self._bot_send_selected_action()
+        else:
+            self._bot_send_action()
 
     def _bot_connect_selected(self):
         account=self._bot_selected_profile()

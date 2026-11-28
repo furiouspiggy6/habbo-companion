@@ -22,3 +22,29 @@ class ActionAccountTests(TestCase):
         app.bot_action_account_var.get.return_value=''
         scope[node.name](app)
         app._bot_send_action.assert_not_called()
+
+    def test_all_dropdown_dispatches_only_authenticated_connected_accounts(self):
+        p=Path(__file__).resolve().parents[1]/'Habbo_Companion.pyw'
+        nodes=[n for n in ast.walk(ast.parse(p.read_text(encoding='utf-8')))
+               if isinstance(n,ast.FunctionDef) and n.name in
+               ('_bot_refresh_action_accounts','_bot_send_selected_action')]
+        scope={}
+        exec(compile(ast.Module(body=nodes,type_ignores=[]),str(p),'exec'),scope)
+        accounts=[{'id':i,'label':i} for i in ('a','b','c','d')]
+        live=SimpleNamespace(authenticated=True,stop=SimpleNamespace(is_set=lambda:False))
+        closed=SimpleNamespace(authenticated=True,stop=SimpleNamespace(is_set=lambda:True))
+        app=SimpleNamespace(_account_profiles=accounts,
+            _tcp_sessions={'a':live,'b':live,'c':closed},
+            _bot_action_inflight=set(),bot_action_account_var=Mock(),
+            bot_action_account_picker=Mock(),bot_status_var=Mock())
+        app.bot_action_account_var.get.return_value='All connected accounts'
+        app._bot_send_action=Mock(side_effect=lambda account_override:
+            app._bot_action_inflight.add(account_override['id']))
+        scope['_bot_refresh_action_accounts'](app)
+        app.bot_action_account_picker.configure.assert_called_once_with(
+            values=['All connected accounts','a [a]','b [b]'])
+        app.bot_action_account_var.set.assert_not_called()
+        scope['_bot_send_selected_action'](app)
+        self.assertEqual([c.kwargs['account_override']['id'] for c in
+                          app._bot_send_action.call_args_list],['a','b'])
+        self.assertIn('2/2',app.bot_status_var.set.call_args.args[0])

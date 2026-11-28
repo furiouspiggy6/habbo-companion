@@ -42,11 +42,14 @@ class GroupFollowTests(TestCase):
     def test_group_exact_coords_and_stop(self):
         app=self.make_app()
         app._bot_selected_profile=lambda:None
+        app.bot_account_var=Var('All connected accounts')
+        app.bot_follow_all_var.set(False)
         app._bot_follow_group_toggle()
-        self.assertTrue(app.bot_follow_all_var.get())
+        self.assertFalse(app.bot_follow_all_var.get())
         self.assertIsNone(app._bot_follow_group_run)
         scope['threading'].Thread.assert_not_called()
         app._bot_follow_start()
+        self.assertTrue(app.bot_follow_all_var.get())
         run=app._bot_follow_group_run
         self.assertEqual(set(run['members']),{'a','b'})
         self.assertEqual(scope['threading'].Thread.call_count,2)
